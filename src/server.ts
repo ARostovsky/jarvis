@@ -50,4 +50,4 @@ createServer(async (req, res) => {
   }
 }).listen(PORT, '127.0.0.1', () => console.log(`jarvis UI: http://127.0.0.1:${PORT}`));
 
-startArbiter();
+startArbiter(process.argv[2]);

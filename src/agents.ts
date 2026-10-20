@@ -389,10 +389,15 @@ function agentOptions(a: Agent): Options {
   };
 }
 
-export function startArbiter(cwd = process.cwd()) {
+// The arbiter only reads, so its folder is just where it looks around; agents get their own repos.
+export function startArbiter(dir?: string) {
   restore();
-  if (agents.has(ARBITER)) return;
-  const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd, status: 'idle', lastText: '', costUsd: 0 };
+  const cwd = resolve(dir ?? process.env.JARVIS_CWD ?? homedir());
+  if (!existsSync(cwd)) throw new Error(`arbiter folder does not exist: ${cwd}`);
+  const old = agents.get(ARBITER);
+  if (old && old.cwd === cwd) return;
+  // SDK sessions are stored per folder, so a new folder means a fresh arbiter conversation.
+  const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd, status: 'idle', lastText: '', costUsd: old?.costUsd ?? 0 };
   agents.set(a.id, a);
   emit('spawned', { agent: a });
 }

@@ -6,7 +6,8 @@ One arbiter agent that spawns, steers and watches other Claude Code agent sessio
 
 ```bash
 npm install
-npm start        # web UI at http://127.0.0.1:7777
+npm start        # web UI at http://127.0.0.1:7777, arbiter looks around in your home dir
+npm start -- ~/IdeaProjects   # or in a folder you choose (also JARVIS_CWD)
 npm run cli      # console client
 npm run check    # typecheck
 ```
@@ -21,6 +22,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
   - Every agent has a shared board with `board_post` (to agent ids or names, or `"all"`) and `board_read`. Unseen notes addressed to an agent are prepended to the next message it receives, so they arrive without interrupting its current turn.
   - When an agent finishes a turn, its result is sent to its parent automatically. The report is capped at 2000 characters, and the parent can fetch the full text with `read_agent`.
 - Deleting an agent stops it and removes its own workdir. If a git worktree has uncommitted changes, the server answers 409 and the UI asks you to choose: commit the changes to the agent's branch, or discard them. The `jarvis/<id>` branch is kept either way. An agent that still has sub-agents cannot be deleted.
+- The arbiter only reads, so its folder just sets where it looks around. Agents work in the repo you name in the task. Starting with a different folder begins a fresh arbiter conversation, because SDK sessions are stored per folder.
 - Workers run in `worktrees/<id>`. If `repo` is a git repo, this is a git worktree on branch `jarvis/<id>`.
 - Permissions: workers use `acceptEdits`. Every other prompt becomes an `ask` event, which you answer with `/y <id>` or `/n <id>` in the CLI.
 - Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `delta` (streamed text), `tool`, `routed`, `ask`, `answered`, `result`, `session`.
