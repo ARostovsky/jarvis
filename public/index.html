@@ -68,7 +68,7 @@
   #log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
   #log .note { color: var(--violet); }
   #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
-  #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-result .result { display: none; }
+  #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-cost .cost { display: none; }
   #viewMenu { position: absolute; top: 52px; right: 12px; z-index: 3; background: var(--panel); border: 1px solid var(--cyan); padding: 8px 12px; display: none; font-size: 14px; }
   #viewMenu.open { display: block; }
   #viewMenu label { display: flex; gap: 8px; align-items: center; padding: 5px 0; cursor: pointer; white-space: nowrap; }
@@ -317,17 +317,19 @@ function pulse(from, to, cls = '') {
   })(t0);
 }
 
-function log(id, cls, text) {
+// `cost` is shown as a separate part of the line so the cost filter can hide just that.
+function log(id, cls, text, cost) {
   const a = agents.get(id);
   if (!a) return;
-  a.log.push({ cls, text });
-  if (selected === id) appendLog(cls, text);
+  a.log.push({ cls, text, cost });
+  if (selected === id) appendLog(cls, text, cost);
 }
 const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-function appendLog(cls, text) {
+function appendLog(cls, text, cost) {
   const d = document.createElement('div');
   d.className = cls;
   d.textContent = text;
+  if (cost) d.append(Object.assign(document.createElement('span'), { className: 'cost', textContent: cost }));
   const box = $('log');
   const stick = atBottom(box);
   box.appendChild(d);
@@ -345,7 +347,7 @@ function select(id) {
   $('log').replaceChildren();
   if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
   if (a.agent.cwd) appendLog('meta', `cwd: ${a.agent.cwd}`);
-  a.log.forEach((l) => appendLog(l.cls, l.text));
+  a.log.forEach((l) => appendLog(l.cls, l.text, l.cost));
   $('log').scrollTop = $('log').scrollHeight;
   $('panel').classList.add('open');
   document.body.classList.add('panel-open');
@@ -418,7 +420,7 @@ const handlers = {
     log(e.from, 'note', `✎ board #${e.n} → ${e.to.join(', ')}: ${e.text}`);
     to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${e.from}: ${e.text}`));
   },
-  result: (e) => log(e.agentId, 'result', `■ done · $${e.costUsd.toFixed(3)}`),
+  result: (e) => log(e.agentId, 'result', '■ done', ` · $${e.costUsd.toFixed(3)}`),
   ask: showAsk,
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };
@@ -718,7 +720,7 @@ const VIEW = [
   ['outgoing', 'Messages sent to agents', true],
   ['tool', 'Tool calls', false],
   ['note', 'Board notes', true],
-  ['result', 'Cost lines', true],
+  ['cost', 'Cost', true],
 ];
 const viewState = (() => { try { return JSON.parse(localStorage.getItem('jarvis.view')) ?? {}; } catch { return {}; } })();
 const shown = (k, def) => viewState[k] ?? def;
