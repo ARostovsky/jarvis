@@ -30,5 +30,10 @@
   },
   "engines": {
     "node": ">=24"
-  }
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ARostovsky/jarvis.git"
+  },
+  "homepage": "https://github.com/ARostovsky/jarvis#readme"
 }

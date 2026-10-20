@@ -93,7 +93,7 @@ Every agent is a separate Claude session, and every turn costs tokens. Jarvis he
 ### Install and run
 
 ```bash
-git clone <this-repo-url> jarvis
+git clone https://github.com/ARostovsky/jarvis.git
 cd jarvis
 npm install
 ln -s "$PWD/bin/jarvis.mjs" ~/.local/bin/jarvis   # once; any folder in your PATH works
