@@ -35,7 +35,10 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
   - If git refuses to remove a worktree partway through, everything already removed is put back and the workspace stays active.
   - The project folder is never touched.
   - The workspace moves to `archive/<id>/`. Restoring it (the `ARCHIVE n` button) re-creates the worktrees from their branches and keeps the agents' conversations.
-  - There is no permanent delete in the UI: to purge, remove `archive/<id>/` and the `jarvis/*` branches by hand.
+  - Permanent delete lives only in the archive (DELETE in the `ARCHIVE n` dialog):
+    - It lists exactly what goes (the event log, parked plain workdirs) and what stays (agent `jarvis/<id>` branches in your repos, never touched).
+    - It then asks you to type the workspace name; the server checks the name too.
+    - To remove the branches, delete them with git yourself.
 - Runtime data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`):
   - `workspaces/<id>/arbiter/` is the arbiter's own empty working dir;
   - `workspaces/<id>/events.jsonl` is the workspace's event log;
@@ -48,7 +51,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
 ## Web UI
 
 `src/server.ts` serves `public/index.html`, which is one file with no build step.
-- `GET /workspaces` returns `{workspaces, archived}`, the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one; `/workspaces/rename {ws, name}`, `/workspaces/archive {ws, commit?}` and `/workspaces/restore {id}` handle the rest. `/stopall {ws}` stops every agent in a workspace.
+- `GET /workspaces` returns `{workspaces, archived}`, the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one; `/workspaces/rename {ws, name}`, `/workspaces/archive {ws, commit?}` and `/workspaces/restore {id}`, `/workspaces/archived/info {id}` and `/workspaces/archived/delete {id, name}` handle the rest. `/stopall {ws}` stops every agent in a workspace.
 - Events stream over SSE at `GET /events?ws=<id>`. On connect the server first sends a snapshot of the agents and any pending asks.
 - Commands are JSON POSTs that carry `ws`: `/say` (to the arbiter), `/send` (directly to an agent), `/answer` (approve or deny an ask), `/stop`, `/delete` (`dirty: 'commit' | 'discard'`) and `/board` (a note from the user).
 - The server binds to 127.0.0.1 only. POST requests are rejected unless the `Origin` is the page itself, so other websites cannot drive your agents.

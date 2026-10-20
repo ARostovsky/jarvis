@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { workspaces, loadWorkspaces, addWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, listArchived, DirtyWorktree, type Workspace } from './agents.ts';
+import { workspaces, loadWorkspaces, addWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, listArchived, archivedInfo, deleteArchived, DirtyWorktree, type Workspace } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -26,6 +26,8 @@ const commands: Record<string, (b: any) => unknown> = {
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
+  '/workspaces/archived/info': (b) => archivedInfo(String(b.id)),
+  '/workspaces/archived/delete': (b) => deleteArchived(String(b.id), String(b.name ?? '')),
   '/say': (b) => ws(b.ws).tellArbiter(String(b.text)),
   '/answer': (b) => ws(b.ws).answerAsk(String(b.reqId), Boolean(b.allow)),
   '/send': (b) => ws(b.ws).sendToAgent(String(b.id), String(b.text), 'user'),

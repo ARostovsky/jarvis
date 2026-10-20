@@ -545,6 +545,25 @@ async function archiveWs(w) {
   refreshTabs();
 }
 
+async function deleteArchivedUi(a) {
+  const r = await fetch('/workspaces/archived/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id }) });
+  if (!r.ok) return toast(`delete failed: ${await r.text()}`);
+  const info = await r.json();
+  const lines = [
+    `Deleted for good: the event log (graph, chats, board) of ${info.agents} agent(s) and the arbiter.`,
+    info.parked.length ? `Deleted for good: plain workdirs ${info.parked.join(', ')}.` : 'No plain workdirs to delete.',
+    info.branches.length ? `Kept: agent branches in your repos:\n  ${info.branches.join('\n  ')}` : 'No agent branches.',
+  ].join('\n\n');
+  $('archived').close();
+  const v = await choose(`DELETE "${info.name}" PERMANENTLY?`, lines, 'This cannot be undone.', [{ value: 'delete', label: 'DELETE FOREVER', danger: true }]);
+  if (!v) return;
+  const name = prompt(`Type the workspace name to confirm: ${info.name}`);
+  if (name === null) return;
+  const d = await wsPost('/workspaces/archived/delete', { id: a.id, name });
+  if (!d.ok) return toast(`delete failed: ${d.text}`);
+  refreshTabs();
+}
+
 function renderArchived(archived) {
   $('archivedList').replaceChildren(...archived.map((a) => {
     const row = document.createElement('div');
@@ -558,7 +577,10 @@ function renderArchived(archived) {
     } });
     btn.style.border = '1px solid var(--line)';
     btn.style.padding = '6px 12px';
-    row.append(label, btn);
+    const del = Object.assign(document.createElement('button'), { textContent: 'DELETE', className: 'danger', onclick: () => deleteArchivedUi(a) });
+    del.style.border = '1px solid var(--line)';
+    del.style.padding = '6px 12px';
+    row.append(label, btn, del);
     return row;
   }));
 }

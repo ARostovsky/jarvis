@@ -592,6 +592,31 @@ export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {
     .sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
 }
 
+// What a permanent delete of an archived workspace would remove (parked workdirs) and keep (agent branches).
+export function archivedInfo(id: string) {
+  const dir = join(ARCHIVE, id);
+  if (!existsSync(join(dir, 'meta.json'))) throw new Error(`no archived workspace ${id}`);
+  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  const agents = new Map<string, Agent>();
+  for (const line of readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n')) {
+    if (!line) continue;
+    const e = JSON.parse(line);
+    if (e.type === 'spawned') agents.set(e.agent.id, e.agent);
+    else if (e.type === 'removed') agents.delete(e.agentId);
+  }
+  const parkedDir = join(dir, 'parked-workdirs');
+  const parked = existsSync(parkedDir) ? readdirSync(parkedDir) : [];
+  const branches = [...agents.values()].filter((a) => a.repo).map((a) => `${a.repo}: jarvis/${a.id}`);
+  return { ...meta, agents: agents.size - 1, parked, branches };
+}
+
+// Permanent. The caller must repeat the workspace name. Agent branches in your repos are left alone.
+export function deleteArchived(id: string, confirmName: string) {
+  const info = archivedInfo(id);
+  if (confirmName !== info.name) throw new Error('the name does not match, nothing deleted');
+  rmSync(join(ARCHIVE, id), { recursive: true });
+}
+
 export function restoreWorkspace(id: string) {
   const from = join(ARCHIVE, id);
   if (!existsSync(join(from, 'meta.json')) || workspaces.has(id)) throw new Error(`cannot restore ${id}`);
