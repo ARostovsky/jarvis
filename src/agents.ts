@@ -309,6 +309,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
     } finally {
       sessions.delete(a.id);
+      compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
     }
   }
 
