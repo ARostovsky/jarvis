@@ -20,6 +20,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
 
 - `src/agents.ts` keeps one long-lived SDK session per agent and feeds it messages through an inbox. A session starts lazily on the first message.
   - The arbiter gets the MCP tools `spawn_agent`, `send_to_agent`, `list_agents`, `read_agent` and `stop_agent`.
+  - `spawn_agent` takes a `model` (`haiku`, `sonnet` or `opus`; default `sonnet`, override with `JARVIS_AGENT_MODEL`). The arbiter and lead agents are told to pick the cheapest model that can do the job well. The arbiter itself runs on the model from your settings. The model is shown on the node and in the panel title.
   - Top-level agents get the same tools, scoped to their own sub-agents (max depth 2). Sub-agents of a git agent default to the same repo, each on its own branch.
   - Every agent has a shared board with `board_post` (to agent ids or names, or `"all"`) and `board_read`. Unseen notes addressed to an agent are prepended to the next message it receives, so they arrive without interrupting its current turn.
   - When an agent finishes a turn, its result is sent to its parent automatically. The report is capped at 2000 characters, and the parent can fetch the full text with `read_agent`.

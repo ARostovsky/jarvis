@@ -295,7 +295,7 @@ function setStatus(id, status) {
   a.agent.status = status;
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
   a.g.classList.add(status);
-  if (a.sub) a.sub.textContent = status;
+  if (a.sub) a.sub.textContent = a.agent.model ? `${status} · ${a.agent.model}` : status;
   if (a.link) a.link.style.stroke = status === 'running' ? 'var(--cyan)' : '';
   if (id === selected) syncStop();
 }
@@ -341,7 +341,7 @@ function select(id) {
   const a = agents.get(id);
   document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
   if (id !== ARBITER) a.g.classList.add('selected');
-  $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}`;
+  $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}${a.agent.model ? ` · ${a.agent.model}` : ''}`;
   $('pdelete').hidden = id === ARBITER;
   syncStop();
   applyView();

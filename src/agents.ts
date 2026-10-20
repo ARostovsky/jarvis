@@ -17,6 +17,7 @@ export type Agent = {
   lastText: string;
   costUsd: number;
   parentId?: string; // undefined only for the arbiter
+  model?: string; // alias (haiku | sonnet | opus); unset = the arbiter's model from settings
   repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
 };
@@ -35,6 +36,8 @@ const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 export const ARBITER = 'arbiter';
 const REPORT_CAP = 2000;
 // auto: a classifier approves safe calls and only escalates to the UI what it can't decide.
+const MODELS = ['haiku', 'sonnet', 'opus'] as const;
+const DEFAULT_AGENT_MODEL = process.env.JARVIS_AGENT_MODEL ?? 'sonnet';
 const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
@@ -105,9 +108,10 @@ const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent',
 const ARBITER_PROMPT = `You are the arbiter. You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.
-For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.`;
+For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.
+Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning).`;
 
-const LEAD_PROMPT = `You can delegate with spawn_agent when your task splits into large independent parts that can run in parallel; sub-agents work in the same repository on their own branches. Do small or sequential work yourself. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
+const LEAD_PROMPT = `You can delegate with spawn_agent when your task splits into large independent parts that can run in parallel; sub-agents work in the same repository on their own branches. Do small or sequential work yourself. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
 
 const BOARD_PROMPT = `There is a shared board with other agents. Notes addressed to you arrive at the top of your messages as "[board notes for you]"; board_read fetches new ones mid-task. Use board_post only for things another agent actually needs (an interface you defined, a decision, a blocker), addressed to those agents.`;
 
@@ -203,6 +207,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         cwd: a.cwd,
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
+        model: a.model, // undefined: settings model (the arbiter)
         plugins: PLUGINS,
         permissionMode: PERMISSION_MODE,
         includePartialMessages: true,
@@ -319,7 +324,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return note;
   }
 
-  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER): Agent {
+  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL): Agent {
     const parent = agents.get(parentId);
     if (!parent) throw new Error(`no agent ${parentId}`);
     if (depth(parent) >= MAX_DEPTH) throw new Error(`max depth ${MAX_DEPTH} reached`);
@@ -327,7 +332,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
     // Arbiter's agents default to the workspace project; sub-agents to their parent's checkout so they see its work.
     const wd = makeWorkdir(id, repo ?? (parentId === ARBITER ? meta.project : parent.repo ?? parent.cwd));
-    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId };
+    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model };
     agents.set(id, a);
     emit('spawned', { agent: a });
     emit('routed', { from: parentId, to: id, text: task });
@@ -403,9 +408,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           name: z.string().describe('short role name, e.g. "tests" or "backend"'),
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
           repo: z.string().optional().describe('absolute path to the repository to work on'),
-        }, async ({ name, task, repo }) => {
-          const a = spawnAgent(name, task, repo, owner);
-          return ok({ id: a.id, cwd: a.cwd });
+          model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: architecture, hard debugging, design, ambiguous problems.`),
+        }, async ({ name, task, repo, model }) => {
+          const a = spawnAgent(name, task, repo, owner, model);
+          return ok({ id: a.id, cwd: a.cwd, model: a.model });
         }),
         tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
           id: z.string(),
