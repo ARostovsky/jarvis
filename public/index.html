@@ -21,7 +21,7 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Rajdhani, system-ui, sans-serif; overflow: hidden; }
   body { background: radial-gradient(ellipse at center, #08243a 0%, var(--bg) 70%); }
   #grid { position: fixed; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 48px 48px; opacity: .12; pointer-events: none; }
-  svg { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
   svg.panning { cursor: grabbing; }
   /* Keep the graph centered in the space left of the panel. */
   body.panel-open svg { width: calc(100% - min(var(--panel-w), 100vw - 32px) - 32px); }
@@ -67,7 +67,12 @@
   #log { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; }
   #log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
   #log .note { color: var(--violet); }
-  #log .tool { color: #8fb8cc; } #log .routed { color: var(--amber); } #log .result { color: var(--cyan); }
+  #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
+  #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-result .result { display: none; }
+  #viewMenu { position: absolute; top: 52px; right: 12px; z-index: 3; background: var(--panel); border: 1px solid var(--cyan); padding: 8px 12px; display: none; font-size: 14px; }
+  #viewMenu.open { display: block; }
+  #viewMenu label { display: flex; gap: 8px; align-items: center; padding: 5px 0; cursor: pointer; white-space: nowrap; }
+  #viewMenu input { flex: none; width: auto; accent-color: var(--cyan); }
   #direct { display: flex; border-top: 1px solid var(--line); }
   #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
   .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; }
@@ -155,7 +160,8 @@
 
 <aside id="panel">
   <div id="pgrip" title="Drag to resize · double-click to reset"></div>
-  <header><h2 id="ptitle"></h2><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header><h2 id="ptitle"></h2><button id="pview" title="What to show in the log">VIEW</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <div id="viewMenu"></div>
   <div id="log"></div>
   <form id="direct"><input id="dinput" placeholder="Message…" autocomplete="off"><button>SEND</button></form>
 </aside>
@@ -207,12 +213,18 @@ let userView = false;
 const HOME = { x: -600, y: -400, w: 1200, h: 800 };
 function fit() {
   if (userView) return;
-  let x0 = HOME.x, y0 = HOME.y, x1 = HOME.x + HOME.w, y1 = HOME.y + HOME.h;
+  // Fit the actual content (core with its label, nodes with theirs) plus a margin, not a fixed home box.
+  let x0 = -150, y0 = -140, x1 = 150, y1 = 160;
   agents.forEach((a) => {
-    if (!a.p) return;
-    x0 = Math.min(x0, a.p.x - 160); x1 = Math.max(x1, a.p.x + 160);
-    y0 = Math.min(y0, a.p.y - 100); y1 = Math.max(y1, a.p.y + 130);
+    if (!a.p || a.agent.id === ARBITER) return;
+    x0 = Math.min(x0, a.p.x - 110); x1 = Math.max(x1, a.p.x + 110);
+    y0 = Math.min(y0, a.p.y - 70); y1 = Math.max(y1, a.p.y + 100);
   });
+  const pad = 40;
+  x0 -= pad; y0 -= pad; x1 += pad; y1 += pad;
+  // Never zoom in so far that a lone core fills the screen.
+  const minH = 560;
+  if (y1 - y0 < minH) { const c = (y0 + y1) / 2; y0 = c - minH / 2; y1 = c + minH / 2; }
   // Grow the short side so the viewBox matches the window: no letterboxing.
   let w = x1 - x0, h = y1 - y0;
   const asp = screenAspect();
@@ -256,7 +268,7 @@ function addAgent(agent) {
   draggable(g, agent.id);
   g.oncontextmenu = (ev) => menu(ev, [
     ['Open log', () => select(agent.id)],
-    ['Stop', () => post('/stop', { id: agent.id })],
+    ...(stoppable(agent.id) ? [['Stop', () => post('/stop', { id: agent.id })]] : []),
     ['Delete agent…', () => deleteAgentUi(agent.id), true],
   ]);
   g.onkeydown = (e) => { if (e.key === 'Enter') select(agent.id); };
@@ -285,7 +297,12 @@ function setStatus(id, status) {
   a.g.classList.add(status);
   if (a.sub) a.sub.textContent = status;
   if (a.link) a.link.style.stroke = status === 'running' ? 'var(--cyan)' : '';
+  if (id === selected) syncStop();
 }
+
+// STOP only means something while an agent is working or waiting for you.
+const stoppable = (id) => ['running', 'waiting'].includes(agents.get(id)?.agent.status);
+const syncStop = () => { $('pstop').hidden = !stoppable(selected); };
 
 function pulse(from, to, cls = '') {
   const a = pos(from), b = pos(to);
@@ -323,10 +340,11 @@ function select(id) {
   document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
   if (id !== ARBITER) a.g.classList.add('selected');
   $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}`;
-  $('pstop').hidden = $('pdelete').hidden = id === ARBITER;
+  $('pdelete').hidden = id === ARBITER;
+  syncStop();
   $('log').replaceChildren();
-  if (a.agent.task) appendLog('routed', `task: ${a.agent.task}`);
-  if (a.agent.cwd) appendLog('tool', `cwd: ${a.agent.cwd}`);
+  if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
+  if (a.agent.cwd) appendLog('meta', `cwd: ${a.agent.cwd}`);
   a.log.forEach((l) => appendLog(l.cls, l.text));
   $('log').scrollTop = $('log').scrollHeight;
   $('panel').classList.add('open');
@@ -391,8 +409,8 @@ const handlers = {
   },
   routed: (e) => {
     if (!replaying) pulse(e.from, e.to);
-    log(e.to, 'routed', `⇐ ${e.from}: ${e.text}`);
-    if (e.from !== 'user') log(e.from, 'routed', `⇒ ${e.to}: ${short(e.text, 300)}`);
+    log(e.to, e.from === 'user' ? 'user' : 'report', `⇐ ${e.from}: ${e.text}`);
+    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${e.to}: ${short(e.text, 300)}`);
   },
   board: (e) => {
     const to = e.to.includes('all') ? [...agents.keys()].filter((id) => id !== e.from) : e.to;
@@ -693,6 +711,34 @@ $('pgrip').addEventListener('pointerdown', (ev) => {
   }, { once: true });
 });
 $('pgrip').ondblclick = () => { setPanelW(440); try { localStorage.removeItem('jarvis.panelW'); } catch {} };
+
+// Log filters: which kinds of lines the panel shows. Your messages and agents' own replies always show.
+const VIEW = [
+  ['report', 'Reports from agents', false],
+  ['outgoing', 'Messages sent to agents', true],
+  ['tool', 'Tool calls', false],
+  ['note', 'Board notes', true],
+  ['result', 'Cost lines', true],
+];
+const viewState = (() => { try { return JSON.parse(localStorage.getItem('jarvis.view')) ?? {}; } catch { return {}; } })();
+const shown = (k, def) => viewState[k] ?? def;
+function applyView() {
+  for (const [k, , def] of VIEW) $('log').classList.toggle(`hide-${k}`, !shown(k, def));
+}
+$('viewMenu').replaceChildren(...VIEW.map(([k, label, def]) => {
+  const l = document.createElement('label');
+  const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: shown(k, def) });
+  c.onchange = () => {
+    viewState[k] = c.checked;
+    try { localStorage.setItem('jarvis.view', JSON.stringify(viewState)); } catch {}
+    applyView();
+  };
+  l.append(c, label);
+  return l;
+}));
+$('pview').onclick = () => $('viewMenu').classList.toggle('open');
+addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pview')) $('viewMenu').classList.remove('open'); });
+applyView();
 
 refreshTabs();
 setInterval(refreshTabs, 2000);

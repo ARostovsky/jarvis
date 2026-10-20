@@ -57,8 +57,10 @@ On screen, the arbiter is the core in the center, with agents on a ring around i
 - Under each node is either the agent's current tool or its streaming text.
 - Drag the left edge of the log panel to make it wider or narrower. The width is remembered, and double-clicking the edge resets it.
 - There is no separate input bar: the side panel is the chat. It opens on the arbiter, clicking a node switches it to that agent, Esc closes it, and Enter or `/` brings back the arbiter chat.
+- The VIEW button in the panel picks which log lines to show: reports from agents, messages sent to agents, tool calls, board notes, cost lines. Reports and tool calls are hidden by default. Your messages and agents' own replies always show. The choice is remembered.
+- STOP appears only while an agent is running or waiting for you.
 - Click a node to open its log, where you can watch replies as they stream and message the agent directly. While the panel is open, the graph is re-centered in the space to the left of it.
 - Sub-agents fan out from their parent. Board notes show as violet pulses from the sender to each recipient.
-- The view matches the window's shape and auto-fits the graph until you pan or zoom.
+- The view matches the window's shape and fits the actual graph (with a margin, never closer than a lone core) until you pan or zoom.
 - Drag the background to pan and use the wheel to zoom. Drag a node to move it; positions are saved in localStorage. Double-click the background to reset the view and positions.
 - Ask cards appear bottom-left.
