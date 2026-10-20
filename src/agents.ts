@@ -22,6 +22,7 @@ export type Agent = {
   runtimeModel?: string; // the model the SDK session actually reports, e.g. claude-opus-5-5[1m]
   repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
+  context?: { tokens: number; max: number }; // context window use after the last turn
 };
 
 // One tab in the UI: its own arbiter, agents, board and event log.
@@ -36,7 +37,7 @@ const ARCHIVE = join(DATA, 'archive');
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
 export const ARBITER = 'arbiter';
-const REPORT_CAP = 2000;
+const REPORT_CAP = 1000;
 // auto: a classifier approves safe calls and only escalates to the UI what it can't decide.
 export const MODELS = ['haiku', 'sonnet', 'opus'] as const;
 export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -148,6 +149,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   const agents = new Map<string, Agent>();
   const sessions = new Map<string, { push: (text: string) => void; abort: AbortController; q: Query }>();
+  const compacting = new Set<string>(); // agents whose next result is a /compact, not a report for the parent
   const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
 
   // Shared board: notes addressed to specific agents (or "all"), delivered with their next message.
@@ -199,6 +201,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       else if (e.type === 'session') a.sessionId = e.sessionId;
       else if (e.type === 'config') Object.assign(a, { model: e.model, effort: e.effort, runtimeModel: e.model !== a.model ? undefined : a.runtimeModel });
       else if (e.type === 'runtime') a.runtimeModel = e.model;
+      else if (e.type === 'context') a.context = { tokens: e.tokens, max: e.max };
     }
     // Their processes died with the old server; they resume on the next message.
     for (const a of agents.values()) if (a.status !== 'stopped') setStatus(a, 'idle');
@@ -273,6 +276,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
             a.runtimeModel = m.model;
             emit('runtime', { agentId: a.id, model: m.model });
           }
+        } else if (m.type === 'system' && m.subtype === 'compact_boundary') {
+          emit('compacted', { agentId: a.id, trigger: m.compact_metadata.trigger, pre: m.compact_metadata.pre_tokens, post: m.compact_metadata.post_tokens });
         } else if (m.type === 'assistant') {
           for (const block of m.message.content) {
             if (block.type === 'text') {
@@ -289,7 +294,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
           // Cap what lands in the parent's context; the full text stays available via read_agent.
           const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
-          if (a.parentId) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
+          const compacted = compacting.delete(a.id);
+          if (a.parentId && !compacted) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
+          // 'summary' reads the last response's usage, which after /compact is the pre-compact history: count instead.
+          q.getContextUsage({ detail: compacted ? 'full' : 'summary' }).then((u) => {
+            a.context = { tokens: u.totalTokens, max: u.maxTokens };
+            emit('context', { agentId: a.id, ...a.context });
+          }, () => {}); // only an indicator: a failed measurement is not worth an error
         }
       }
       setStatus(a, 'stopped');
@@ -402,6 +413,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const q = sessions.get(id)?.q;
     if (cfg.model) void q?.setModel(cfg.model);
     if (cfg.effort) void q?.applyFlagSettings({ effortLevel: cfg.effort });
+  }
+
+  // Sent straight to the session: deliver() would put board notes in front of the slash command.
+  function compactAgent(id: string) {
+    const a = agents.get(id);
+    if (!a) throw new Error(`no agent ${id}`);
+    if (a.status === 'running' || a.status === 'waiting') throw new Error(`${id} is busy, compact it when it is idle`);
+    compacting.add(id);
+    emit('routed', { from: 'user', to: id, text: '/compact' });
+    session(a).push('/compact');
   }
 
   function stopAgent(id: string) {
@@ -544,6 +565,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     answerAsk,
     sendToAgent,
     stopAgent,
+    compactAgent,
     deleteAgent,
     stopAll,
     configure,
