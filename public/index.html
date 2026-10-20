@@ -24,6 +24,7 @@
   .node.speaking .ring { stroke-width: 3.5; }
   #log .live { color: #e6f8ff; opacity: .85; }
   #log .live::after { content: '▍'; animation: blink .8s steps(2) infinite; }
+  .sublink { stroke-width: .8; opacity: .8; }
   .link { stroke: var(--cyan-dim); stroke-width: 1.2; stroke-dasharray: 4 6; animation: flow 1.2s linear infinite; }
   @keyframes flow { to { stroke-dashoffset: -20; } }
   .pulse { fill: var(--cyan); filter: url(#glow); }
@@ -67,7 +68,9 @@
   button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--cyan); font: 600 14px Rajdhani, sans-serif; letter-spacing: .15em; padding: 0 16px; cursor: pointer; }
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
   .ask button { border: 1px solid var(--line); padding: 6px 14px; margin-right: 6px; }
-  .ask .deny { color: var(--red); }
+  .ask .deny, .danger { color: var(--red); }
+  #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; }
+  #toast.show { display: block; }
   #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
   @media (max-width: 700px) { #hint { display: none; } }
   #conn { position: fixed; top: 16px; left: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
@@ -97,9 +100,10 @@
 </svg>
 
 <div id="asks"></div>
+<div id="toast" role="alert"></div>
 
 <aside id="panel">
-  <header><h2 id="ptitle"></h2><button id="pstop">STOP</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header><h2 id="ptitle"></h2><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="log"></div>
   <form id="direct"><input id="dinput" placeholder="Message this agent directly…" autocomplete="off"><button>SEND</button></form>
 </aside>
@@ -126,22 +130,56 @@ const pos = (id) => {
   return agents.get(id)?.p ?? { x: 0, y: 0 };
 };
 
+const kidsOf = (id) => [...agents.values()].filter((a) => (a.agent.parentId ?? ARBITER) === id && a.agent.id !== ARBITER);
+
+// Arbiter's agents sit on the main ring; sub-agents fan out from their parent, away from the center.
 function layout() {
-  const kids = [...agents.values()].filter((a) => a.agent.id !== ARBITER);
-  kids.forEach((a, i) => {
-    const t = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(kids.length, 1);
+  kidsOf(ARBITER).forEach((a, i, all) => {
+    const t = -Math.PI / 2 + (i * 2 * Math.PI) / all.length;
     if (!a.pinned) a.p = { x: Math.cos(t) * R * 1.35, y: Math.sin(t) * R };
     place(a);
+    const subs = kidsOf(a.agent.id);
+    const base = Math.atan2(a.p.y, a.p.x);
+    subs.forEach((c, j) => {
+      const u = base + (j - (subs.length - 1) / 2) * 0.55;
+      if (!c.pinned) c.p = { x: a.p.x + Math.cos(u) * 170, y: a.p.y + Math.sin(u) * 170 };
+      place(c);
+    });
   });
+  fit();
+}
+
+// Until the user pans or zooms, keep every node in view.
+let userView = false;
+const HOME = { x: -600, y: -400, w: 1200, h: 800 };
+function fit() {
+  if (userView) return;
+  let x0 = HOME.x, y0 = HOME.y, x1 = HOME.x + HOME.w, y1 = HOME.y + HOME.h;
+  agents.forEach((a) => {
+    if (!a.p) return;
+    x0 = Math.min(x0, a.p.x - 160); x1 = Math.max(x1, a.p.x + 160);
+    y0 = Math.min(y0, a.p.y - 100); y1 = Math.max(y1, a.p.y + 130);
+  });
+  Object.assign(vb, { x: x0, y: y0, w: x1 - x0, h: y1 - y0 });
+  applyVB();
 }
 
 function place(a) {
   a.g.style.transform = `translate(${a.p.x}px, ${a.p.y}px)`;
-  const k = Math.min(1, 100 / (Math.hypot(a.p.x, a.p.y) || 1)); // start at the core's edge, not its center
-  a.link.setAttribute('x1', a.p.x * k);
-  a.link.setAttribute('y1', a.p.y * k);
+  const parentId = a.agent.parentId ?? ARBITER, o = pos(parentId);
+  const dx = a.p.x - o.x, dy = a.p.y - o.y, d = Math.hypot(dx, dy) || 1;
+  const k = Math.min(1, (parentId === ARBITER ? 100 : 50) / d); // start at the parent's edge, not its center
+  a.link.setAttribute('x1', o.x + dx * k);
+  a.link.setAttribute('y1', o.y + dy * k);
   a.link.setAttribute('x2', a.p.x);
   a.link.setAttribute('y2', a.p.y);
+}
+
+// Positions of dragged nodes survive page reloads.
+const POS_KEY = 'jarvis.positions';
+const savedPos = () => { try { return JSON.parse(localStorage.getItem(POS_KEY)) ?? {}; } catch { return {}; } };
+function savePos(id, p) {
+  try { localStorage.setItem(POS_KEY, JSON.stringify({ ...savedPos(), [id]: p })); } catch {}
 }
 
 function addAgent(agent) {
@@ -159,8 +197,20 @@ function addAgent(agent) {
   const act = el('text', { class: 'act', y: 80 }, g);
   draggable(g, agent.id);
   g.onkeydown = (e) => { if (e.key === 'Enter') select(agent.id); };
-  agents.set(agent.id, { agent, g, link, sub, act, log: [] });
+  const p = savedPos()[agent.id];
+  agents.set(agent.id, { agent, g, link, sub, act, log: [], p, pinned: !!p });
+  if (agent.parentId && agent.parentId !== ARBITER) link.classList.add('sublink');
   setStatus(agent.id, agent.status);
+  layout();
+}
+
+function removeAgent(id) {
+  const a = agents.get(id);
+  if (!a || id === ARBITER) return;
+  a.g.remove();
+  a.link.remove();
+  agents.delete(id);
+  if (selected === id) $('pclose').onclick();
   layout();
 }
 
@@ -209,7 +259,7 @@ function select(id) {
   document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
   if (id !== ARBITER) a.g.classList.add('selected');
   $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}`;
-  $('pstop').hidden = id === ARBITER;
+  $('pstop').hidden = $('pdelete').hidden = id === ARBITER;
   $('log').replaceChildren();
   if (a.agent.task) appendLog('routed', `task: ${a.agent.task}`);
   if (a.agent.cwd) appendLog('tool', `cwd: ${a.agent.cwd}`);
@@ -263,6 +313,7 @@ const handlers = {
     }
   },
   spawned: (e) => addAgent(e.agent),
+  removed: (e) => removeAgent(e.agentId),
   status: (e) => setStatus(e.agentId, e.status),
   text: (e) => { endLive(e.agentId); log(e.agentId, '', e.text); },
   tool: (e) => {
@@ -297,7 +348,11 @@ function connect() {
 
 async function post(path, data) {
   const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
-  if (!r.ok) console.warn(path, r.status, await r.text());
+  if (r.ok) return;
+  $('toast').textContent = `${path.slice(1)} failed: ${(await r.text()) || r.status}`;
+  $('toast').classList.add('show');
+  clearTimeout(post.t);
+  post.t = setTimeout(() => $('toast').classList.remove('show'), 6000);
 }
 
 $('bar').onsubmit = (ev) => {
@@ -314,13 +369,16 @@ $('direct').onsubmit = (ev) => {
 };
 $('pclose').onclick = () => { $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
+$('pdelete').onclick = () => {
+  if (selected && confirm(`Delete ${selected}? Its session stops and its workdir is removed. A git worktree with uncommitted changes is refused; the jarvis/<id> branch is kept.`)) post('/delete', { id: selected });
+};
 $('core').onclick = () => select(ARBITER);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => { if (e.key === 'Escape') $('pclose').onclick(); };
 
 // ---- pan, zoom, drag ----
 const svg = $('view');
-const vb = { x: -600, y: -400, w: 1200, h: 800 };
+const vb = { ...HOME };
 const applyVB = () => svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
 const toWorld = (ev) => {
   const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(svg.getScreenCTM().inverse());
@@ -341,12 +399,13 @@ function draggable(g, id) {
       g.classList.add('dragging');
       a.p = { x: p0.x + dx, y: p0.y + dy };
       a.pinned = true;
-      place(a);
+      layout();
     };
     const up = () => {
       g.removeEventListener('pointermove', move);
       g.classList.remove('dragging');
-      if (!moved) select(id);
+      if (moved) savePos(id, a.p);
+      else select(id);
     };
     g.addEventListener('pointermove', move);
     g.addEventListener('pointerup', up, { once: true });
@@ -362,6 +421,7 @@ svg.addEventListener('pointerdown', (ev) => {
     const w = toWorld(e);
     vb.x -= w.x - start.x;
     vb.y -= w.y - start.y;
+    userView = true;
     applyVB();
   };
   svg.addEventListener('pointermove', move);
@@ -376,14 +436,17 @@ svg.addEventListener('wheel', (ev) => {
   vb.y = w.y - (w.y - vb.y) * f;
   vb.w = nw;
   vb.h *= f;
+  userView = true;
   applyVB();
 }, { passive: false });
 
 svg.addEventListener('dblclick', (ev) => {
   if (ev.target.closest('.node, #core')) return;
-  Object.assign(vb, { x: -600, y: -400, w: 1200, h: 800 });
+  userView = false;
+  Object.assign(vb, HOME);
   applyVB();
   agents.forEach((a) => { a.pinned = false; });
+  try { localStorage.removeItem(POS_KEY); } catch {}
   layout();
 });
 

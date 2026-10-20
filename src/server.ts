@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { bus, startArbiter, tellArbiter, answerAsk, sendToAgent, stopAgent, snapshot } from './agents.ts';
+import { bus, startArbiter, tellArbiter, answerAsk, sendToAgent, stopAgent, deleteAgent, snapshot } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -19,6 +19,7 @@ const commands: Record<string, (b: any) => void> = {
   '/answer': (b) => answerAsk(String(b.reqId), Boolean(b.allow)),
   '/send': (b) => sendToAgent(String(b.id), String(b.text), 'user'),
   '/stop': (b) => stopAgent(String(b.id)),
+  '/delete': (b) => deleteAgent(String(b.id)),
 };
 
 createServer(async (req, res) => {

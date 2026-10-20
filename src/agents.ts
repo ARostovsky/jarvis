@@ -2,8 +2,9 @@ import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
+import { homedir } from 'node:os';
 
 export type Status = 'running' | 'idle' | 'waiting' | 'error' | 'stopped';
 
@@ -15,10 +16,12 @@ export type Agent = {
   status: Status;
   lastText: string;
   costUsd: number;
+  parentId?: string; // undefined only for the arbiter
+  repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
 };
 
-// Every UI-visible change goes through here: spawned, status, text, delta, tool, routed, ask, answered, result, session.
+// Every UI-visible change goes through here: spawned, removed, status, text, delta, tool, routed, ask, answered, result, session.
 export const bus = new EventEmitter();
 
 const ROOT = resolve(import.meta.dirname, '..');
@@ -45,7 +48,24 @@ const sessions = new Map<string, { push: (text: string) => void; abort: AbortCon
 const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
 
 export const ARBITER = 'arbiter';
+const REPORT_CAP = 2000;
+const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
+
+// Only what agents need from ~/.claude/settings.json: an auth proxy and model.
+// Loading full user settings drags in all plugins and hooks: ~5x the tokens per turn.
+function userSettings() {
+  try {
+    const { apiKeyHelper, env, model } = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'));
+    return { apiKeyHelper, env, model };
+  } catch {
+    return {};
+  }
+}
+const SETTINGS = userSettings();
+
+const depth = (a: Agent): number => (a.parentId ? 1 + depth(agents.get(a.parentId)!) : 0);
+const children = (id: string) => [...agents.values()].filter((c) => c.parentId === id);
 
 function inbox() {
   const queue: SDKUserMessage[] = [];
@@ -91,6 +111,7 @@ function restore() {
     const e = JSON.parse(line);
     const a = agents.get(e.agentId);
     if (e.type === 'spawned') agents.set(e.agent.id, { ...e.agent });
+    else if (e.type === 'removed') agents.delete(e.agentId);
     else if (!a) continue;
     else if (e.type === 'status') a.status = e.status;
     else if (e.type === 'text') a.lastText = e.text;
@@ -111,7 +132,8 @@ function session(a: Agent) {
     prompt: box,
     options: {
       cwd: a.cwd,
-      settingSources: ['user'], // picks up the auth proxy (ANTHROPIC_BASE_URL + apiKeyHelper)
+      settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
+      settings: SETTINGS,
       permissionMode: 'acceptEdits',
       includePartialMessages: true,
       abortController: abort,
@@ -131,7 +153,7 @@ function session(a: Agent) {
           });
           bus.emit('event', event);
         }),
-      ...(a.id === ARBITER ? arbiterOptions : {}),
+      ...(a.id === ARBITER ? arbiterOptions : depth(a) < MAX_DEPTH ? leadOptions(a.id) : {}),
     },
   });
   const s = {
@@ -171,7 +193,9 @@ async function pump(a: Agent, q: Query) {
         const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
         setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
         emit('result', { agentId: a.id, text, costUsd: a.costUsd });
-        if (a.id !== ARBITER) report(a.id, `[agent ${a.id} finished, status ${a.status}]\n${text}`);
+        // Cap what lands in the parent's context; the full text stays available via read_agent.
+        const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
+        if (a.parentId) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
       }
     }
     setStatus(a, 'stopped');
@@ -183,33 +207,57 @@ async function pump(a: Agent, q: Query) {
   }
 }
 
-function report(from: string, text: string) {
-  emit('routed', { from, to: ARBITER, text });
-  session(agents.get(ARBITER)!).push(text);
+function report(a: Agent, text: string) {
+  const parent = agents.get(a.parentId!);
+  if (!parent || parent.status === 'stopped') return;
+  emit('routed', { from: a.id, to: parent.id, text });
+  session(parent).push(text);
 }
 
-function makeWorkdir(id: string, repo?: string): string {
+function makeWorkdir(id: string, repo?: string): { cwd: string; repo?: string } {
   mkdirSync(WORKTREES, { recursive: true });
   const dir = join(WORKTREES, id);
   if (repo && existsSync(join(repo, '.git'))) {
     execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir], { stdio: 'pipe' });
-    return dir;
+    return { cwd: dir, repo: resolve(repo) };
   }
   // shortcut: non-git repo is used in place (no isolation), add copy/sandbox if this bites
-  if (repo) return resolve(repo);
+  if (repo) return { cwd: resolve(repo) };
   mkdirSync(dir, { recursive: true });
-  return dir;
+  return { cwd: dir };
 }
 
-export function spawnAgent(name: string, task: string, repo?: string): Agent {
+export function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER): Agent {
+  const parent = agents.get(parentId);
+  if (!parent) throw new Error(`no agent ${parentId}`);
+  if (depth(parent) >= MAX_DEPTH) throw new Error(`max depth ${MAX_DEPTH} reached`);
   // Time suffix keeps ids, worktree dirs and jarvis/<id> branches unique across server restarts.
   const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
-  const a: Agent = { id, name, task, cwd: makeWorkdir(id, repo), status: 'idle', lastText: '', costUsd: 0 };
+  // Sub-agents default to their parent's checkout so they see its work.
+  const wd = makeWorkdir(id, repo ?? (parentId === ARBITER ? undefined : parent.repo ?? parent.cwd));
+  const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId };
   agents.set(id, a);
   emit('spawned', { agent: a });
-  emit('routed', { from: ARBITER, to: id, text: task });
+  emit('routed', { from: parentId, to: id, text: task });
   session(a).push(task);
   return a;
+}
+
+// Stops the agent and deletes its workdir. Its jarvis/<id> branch is kept, so committed work survives.
+export function deleteAgent(id: string) {
+  const a = agents.get(id);
+  if (!a || id === ARBITER) throw new Error(`cannot delete ${id}`);
+  if (children(id).length) throw new Error(`${id} has sub-agents, delete them first`);
+  stopAgent(id);
+  if (a.repo) {
+    // No --force: git refuses when the worktree has uncommitted changes, which is what we want.
+    execFileSync('git', ['-C', a.repo, 'worktree', 'remove', a.cwd], { stdio: 'pipe' });
+  } else if (resolve(a.cwd) === join(WORKTREES, id)) {
+    // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
+    rmSync(a.cwd, { recursive: true, force: true });
+  }
+  agents.delete(id);
+  emit('removed', { agentId: id });
 }
 
 export function sendToAgent(id: string, text: string, from = ARBITER) {
@@ -228,35 +276,53 @@ export function stopAgent(id: string) {
 
 const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
 
-const arbiterTools = createSdkMcpServer({
-  name: 'jarvis',
-  tools: [
-    tool('spawn_agent', 'Start a new coding agent session. It runs in its own git worktree when repo is a git repo. You are notified automatically when it finishes a turn.', {
-      name: z.string().describe('short role name, e.g. "tests" or "backend"'),
-      task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
-      repo: z.string().optional().describe('absolute path to the repository to work on'),
-    }, async ({ name, task, repo }) => {
-      const a = spawnAgent(name, task, repo);
-      return ok({ id: a.id, cwd: a.cwd });
-    }),
-    tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
-      id: z.string(),
-      message: z.string(),
-    }, async ({ id, message }) => (sendToAgent(id, message), ok('sent'))),
-    tool('list_agents', 'List all agents with status and last message.', {}, async () => ok([...agents.values()])),
-    tool('stop_agent', 'Stop an agent session. Its worktree is kept.', { id: z.string() }, async ({ id }) => (stopAgent(id), ok('stopped'))),
-  ],
-});
+// The arbiter manages every agent; a lead agent only manages its own sub-agents.
+function teamTools(owner: string) {
+  const mine = (id: string) => {
+    if (owner !== ARBITER && agents.get(id)?.parentId !== owner) throw new Error(`${id} is not your sub-agent`);
+    return id;
+  };
+  return createSdkMcpServer({
+    name: 'jarvis',
+    tools: [
+      tool('spawn_agent', 'Start a new coding agent session. It runs in its own git worktree when repo is a git repo. You are notified automatically when it finishes a turn.', {
+        name: z.string().describe('short role name, e.g. "tests" or "backend"'),
+        task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
+        repo: z.string().optional().describe('absolute path to the repository to work on'),
+      }, async ({ name, task, repo }) => {
+        const a = spawnAgent(name, task, repo, owner);
+        return ok({ id: a.id, cwd: a.cwd });
+      }),
+      tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
+        id: z.string(),
+        message: z.string(),
+      }, async ({ id, message }) => (sendToAgent(mine(id), message, owner), ok('sent'))),
+      tool('list_agents', 'List agents you manage: id, status, task, cost and the start of the last message.', {}, async () =>
+        ok((owner === ARBITER ? [...agents.values()] : children(owner)).map(({ lastText, ...a }) => ({ ...a, lastText: lastText.slice(0, 300) })))),
+      tool('read_agent', 'Full last message of an agent.', { id: z.string() }, async ({ id }) => ok(agents.get(mine(id))?.lastText ?? 'no such agent')),
+      tool('stop_agent', 'Stop an agent session. Its worktree is kept.', { id: z.string() }, async ({ id }) => (stopAgent(mine(id)), ok('stopped'))),
+    ],
+  });
+}
+const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
 const ARBITER_PROMPT = `You are the arbiter. You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.`;
 
 const arbiterOptions: Options = {
-  mcpServers: { jarvis: arbiterTools },
-  allowedTools: ['mcp__jarvis__spawn_agent', 'mcp__jarvis__send_to_agent', 'mcp__jarvis__list_agents', 'mcp__jarvis__stop_agent'],
+  mcpServers: { jarvis: teamTools(ARBITER) },
+  allowedTools: TEAM_TOOLS,
   systemPrompt: { type: 'preset', preset: 'claude_code', append: ARBITER_PROMPT },
 };
+
+const LEAD_PROMPT = `You can delegate with spawn_agent when your task splits into large independent parts that can run in parallel; sub-agents work in the same repository on their own branches. Do small or sequential work yourself. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
+
+const leadOptions = (id: string): Options => ({
+  mcpServers: { jarvis: teamTools(id) },
+  allowedTools: TEAM_TOOLS,
+  systemPrompt: { type: 'preset', preset: 'claude_code', append: LEAD_PROMPT },
+});
 
 export function startArbiter(cwd = process.cwd()) {
   restore();
