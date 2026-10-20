@@ -37,7 +37,7 @@ The arbiter sits in the center, agents sit around it, and helpers fan out from t
 | Dim | Idle: finished its turn, waiting for the next message |
 | Amber | Waiting for your approval |
 | Red | Something went wrong |
-| Gray | Stopped |
+| Gray | Stopped; its line to the parent turns gray and stops flowing |
 
 Under each circle: model, effort level, and the tool the agent is using right now (`Edit`, `Bash`, `Read`, ...) or the text it is writing. A light pulse runs along a line whenever two agents exchange a message. Violet pulses are notes on the shared board.
 
@@ -45,7 +45,7 @@ Each tab at the top is a separate **workspace**: its own arbiter, team and histo
 
 ### The log and chat
 
-Click any circle to open its log on the right: the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. The arbiter's chat is where you give new goals.
+Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to the arbiter lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. The arbiter's chat is where you give new goals.
 
 ![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
 
