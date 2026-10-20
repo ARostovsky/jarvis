@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { bus, startArbiter, tellArbiter, answerAsk, sendToAgent, stopAgent, deleteAgent, snapshot } from './agents.ts';
+import { bus, startArbiter, tellArbiter, answerAsk, sendToAgent, stopAgent, deleteAgent, postNote, snapshot, DirtyWorktree } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -19,7 +19,8 @@ const commands: Record<string, (b: any) => void> = {
   '/answer': (b) => answerAsk(String(b.reqId), Boolean(b.allow)),
   '/send': (b) => sendToAgent(String(b.id), String(b.text), 'user'),
   '/stop': (b) => stopAgent(String(b.id)),
-  '/delete': (b) => deleteAgent(String(b.id)),
+  '/delete': (b) => deleteAgent(String(b.id), b.dirty === 'commit' || b.dirty === 'discard' ? b.dirty : undefined),
+  '/board': (b) => void postNote('user', Array.isArray(b.to) ? b.to.map(String) : ['all'], String(b.text)),
 };
 
 createServer(async (req, res) => {
@@ -42,7 +43,7 @@ createServer(async (req, res) => {
       commands[req.url!](await body(req));
       res.writeHead(204).end();
     } catch (e) {
-      res.writeHead(400).end((e as Error).message);
+      res.writeHead(e instanceof DirtyWorktree ? 409 : 400).end((e as Error).message);
     }
   } else {
     res.writeHead(404).end();
