@@ -56,6 +56,7 @@ On screen, the arbiter is the core in the center, with agents on a ring around i
 - A pulse travels along a link whenever a message passes between two sessions.
 - Under each node is either the agent's current tool or its streaming text.
 - Drag the left edge of the log panel to make it wider or narrower. The width is remembered, and double-clicking the edge resets it.
+- There is no separate input bar: the side panel is the chat. It opens on the arbiter, clicking a node switches it to that agent, Esc closes it, and Enter or `/` brings back the arbiter chat.
 - Click a node to open its log, where you can watch replies as they stream and message the agent directly. While the panel is open, the graph is re-centered in the space to the left of it.
 - Sub-agents fan out from their parent. Board notes show as violet pulses from the sender to each recipient.
 - The view matches the window's shape and auto-fits the graph until you pan or zoom.

@@ -58,7 +58,7 @@
   @keyframes corepulse { 50% { opacity: .65; } }
   #core text { fill: var(--text); text-anchor: middle; font-size: 22px; letter-spacing: .3em; font-weight: 600; pointer-events: none; }
 
-  #panel { position: fixed; top: 16px; right: 16px; bottom: 88px; width: min(var(--panel-w), calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); display: none; flex-direction: column; backdrop-filter: blur(6px); }
+  #panel { position: fixed; top: 16px; right: 16px; bottom: 16px; width: min(var(--panel-w), calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); display: none; flex-direction: column; backdrop-filter: blur(6px); }
   #panel.open { display: flex; }
   #pgrip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 1; }
   #pgrip:hover, #pgrip.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
@@ -69,10 +69,9 @@
   #log .note { color: var(--violet); }
   #log .tool { color: #8fb8cc; } #log .routed { color: var(--amber); } #log .result { color: var(--cyan); }
   #direct { display: flex; border-top: 1px solid var(--line); }
-  #asks { position: fixed; left: 16px; bottom: 88px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
+  #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
   .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; }
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
-  #bar { position: fixed; left: 16px; right: 16px; bottom: 16px; display: flex; border: 1px solid var(--line); background: var(--panel); }
   input { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 16px Rajdhani, sans-serif; padding: 14px 16px; outline: none; }
   button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--cyan); font: 600 14px Rajdhani, sans-serif; letter-spacing: .15em; padding: 0 16px; cursor: pointer; }
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
@@ -158,10 +157,9 @@
   <div id="pgrip" title="Drag to resize · double-click to reset"></div>
   <header><h2 id="ptitle"></h2><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="log"></div>
-  <form id="direct"><input id="dinput" placeholder="Message this agent directly…" autocomplete="off"><button>SEND</button></form>
+  <form id="direct"><input id="dinput" placeholder="Message…" autocomplete="off"><button>SEND</button></form>
 </aside>
 
-<form id="bar"><input id="say" placeholder="Tell the arbiter…" autocomplete="off" autofocus><button>SEND</button></form>
 
 <script>
 const ARBITER = 'arbiter', R = 300;
@@ -333,6 +331,7 @@ function select(id) {
   $('log').scrollTop = $('log').scrollHeight;
   $('panel').classList.add('open');
   document.body.classList.add('panel-open');
+  $('dinput').placeholder = `Message ${id === ARBITER ? 'the arbiter' : a.agent.name}…  (Enter to send)`;
   $('dinput').focus();
 }
 
@@ -364,7 +363,7 @@ function endLive(id) {
 
 let replaying = true;
 const handlers = {
-  ready: () => { replaying = false; },
+  ready: () => { replaying = false; if (!selected) select(ARBITER); },
   delta: (e) => {
     const a = agents.get(e.agentId);
     if (!a) return;
@@ -554,19 +553,13 @@ async function post(path, data) {
   toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
 }
 
-$('bar').onsubmit = (ev) => {
-  ev.preventDefault();
-  const text = $('say').value.trim();
-  if (text) post('/say', { text });
-  $('say').value = '';
-};
 $('direct').onsubmit = (ev) => {
   ev.preventDefault();
   const text = $('dinput').value.trim();
   if (text && selected) post('/send', { id: selected, text });
   $('dinput').value = '';
 };
-$('pclose').onclick = () => { $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
+$('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
 // Modal with a list of choices; resolves to the chosen value, or '' on cancel.
 function choose(title, text, question, choices) {
@@ -596,7 +589,11 @@ $('core').oncontextmenu = (ev) => menu(ev, [
   ['Stop all agents', () => stopAllWs(WS)],
 ]);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
-document.onkeydown = (e) => { if (e.key === 'Escape') $('pclose').onclick(); };
+document.onkeydown = (e) => {
+  if (e.key === 'Escape') $('pclose').onclick();
+  // With the panel closed, Enter or / brings back the arbiter chat.
+  else if ((e.key === 'Enter' || e.key === '/') && !selected && !e.target.closest('input, textarea, dialog')) { e.preventDefault(); select(ARBITER); }
+};
 
 // ---- pan, zoom, drag ----
 const svg = $('view');
