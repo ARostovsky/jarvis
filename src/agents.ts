@@ -19,6 +19,7 @@ export type Agent = {
   parentId?: string; // undefined only for the arbiter
   model?: string; // alias (haiku | sonnet | opus); unset = model from settings
   effort?: EffortLevel; // unset = the default for its role
+  runtimeModel?: string; // the model the SDK session actually reports, e.g. claude-opus-5-5[1m]
   repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
 };
@@ -57,6 +58,7 @@ function userSettings() {
   }
 }
 const SETTINGS = userSettings();
+export const SETTINGS_MODEL: string | undefined = SETTINGS.model;
 
 // Only the user plugins listed here are loaded into agents (all of them would ~5x the tokens per turn).
 // Ids as in enabledPlugins; JARVIS_PLUGINS="" turns them off.
@@ -195,7 +197,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
       else if (e.type === 'text') a.lastText = e.text;
       else if (e.type === 'result') a.costUsd = e.costUsd;
       else if (e.type === 'session') a.sessionId = e.sessionId;
-      else if (e.type === 'config') Object.assign(a, { model: e.model, effort: e.effort });
+      else if (e.type === 'config') Object.assign(a, { model: e.model, effort: e.effort, runtimeModel: e.model !== a.model ? undefined : a.runtimeModel });
+      else if (e.type === 'runtime') a.runtimeModel = e.model;
     }
     // Their processes died with the old server; they resume on the next message.
     for (const a of agents.values()) if (a.status !== 'stopped') setStatus(a, 'idle');
@@ -261,9 +264,15 @@ export function createWorkspace(meta: WorkspaceMeta) {
           if (m.parent_tool_use_id === null && ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
             emit('delta', { agentId: a.id, text: ev.delta.text });
           }
-        } else if (m.type === 'system' && m.subtype === 'init' && m.session_id !== a.sessionId) {
-          a.sessionId = m.session_id;
-          emit('session', { agentId: a.id, sessionId: m.session_id });
+        } else if (m.type === 'system' && m.subtype === 'init') {
+          if (m.session_id !== a.sessionId) {
+            a.sessionId = m.session_id;
+            emit('session', { agentId: a.id, sessionId: m.session_id });
+          }
+          if (m.model !== a.runtimeModel) {
+            a.runtimeModel = m.model;
+            emit('runtime', { agentId: a.id, model: m.model });
+          }
         } else if (m.type === 'assistant') {
           for (const block of m.message.content) {
             if (block.type === 'text') {
@@ -388,6 +397,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (cfg.model && !(MODELS as readonly string[]).includes(cfg.model)) throw new Error(`unknown model ${cfg.model}`);
     if (cfg.effort && !EFFORTS.includes(cfg.effort)) throw new Error(`unknown effort ${cfg.effort}`);
     Object.assign(a, { model: cfg.model ?? a.model, effort: cfg.effort ?? a.effort });
+    if (cfg.model) a.runtimeModel = undefined; // stale until the session reports again
     emit('config', { agentId: id, model: a.model, effort: a.effort });
     const q = sessions.get(id)?.q;
     if (cfg.model) void q?.setModel(cfg.model);

@@ -332,13 +332,16 @@ function log(id, cls, text, cost) {
   a.log.push({ cls, text, cost });
   if (selected === id) appendLog(cls, text, cost);
 }
+// What model an agent really runs: what its session reported, else what was asked for, else the settings default.
+let settingsModel = null;
+const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? (settingsModel ? `${settingsModel} (from settings)` : 'from settings');
 // Cost of an agent plus everything it spawned, recursively.
 const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + [...agents.values()].filter((c) => (c.agent.parentId ?? (c.agent.id === ARBITER ? null : ARBITER)) === id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
 function renderTitle() {
   const a = agents.get(selected);
   if (!a) return;
   const name = selected === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${selected}`;
-  const cfg = [a.agent.model ?? (selected === ARBITER ? 'settings model' : ''), a.agent.effort ?? 'medium'].filter(Boolean).join(' · ');
+  const cfg = [modelLabel(a.agent), a.agent.effort ?? 'medium'].filter(Boolean).join(' · ');
   const own = a.agent.costUsd ?? 0, total = subtreeCost(selected);
   $('ptitle').textContent = name;
   $('ptitle').title = `${cfg}\n$${own.toFixed(3)} own${total > own ? `, $${total.toFixed(3)} with sub-agents` : ''}`;
@@ -450,9 +453,16 @@ const handlers = {
     log(e.agentId, 'result', '■ done', ` · $${e.costUsd.toFixed(3)}`);
     renderTitle();
   },
+  runtime: (e) => {
+    const a = agents.get(e.agentId);
+    if (!a) return;
+    a.agent.runtimeModel = e.model;
+    renderTitle();
+  },
   config: (e) => {
     const a = agents.get(e.agentId);
     if (!a) return;
+    if (e.model !== a.agent.model) a.agent.runtimeModel = undefined;
     Object.assign(a.agent, { model: e.model, effort: e.effort });
     setStatus(e.agentId, a.agent.status);
     renderTitle();
@@ -467,7 +477,8 @@ let es = null;
 
 async function refreshTabs() {
   let list, archived;
-  try { ({ workspaces: list, archived } = await (await fetch('/workspaces')).json()); } catch { return; }
+  try { ({ workspaces: list, archived, settingsModel } = await (await fetch('/workspaces')).json()); } catch { return; }
+  renderTitle();
   renderArchived(archived);
   if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
   if (!es) connect();
