@@ -47,7 +47,7 @@ const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Option
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
-// Only what agents need from ~/.claude/settings.json: an auth proxy and model.
+// Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL) and model.
 // Loading full user settings drags in all plugins and hooks: ~5x the tokens per turn.
 function userSettings() {
   try {

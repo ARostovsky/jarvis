@@ -27,7 +27,7 @@ async function start() {
     if (!(await up())) return console.error(`server did not start, see ${LOG}`), process.exit(1);
   }
   console.log(`jarvis: ${URL}`);
-  spawn('xdg-open', [URL], { detached: true, stdio: 'ignore' }).unref();
+  spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [URL], { detached: true, stdio: 'ignore' }).unref();
 }
 
 async function stop() {
