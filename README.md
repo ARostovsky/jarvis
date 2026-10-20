@@ -1,71 +1,150 @@
-# jarvis
+# Jarvis
 
-One arbiter agent that spawns, steers and watches other Claude Code agent sessions. Built on the Claude Agent SDK.
+**One AI manager that runs a team of AI coding agents, and a live map where you watch them work.**
 
-## Run
+You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK.
+
+![Jarvis: the arbiter in the center, agents around it, chat on the right](docs/screenshots/hero.png)
+
+## Why
+
+One AI coding assistant is great at one task at a time. Real work is usually several tasks at once: backend, frontend, tests, docs. Doing them one after another in one chat is slow, and the context gets mixed up.
+
+Jarvis works like a small team with a lead:
+
+- **The arbiter** (the glowing core) is the team lead. It does not write code. It plans, hires agents, passes information between them, and reports back to you.
+- **Agents** (the circles) do the actual work. Each one has its own copy of the code (a separate git branch), so they never overwrite each other.
+- **Lead agents** can hire their own helpers for big sub-tasks, like `backend` above with `migration` and `apple-pay`.
+- **You** watch, chat with anyone, and approve actions that the safety check is not sure about.
+
+## Who it is for
+
+- **Developers** who want to run several coding tasks in parallel and review the results as git branches.
+- **Team leads and architects** who want to try "AI team" workflows: split work, compare approaches, see what it costs.
+- **QA, DevOps, analysts** and other IT folks who want to see what AI agents actually do step by step, with full logs and a clear approval point before anything risky runs.
+
+You do not need to read the code to use Jarvis. You need to be comfortable with a terminal and git.
+
+## What you see
+
+### The map
+
+The arbiter sits in the center, agents sit around it, and helpers fan out from their lead.
+
+| Color | Meaning |
+|-------|---------|
+| Cyan, bright | Working right now |
+| Dim | Idle: finished its turn, waiting for the next message |
+| Amber | Waiting for your approval |
+| Red | Something went wrong |
+| Gray | Stopped |
+
+Under each circle: model, effort level, and the tool the agent is using right now (`Edit`, `Bash`, `Read`, ...) or the text it is writing. A light pulse runs along a line whenever two agents exchange a message. Violet pulses are notes on the shared board.
+
+Each tab at the top is a separate **workspace**: its own arbiter, team and history. Use one per project or per goal.
+
+### The log and chat
+
+Click any circle to open its log on the right: the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Type at the bottom to message that agent directly. The arbiter's chat is where you give new goals.
+
+![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
+
+The **VIEW** button picks what the log shows (your messages, reports, tool calls, board notes, costs), per agent.
+
+### Approvals
+
+Agents run in Claude Code's `auto` permission mode: a built-in classifier approves safe actions on its own. Only what it cannot decide shows up as a card in the bottom-left corner. You read the exact command and press ALLOW or DENY. The agent waits (amber) until you answer.
+
+![An approval card: the tests agent wants to run a shell command](docs/screenshots/approve.png)
+
+### Controls
+
+Right-click an agent to open its log, change its model or effort, stop it, or delete it. Right-click a tab to rename it, stop all its agents, or archive it.
+
+![Right-click menu on an agent](docs/screenshots/menu.png)
+
+Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view.
+
+## Safety: what Jarvis will and will not do
+
+- **Your project folder is never edited directly** when it is a git repo. Every agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge those branches yourself, like any other branch.
+- **Nothing is lost silently.** Deleting an agent with unsaved changes asks you to commit them to its branch or discard them. Archiving a workspace refuses while agents are working, and commits any unsaved work first. Agent branches are never deleted by Jarvis.
+- **Archive, not delete.** Closing a workspace moves it to the archive (button `ARCHIVE n`). You can restore it later with all conversations. Permanent delete is only available in the archive, and asks you to type the workspace name.
+- **Local only.** The web UI listens on `127.0.0.1` and rejects requests from other websites. Nothing is exposed to your network.
+- **Restarts are safe.** Every event is written to disk. After a restart the map, logs and costs come back, and agents continue their conversations on the next message.
+
+## Costs
+
+Every agent is a separate Claude session, and every turn costs tokens. Jarvis helps you keep it under control:
+
+- Each agent's cost is shown in its panel, plus **Σ**: the total including all the helpers it hired. The tab tooltip shows the workspace total.
+- The arbiter is told to pick the cheapest model that can do each job well: `haiku` for mechanical work, `sonnet` for normal coding, `opus` only for hard problems. You can change any agent's model or effort at any time.
+- Agents load only the minimum from your Claude Code settings. Loading all your plugins and hooks into every agent would make each turn cost about 5x more.
+
+## Quick start
+
+### You need
+
+- **Node.js 24 or newer** (`node --version`)
+- **git**
+- **Claude Code** set up on this machine, so that `claude` works in your terminal. Agents use the same login, API key or proxy settings.
+- Linux or macOS
+
+### Install and run
 
 ```bash
+git clone <this-repo-url> jarvis
+cd jarvis
 npm install
-ln -s "$PWD/bin/jarvis.mjs" ~/.local/bin/jarvis   # once
+ln -s "$PWD/bin/jarvis.mjs" ~/.local/bin/jarvis   # once; any folder in your PATH works
 
-jarvis            # start the server in the background (if not running) and open the UI
-jarvis stop | restart | status | logs
+jarvis            # starts the server in the background and opens http://127.0.0.1:7777
 ```
 
-The server logs to `~/.local/share/jarvis/server.log`. `npm start` runs it in the foreground instead, and `npm run check` runs the typecheck.
+Other commands: `jarvis stop`, `jarvis restart`, `jarvis status`, `jarvis logs`. To run in the foreground instead: `npm start`.
 
-Node 24+ runs the `.ts` files directly, so there is no build step. Agents take only `apiKeyHelper`, `env` and `model` from `~/.claude/settings.json`, which is enough for an auth proxy. They also load the repo's own settings and CLAUDE.md (`settingSources: ['project', 'local']`). Of your user plugins, only the ones listed in `JARVIS_PLUGINS` are loaded (comma-separated ids as in `enabledPlugins`; default `caveman@caveman,ponytail@ponytail`; set it empty for none). Loading all of them makes every turn cost about 5x more tokens.
+### First goal
 
-## How it works
+1. Click **+** to create a workspace. Give it a name and, optionally, the path to your project (a git repo). Pick the arbiter's model and effort, or keep the defaults.
+2. In the arbiter chat on the right, describe what you want, for example: *"Add a /health endpoint with a test and a line in the README."*
+3. Watch the arbiter hire agents. Click any of them to follow along. Approve cards when they appear.
+4. When agents finish, their work is on `jarvis/<agent-id>` branches in your repo. Review with `git log` / `git diff`, merge what you like.
 
-- `src/agents.ts` keeps one long-lived SDK session per agent and feeds it messages through an inbox. A session starts lazily on the first message.
-  - The arbiter gets the MCP tools `spawn_agent`, `send_to_agent`, `list_agents`, `read_agent` and `stop_agent`.
-  - `spawn_agent` takes a `model` (`haiku`, `sonnet` or `opus`; default `sonnet`, override with `JARVIS_AGENT_MODEL`) and an `effort` (`low` to `max`; default `medium`, override with `JARVIS_AGENT_EFFORT`). The arbiter and lead agents are told to pick the cheapest setup that does the job well. The arbiter's model and effort are chosen in the New workspace dialog (defaults: the model from your settings, effort `medium`; or `JARVIS_ARBITER_MODEL` / `JARVIS_ARBITER_EFFORT`). Any agent's model and effort can be changed later from its right-click menu, and a live session switches right away.
-  - Costs: each agent's cost keeps adding up across server restarts and resumed sessions. The panel shows the agent's own cost, plus Σ including everything it spawned. The tab tooltip shows the workspace total.
-  - Top-level agents get the same tools, scoped to their own sub-agents (max depth 2). Sub-agents of a git agent default to the same repo, each on its own branch.
-  - Every agent has a shared board with `board_post` (to agent ids or names, or `"all"`) and `board_read`. Unseen notes addressed to an agent are prepended to the next message it receives, so they arrive without interrupting its current turn.
-  - When an agent finishes a turn, its result is sent to its parent automatically. The report is capped at 2000 characters, and the parent can fetch the full text with `read_agent`.
-- Deleting an agent stops it and removes its own workdir. If a git worktree has uncommitted changes, the server answers 409 and the UI asks you to choose: commit the changes to the agent's branch, or discard them. The `jarvis/<id>` branch is kept either way. An agent that still has sub-agents cannot be deleted.
-- Workspaces: each UI tab is an independent workspace with its own arbiter, agents, board and event log. A workspace can have a project folder, which becomes the default repo for the arbiter's agents. The list of workspaces is kept in `workspaces.json`.
-- Right-click a tab for Rename, Stop all agents and Archive workspace. Double-clicking a tab also renames it. Right-clicking an agent node gives Open log, Stop and Delete; right-clicking the arbiter core gives Stop all agents. Stopping an agent also drops its pending permission prompts.
-- Deleting a workspace is archiving, and it is designed to lose nothing:
-  - It is refused while any agent is running or waiting for your approval.
-  - Uncommitted changes in agent worktrees are listed. The only way forward is to commit them to each agent's own `jarvis/<id>` branch; to discard changes, delete those agents one by one first.
-  - Clean git worktrees are then removed, and their branches are kept. Plain (non-git) workdirs move into the archive together with the event log.
-  - If git refuses to remove a worktree partway through, everything already removed is put back and the workspace stays active.
-  - The project folder is never touched.
-  - The workspace moves to `archive/<id>/`. Restoring it (the `ARCHIVE n` button) re-creates the worktrees from their branches and keeps the agents' conversations.
-  - Permanent delete lives only in the archive (DELETE in the `ARCHIVE n` dialog):
-    - It lists exactly what goes (the event log, parked plain workdirs) and what stays (agent `jarvis/<id>` branches in your repos, never touched).
-    - It then asks you to type the workspace name; the server checks the name too.
-    - To remove the branches, delete them with git yourself.
-- Runtime data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`):
-  - `workspaces/<id>/arbiter/` is the arbiter's own empty working dir;
-  - `workspaces/<id>/events.jsonl` is the workspace's event log;
-  - `worktrees/<id>` holds the agents' workdirs. Agents work in the repo named in the task, or in the workspace project.
-- Workers run in `worktrees/<id>`. If `repo` is a git repo, this is a git worktree on branch `jarvis/<id>`.
-- Permissions: agents run in Claude Code's `auto` mode by default. A classifier approves safe calls on its own, and only what it can't decide becomes an `ask` card in the UI. Override with `JARVIS_PERMISSION_MODE` (`acceptEdits`, `default`, ...).
-- Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `delta` (streamed text), `tool`, `routed`, `ask`, `answered`, `result`, `session`.
-- Persistence: every event except `delta`, `ask` and `answered` is appended to the workspace's `events.jsonl`. When the server restarts, it replays this log to rebuild the agents and their logs. An agent's next message resumes its SDK session (`resume: sessionId`), so it keeps its conversation. Asks that were pending when the server stopped are dropped. To reset a workspace, delete its `workspaces/<id>/` folder.
+## Settings
 
-## Web UI
+All optional, set as environment variables before `jarvis` or `npm start`:
 
-`src/server.ts` serves `public/index.html`, which is one file with no build step.
-- `GET /workspaces` returns `{workspaces, archived}`, the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one; `/workspaces/rename {ws, name}`, `/workspaces/archive {ws, commit?}` and `/workspaces/restore {id}`, `/workspaces/archived/info {id}` and `/workspaces/archived/delete {id, name}` handle the rest. `/stopall {ws}` stops every agent in a workspace.
-- Events stream over SSE at `GET /events?ws=<id>`. On connect the server first sends a snapshot of the agents and any pending asks.
-- Commands are JSON POSTs that carry `ws`: `/say` (to the arbiter), `/send` (directly to an agent), `/answer` (approve or deny an ask), `/stop`, `/delete` (`dirty: 'commit' | 'discard'`) and `/board` (a note from the user).
-- The server binds to 127.0.0.1 only. POST requests are rejected unless the `Origin` is the page itself, so other websites cannot drive your agents.
+| Variable | Default | What it does |
+|----------|---------|--------------|
+| `PORT` | `7777` | Port of the web UI |
+| `JARVIS_AGENT_MODEL` | `sonnet` | Default model for new agents |
+| `JARVIS_AGENT_EFFORT` | `medium` | Default effort for new agents (`low` ... `max`) |
+| `JARVIS_ARBITER_MODEL` | your Claude Code model | Arbiter model when the workspace does not set one |
+| `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
+| `JARVIS_PERMISSION_MODE` | `auto` | How agents ask for permission: `auto`, `acceptEdits`, `default`, ... |
+| `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail` | Which of your Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
 
-On screen, the arbiter is the core in the center, with agents on a ring around it.
-- Node color shows status: cyan = running, dim = idle, amber = waiting for your approval, red = error, gray = stopped.
-- A pulse travels along a link whenever a message passes between two sessions.
-- Under each node is either the agent's current tool or its streaming text.
-- Drag the left edge of the log panel to make it wider or narrower. The width is remembered, and double-clicking the edge resets it.
-- There is no separate input bar: the side panel is the chat. It opens on the arbiter, clicking a node switches it to that agent, Esc closes it, and Enter or `/` brings back the arbiter chat.
-- The VIEW button in the panel picks which log lines to show, separately for each agent: inputs (your messages and tasks from the agent's parent), reports from sub-agents, messages sent to agents, tool calls, board notes, and the cost on done lines. An agent without its own choice inherits from its parent, up to the arbiter, so setting the arbiter's view sets the default for everyone. RESET TO INHERITED drops an agent's own choice. By default, reports and tool calls are hidden; everything else shows. Settings are stored per workspace.
-- STOP appears only while an agent is running or waiting for you.
-- Click a node to open its log, where you can watch replies as they stream and message the agent directly. While the panel is open, the graph is re-centered in the space to the left of it.
-- Sub-agents fan out from their parent. Board notes show as violet pulses from the sender to each recipient.
-- The view matches the window's shape and fits the actual graph (with a margin, never closer than a lone core) until you pan or zoom.
-- Drag the background to pan and use the wheel to zoom. Drag a node to move it; positions are saved in localStorage. Double-click the background to reset the view and positions.
-- Ask cards appear bottom-left.
+Data (workspaces, logs, agent workdirs, archive) lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never inside this repo.
+
+## Glossary
+
+- **Agent**: one Claude Code session with its own task and its own folder.
+- **Arbiter**: the agent that plans and delegates; it never edits code itself.
+- **Workspace**: a tab with its own arbiter, team and history.
+- **Git branch / worktree**: a separate, named copy of the code. Jarvis gives each agent one, so their changes stay apart until you merge them.
+- **Model**: which Claude model an agent uses. `haiku` is fast and cheap, `sonnet` is the everyday choice, `opus` is the strongest and most expensive.
+- **Effort**: how long the model thinks before answering. Higher effort is slower and costs more, but helps on hard problems.
+- **Board**: shared notes between agents, for facts several of them need (an API shape, a decision).
+- **Token**: the unit Claude usage is billed in. More text read and written means more tokens.
+
+## Customize it
+
+Jarvis is small on purpose: about 750 lines of TypeScript, one HTML file, no build step, two runtime dependencies. It is easy to change, by hand or with your own coding agent.
+
+Start with **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: how it works inside, the event model, the HTTP API, the rules it must keep (never lose work, local only), and step-by-step recipes for common changes such as adding a tool for agents, a new UI action, or another model. The repo's `CLAUDE.md` points Claude Code there automatically.
+
+Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview).
+
+## License
+
+[MIT](LICENSE)
