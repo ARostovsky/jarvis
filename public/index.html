@@ -334,7 +334,7 @@ function log(id, cls, text, cost) {
 }
 // What model an agent really runs: what its session reported, else what was asked for, else the settings default.
 let settingsModel = null;
-const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? (settingsModel ? `${settingsModel} (from settings)` : 'from settings');
+const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? settingsModel ?? '';
 // Cost of an agent plus everything it spawned, recursively.
 const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + [...agents.values()].filter((c) => (c.agent.parentId ?? (c.agent.id === ARBITER ? null : ARBITER)) === id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
 function renderTitle() {
