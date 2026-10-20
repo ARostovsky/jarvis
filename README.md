@@ -25,6 +25,14 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
   - When an agent finishes a turn, its result is sent to its parent automatically. The report is capped at 2000 characters, and the parent can fetch the full text with `read_agent`.
 - Deleting an agent stops it and removes its own workdir. If a git worktree has uncommitted changes, the server answers 409 and the UI asks you to choose: commit the changes to the agent's branch, or discard them. The `jarvis/<id>` branch is kept either way. An agent that still has sub-agents cannot be deleted.
 - Workspaces: each UI tab is an independent workspace with its own arbiter, agents, board and event log. A workspace can have a project folder, which becomes the default repo for the arbiter's agents. The list of workspaces is kept in `workspaces.json`.
+- Renaming a workspace: double-click the active tab.
+- Deleting a workspace (the `×` on the active tab) is archiving, and it is designed to lose nothing:
+  - It is refused while any agent is running or waiting for your approval.
+  - Uncommitted changes in agent worktrees are listed. The only way forward is to commit them to each agent's own `jarvis/<id>` branch; to discard changes, delete those agents one by one first.
+  - Clean git worktrees are then removed, and their branches are kept. Plain (non-git) workdirs move into the archive together with the event log.
+  - The project folder is never touched.
+  - The workspace moves to `archive/<id>/`. Restoring it (the `ARCHIVE n` button) re-creates the worktrees from their branches and keeps the agents' conversations.
+  - There is no permanent delete in the UI: to purge, remove `archive/<id>/` and the `jarvis/*` branches by hand.
 - Runtime data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`):
   - `workspaces/<id>/arbiter/` is the arbiter's own empty working dir;
   - `workspaces/<id>/events.jsonl` is the workspace's event log;
@@ -37,7 +45,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
 ## Web UI
 
 `src/server.ts` serves `public/index.html`, which is one file with no build step.
-- `GET /workspaces` lists the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one.
+- `GET /workspaces` returns `{workspaces, archived}`, the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one; `/workspaces/rename {ws, name}`, `/workspaces/archive {ws, commit?}` and `/workspaces/restore {id}` handle the rest.
 - Events stream over SSE at `GET /events?ws=<id>`. On connect the server first sends a snapshot of the agents and any pending asks.
 - Commands are JSON POSTs that carry `ws`: `/say` (to the arbiter), `/send` (directly to an agent), `/answer` (approve or deny an ask), `/stop`, `/delete` (`dirty: 'commit' | 'discard'`) and `/board` (a note from the user).
 - The server binds to 127.0.0.1 only. POST requests are rejected unless the `Origin` is the page itself, so other websites cannot drive your agents.

@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -28,6 +28,7 @@ export type WorkspaceMeta = { id: string; name: string; project?: string };
 const DATA = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis');
 const WORKTREES = join(DATA, 'worktrees');
 const REGISTRY = join(DATA, 'workspaces.json');
+const ARCHIVE = join(DATA, 'archive');
 // Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
@@ -107,8 +108,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const bus = new EventEmitter();
   // shortcut: whole event log is kept in memory and replayed to each UI, rotate it once it grows past a few MB
   const history: string[] = [];
+  let closed = false; // set once archived: late events from dying sessions must not write into the moved folder
 
   function emit(type: string, data: object) {
+    if (closed) return;
     const event = { type, ...data };
     if (!TRANSIENT.has(type)) {
       const line = JSON.stringify(event);
@@ -406,6 +409,51 @@ export function createWorkspace(meta: WorkspaceMeta) {
     };
   }
 
+  // ---- archive support ----
+  const PARKED = join(dir, 'parked-workdirs'); // plain (non-git) agent workdirs travel with the archive
+  const ownPlainDir = (a: Agent) => !a.repo && resolve(a.cwd) === join(WORKTREES, a.id);
+  const workers = () => [...agents.values()].filter((a) => a.id !== ARBITER);
+
+  const busy = () => [...agents.values()].filter((a) => a.status === 'running' || a.status === 'waiting').map((a) => a.id);
+
+  const dirty = () =>
+    workers()
+      .filter((a) => a.repo && existsSync(a.cwd))
+      .map((a) => ({ id: a.id, changes: execFileSync('git', ['-C', a.cwd, 'status', '--porcelain'], { encoding: 'utf8' }).trim() }))
+      .filter((d) => d.changes);
+
+  // Leaves nothing behind that isn't recoverable: dirty worktrees are committed to their own branch first,
+  // clean ones are removed (the jarvis/<id> branch keeps everything), plain workdirs move into the archive.
+  function detach(commit: boolean) {
+    const d = dirty();
+    if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${x.changes.split('\n').slice(0, 5).join('\n')}`).join('\n\n'));
+    for (const x of d) {
+      execFileSync('git', ['-C', agents.get(x.id)!.cwd, 'add', '-A']);
+      execFileSync('git', ['-C', agents.get(x.id)!.cwd, 'commit', '-m', `jarvis: save uncommitted work of ${x.id} before archiving workspace`]);
+    }
+    closed = true;
+    for (const s of sessions.values()) s.abort.abort();
+    for (const a of workers()) {
+      if (a.repo && existsSync(a.cwd)) execFileSync('git', ['-C', a.repo, 'worktree', 'remove', a.cwd], { stdio: 'pipe' });
+      else if (ownPlainDir(a) && existsSync(a.cwd)) {
+        mkdirSync(PARKED, { recursive: true });
+        renameSync(a.cwd, join(PARKED, a.id));
+      }
+    }
+  }
+
+  // Puts workdirs back after a restore: worktrees from their branches, plain dirs from the archive.
+  function reattach() {
+    for (const a of workers()) {
+      if (existsSync(a.cwd)) continue;
+      if (a.repo) execFileSync('git', ['-C', a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`], { stdio: 'pipe' });
+      else if (ownPlainDir(a) && existsSync(join(PARKED, a.id))) {
+        mkdirSync(WORKTREES, { recursive: true });
+        renameSync(join(PARKED, a.id), a.cwd);
+      }
+    }
+  }
+
   restore();
   if (agents.get(ARBITER)?.cwd !== ARBITER_HOME) {
     // SDK sessions are stored per folder, so a moved arbiter starts a fresh conversation.
@@ -416,7 +464,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   return {
     meta,
+    dir,
     bus,
+    busy,
+    dirty,
+    detach,
+    reattach,
     snapshot,
     summary,
     answerAsk,
@@ -444,6 +497,50 @@ export function addWorkspace(name: string, project?: string): Workspace {
   workspaces.set(meta.id, w);
   saveRegistry();
   return w;
+}
+
+export function renameWorkspace(id: string, name: string) {
+  const w = workspaces.get(id);
+  if (!w) throw new Error(`no workspace ${id}`);
+  if (!name.trim()) throw new Error('name is empty');
+  w.meta.name = name.trim();
+  saveRegistry();
+}
+
+// Archiving never deletes: see detach(). The folder moves to archive/<id> and can be restored.
+export function archiveWorkspace(id: string, commit = false) {
+  const w = workspaces.get(id);
+  if (!w) throw new Error(`no workspace ${id}`);
+  const busy = w.busy();
+  if (busy.length) throw new Error(`agents are still working or waiting for you: ${busy.join(', ')}. Stop them first.`);
+  w.detach(commit);
+  mkdirSync(ARCHIVE, { recursive: true });
+  writeFileSync(join(w.dir, 'meta.json'), JSON.stringify({ ...w.meta, archivedAt: new Date().toISOString() }, null, 2));
+  renameSync(w.dir, join(ARCHIVE, id));
+  workspaces.delete(id);
+  if (!workspaces.size) addWorkspace('Main');
+  saveRegistry();
+}
+
+export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {
+  if (!existsSync(ARCHIVE)) return [];
+  return readdirSync(ARCHIVE)
+    .filter((d) => existsSync(join(ARCHIVE, d, 'meta.json')))
+    .map((d) => JSON.parse(readFileSync(join(ARCHIVE, d, 'meta.json'), 'utf8')))
+    .sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
+}
+
+export function restoreWorkspace(id: string) {
+  const from = join(ARCHIVE, id);
+  if (!existsSync(join(from, 'meta.json')) || workspaces.has(id)) throw new Error(`cannot restore ${id}`);
+  const { archivedAt, ...meta } = JSON.parse(readFileSync(join(from, 'meta.json'), 'utf8'));
+  mkdirSync(join(DATA, 'workspaces'), { recursive: true });
+  renameSync(from, join(DATA, 'workspaces', id));
+  const w = createWorkspace(meta);
+  w.reattach();
+  workspaces.set(id, w);
+  saveRegistry();
+  return meta as WorkspaceMeta;
 }
 
 export function loadWorkspaces() {

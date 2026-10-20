@@ -88,6 +88,12 @@
   #newws label { display: block; margin: 10px 0 4px; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
   #newws input { width: 100%; border: 1px solid var(--line); padding: 8px 10px; }
   #newws { border-color: var(--cyan); min-width: 420px; }
+  #archived { border-color: var(--cyan); min-width: 480px; }
+  #archivedList div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #archivedList span { flex: 1; }
+  #archivedList small { color: var(--cyan-dim); display: block; }
+  #tabs .tabx { padding: 6px 9px; margin-left: -6px; border-left: 0; color: var(--cyan-dim); }
+  #tabs .tabx:hover { color: var(--red); }
   #conn { position: fixed; top: 16px; right: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
 </style>
 </head>
@@ -125,15 +131,17 @@
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
   </form>
 </dialog>
-<dialog id="dirty">
-  <h3>UNCOMMITTED CHANGES</h3>
-  <pre id="dirtyText"></pre>
-  <p>Commit them to the agent's branch before deleting, or discard them?</p>
-  <form method="dialog">
-    <button value="commit">COMMIT &amp; DELETE</button>
-    <button value="discard" class="danger">DISCARD &amp; DELETE</button>
-    <button value="">CANCEL</button>
-  </form>
+<dialog id="choice">
+  <h3 id="choiceTitle"></h3>
+  <pre id="choiceText"></pre>
+  <p id="choiceQuestion"></p>
+  <form method="dialog" id="choiceButtons"></form>
+</dialog>
+<dialog id="archived">
+  <h3 style="color:var(--cyan)">ARCHIVED WORKSPACES</h3>
+  <p style="font-size:13px;opacity:.8">Restoring brings back the graph, logs and conversations, and re-creates agent worktrees from their jarvis/&lt;id&gt; branches.</p>
+  <div id="archivedList"></div>
+  <form method="dialog"><button value="">CLOSE</button></form>
 </dialog>
 
 <aside id="panel">
@@ -384,8 +392,9 @@ let WS = (() => { try { return localStorage.getItem('jarvis.ws'); } catch { retu
 let es = null;
 
 async function refreshTabs() {
-  let list;
-  try { list = await (await fetch('/workspaces')).json(); } catch { return; }
+  let list, archived;
+  try { ({ workspaces: list, archived } = await (await fetch('/workspaces')).json()); } catch { return; }
+  renderArchived(archived);
   if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
   if (!es) connect();
   $('tabs').replaceChildren(...list.map((w) => {
@@ -396,8 +405,58 @@ async function refreshTabs() {
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
     b.onclick = () => switchTo(w.id);
-    return b;
-  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }));
+    if (w.id !== WS) return [b];
+    b.title += ' · double-click to rename';
+    b.ondblclick = () => renameWs(w);
+    return [b, Object.assign(document.createElement('button'), { className: 'tabx', textContent: '×', title: 'Archive workspace', onclick: () => archiveWs(w) })];
+  }).flat(), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }),
+  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: `ARCHIVE ${archived.length}`, title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
+}
+
+async function renameWs(w) {
+  const name = prompt('Rename workspace', w.name)?.trim();
+  if (name && name !== w.name) await post('/workspaces/rename', { name });
+  refreshTabs();
+}
+
+async function wsPost(path, data) {
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  return { ok: r.ok, status: r.status, text: r.ok ? '' : await r.text() };
+}
+
+async function archiveWs(w) {
+  const v = await choose(`ARCHIVE "${w.name}"?`, '',
+    'Agents are stopped and the workspace moves to the archive. Nothing is deleted: committed work stays on jarvis/<id> branches, plain workdirs and logs move with it, and you can restore it any time.',
+    [{ value: 'archive', label: 'ARCHIVE' }]);
+  if (!v) return;
+  let r = await wsPost('/workspaces/archive', { ws: w.id });
+  if (r.status === 409) {
+    const c = await choose('UNCOMMITTED CHANGES', r.text, "Commit them to each agent's own branch, then archive? To throw changes away instead, delete those agents one by one first.",
+      [{ value: 'commit', label: 'COMMIT ALL & ARCHIVE' }]);
+    if (!c) return;
+    r = await wsPost('/workspaces/archive', { ws: w.id, commit: true });
+  }
+  if (!r.ok) return toast(`archive failed: ${r.text}`);
+  WS = null;
+  refreshTabs();
+}
+
+function renderArchived(archived) {
+  $('archivedList').replaceChildren(...archived.map((a) => {
+    const row = document.createElement('div');
+    const label = document.createElement('span');
+    label.append(a.name, Object.assign(document.createElement('small'), { textContent: `${a.project ?? 'no project folder'} · archived ${new Date(a.archivedAt).toLocaleString()}` }));
+    const btn = Object.assign(document.createElement('button'), { textContent: 'RESTORE', onclick: async () => {
+      const r = await wsPost('/workspaces/restore', { id: a.id });
+      if (!r.ok) return toast(`restore failed: ${r.text}`);
+      $('archived').close();
+      switchTo(a.id);
+    } });
+    btn.style.border = '1px solid var(--line)';
+    btn.style.padding = '6px 12px';
+    row.append(label, btn);
+    return row;
+  }));
 }
 
 function switchTo(id) {
@@ -460,11 +519,23 @@ $('direct').onsubmit = (ev) => {
 };
 $('pclose').onclick = () => { $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
-function askDirty(id, text) {
-  $('dirtyText').textContent = text;
-  $('dirty').returnValue = '';
-  $('dirty').onclose = () => { const v = $('dirty').returnValue; if (v) post('/delete', { id, dirty: v }); };
-  $('dirty').showModal();
+// Modal with a list of choices; resolves to the chosen value, or '' on cancel.
+function choose(title, text, question, choices) {
+  $('choiceTitle').textContent = title;
+  $('choiceText').textContent = text;
+  $('choiceText').hidden = !text;
+  $('choiceQuestion').textContent = question;
+  $('choiceButtons').replaceChildren(...[...choices, { value: '', label: 'CANCEL' }].map((c) =>
+    Object.assign(document.createElement('button'), { value: c.value, textContent: c.label, className: c.danger ? 'danger' : '' })));
+  $('choice').returnValue = '';
+  $('choice').showModal();
+  return new Promise((r) => { $('choice').onclose = () => r($('choice').returnValue); });
+}
+
+async function askDirty(id, text) {
+  const v = await choose('UNCOMMITTED CHANGES', text, "Commit them to the agent's branch before deleting, or discard them?",
+    [{ value: 'commit', label: 'COMMIT & DELETE' }, { value: 'discard', label: 'DISCARD & DELETE', danger: true }]);
+  if (v) post('/delete', { id, dirty: v });
 }
 $('pdelete').onclick = () => {
   if (selected && confirm(`Delete ${selected}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id: selected });
