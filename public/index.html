@@ -418,8 +418,8 @@ function select(id) {
   if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
   if (a.agent.cwd) appendLog('meta', `cwd: ${a.agent.cwd}`);
   a.log.forEach((l) => appendLog(l.cls, l.text, l.cost));
+  $('panel').classList.add('open'); // first: a hidden panel has scrollHeight 0
   $('log').scrollTop = $('log').scrollHeight;
-  $('panel').classList.add('open');
   document.body.classList.add('panel-open');
   $('dinput').placeholder = `Message ${id === ARBITER ? 'the arbiter' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
   $('dinput').focus();
