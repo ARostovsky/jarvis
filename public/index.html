@@ -92,14 +92,17 @@
   #archivedList div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #archivedList span { flex: 1; }
   #archivedList small { color: var(--cyan-dim); display: block; }
-  #tabs .tabx { padding: 6px 9px; margin-left: -6px; border-left: 0; color: var(--cyan-dim); }
-  #tabs .tabx:hover { color: var(--red); }
+  #menu { position: fixed; z-index: 10; background: var(--panel); border: 1px solid var(--cyan); min-width: 200px; display: none; box-shadow: 0 0 12px rgba(79, 216, 255, .25); }
+  #menu.open { display: block; }
+  #menu button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); padding: 10px 14px; }
+  #menu button:last-child { border-bottom: 0; }
   #conn { position: fixed; top: 16px; right: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
 </style>
 </head>
 <body>
 <div id="grid"></div>
 <nav id="tabs" aria-label="Workspaces"></nav>
+<div id="menu" role="menu"></div>
 <div id="conn">LINK…</div>
 <div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
 <svg id="view" viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
@@ -245,6 +248,11 @@ function addAgent(agent) {
   const sub = el('text', { class: 'sub', y: 64 }, g);
   const act = el('text', { class: 'act', y: 80 }, g);
   draggable(g, agent.id);
+  g.oncontextmenu = (ev) => menu(ev, [
+    ['Open log', () => select(agent.id)],
+    ['Stop', () => post('/stop', { id: agent.id })],
+    ['Delete agent…', () => deleteAgentUi(agent.id), true],
+  ]);
   g.onkeydown = (e) => { if (e.key === 'Enter') select(agent.id); };
   const p = savedPos()[agent.id];
   agents.set(agent.id, { agent, g, link, sub, act, log: [], p, pinned: !!p });
@@ -404,20 +412,50 @@ async function refreshTabs() {
     b.append(w.name);
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
+    b.title += ' · right-click for actions';
     b.onclick = () => switchTo(w.id);
-    if (w.id !== WS) return [b];
-    b.title += ' · double-click to rename';
     b.ondblclick = () => renameWs(w);
-    return [b, Object.assign(document.createElement('button'), { className: 'tabx', textContent: '×', title: 'Archive workspace', onclick: () => archiveWs(w) })];
-  }).flat(), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }),
+    b.oncontextmenu = (ev) => menu(ev, [
+      ['Rename', () => renameWs(w)],
+      ['Stop all agents', () => stopAllWs(w.id)],
+      ['Archive workspace', () => archiveWs(w), true],
+    ]);
+    return b;
+  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }),
   ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: `ARCHIVE ${archived.length}`, title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
 }
 
 async function renameWs(w) {
   const name = prompt('Rename workspace', w.name)?.trim();
-  if (name && name !== w.name) await post('/workspaces/rename', { name });
+  if (name && name !== w.name) {
+    const r = await wsPost('/workspaces/rename', { ws: w.id, name });
+    if (!r.ok) toast(`rename failed: ${r.text}`);
+  }
   refreshTabs();
 }
+
+async function stopAllWs(id) {
+  const r = await wsPost('/stopall', { ws: id });
+  if (!r.ok) toast(`stop failed: ${r.text}`);
+  refreshTabs();
+}
+
+// Right-click menu: items are [label, action, danger?].
+function menu(ev, items) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const m = $('menu');
+  m.replaceChildren(...items.map(([label, run, danger]) => Object.assign(document.createElement('button'), {
+    textContent: label, className: danger ? 'danger' : '', role: 'menuitem', onclick: () => { closeMenu(); run(); },
+  })));
+  m.classList.add('open');
+  m.style.left = `${Math.min(ev.clientX, innerWidth - m.offsetWidth - 8)}px`;
+  m.style.top = `${Math.min(ev.clientY, innerHeight - m.offsetHeight - 8)}px`;
+  m.querySelector('button').focus();
+}
+const closeMenu = () => $('menu').classList.remove('open');
+addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#menu')) closeMenu(); });
+addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
 
 async function wsPost(path, data) {
   const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
@@ -537,10 +575,15 @@ async function askDirty(id, text) {
     [{ value: 'commit', label: 'COMMIT & DELETE' }, { value: 'discard', label: 'DISCARD & DELETE', danger: true }]);
   if (v) post('/delete', { id, dirty: v });
 }
-$('pdelete').onclick = () => {
-  if (selected && confirm(`Delete ${selected}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id: selected });
-};
+function deleteAgentUi(id) {
+  if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
+}
+$('pdelete').onclick = () => selected && deleteAgentUi(selected);
 $('core').onclick = () => select(ARBITER);
+$('core').oncontextmenu = (ev) => menu(ev, [
+  ['Open log', () => select(ARBITER)],
+  ['Stop all agents', () => stopAllWs(WS)],
+]);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => { if (e.key === 'Escape') $('pclose').onclick(); };
 

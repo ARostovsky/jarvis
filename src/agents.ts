@@ -355,7 +355,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (!a) throw new Error(`no agent ${id}`);
     setStatus(a, 'stopped');
     sessions.get(id)?.abort.abort();
+    // Its permission prompts die with the session.
+    for (const [reqId, p] of pendingAsks) if ((p.event as { agentId: string }).agentId === id) { pendingAsks.delete(reqId); emit('answered', { reqId }); }
   }
+
+  // Stops everything that is working, waiting or holding a session. Each resumes on its next message.
+  const stopAll = () => [...agents.values()].filter((a) => a.status === 'running' || a.status === 'waiting' || sessions.has(a.id)).forEach((a) => stopAgent(a.id));
 
   const boardTools = (owner: string) => [
     tool('board_post', 'Post a note to the shared board for specific agents or "all": decisions, interfaces, findings others need. Recipients get it with their next message.', {
@@ -433,12 +438,19 @@ export function createWorkspace(meta: WorkspaceMeta) {
     }
     closed = true;
     for (const s of sessions.values()) s.abort.abort();
-    for (const a of workers()) {
-      if (a.repo && existsSync(a.cwd)) execFileSync('git', ['-C', a.repo, 'worktree', 'remove', a.cwd], { stdio: 'pipe' });
-      else if (ownPlainDir(a) && existsSync(a.cwd)) {
-        mkdirSync(PARKED, { recursive: true });
-        renameSync(a.cwd, join(PARKED, a.id));
+    try {
+      for (const a of workers()) {
+        if (a.repo && existsSync(a.cwd)) execFileSync('git', ['-C', a.repo, 'worktree', 'remove', a.cwd], { stdio: 'pipe' });
+        else if (ownPlainDir(a) && existsSync(a.cwd)) {
+          mkdirSync(PARKED, { recursive: true });
+          renameSync(a.cwd, join(PARKED, a.id));
+        }
       }
+    } catch (e) {
+      // Half-detached: put back what was already moved so the workspace stays usable, then report.
+      closed = false;
+      reattach();
+      throw new Error(`archive aborted, workspace left as it was: ${(e as Error).message}`);
     }
   }
 
@@ -476,6 +488,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     sendToAgent,
     stopAgent,
     deleteAgent,
+    stopAll,
     postNote,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
   };
