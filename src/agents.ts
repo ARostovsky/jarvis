@@ -464,6 +464,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         renameSync(join(PARKED, a.id), a.cwd);
       }
     }
+    if (existsSync(PARKED) && !readdirSync(PARKED).length) rmSync(PARKED, { recursive: true });
   }
 
   restore();
@@ -549,6 +550,7 @@ export function restoreWorkspace(id: string) {
   const { archivedAt, ...meta } = JSON.parse(readFileSync(join(from, 'meta.json'), 'utf8'));
   mkdirSync(join(DATA, 'workspaces'), { recursive: true });
   renameSync(from, join(DATA, 'workspaces', id));
+  rmSync(join(DATA, 'workspaces', id, 'meta.json'));
   const w = createWorkspace(meta);
   w.reattach();
   workspaces.set(id, w);
