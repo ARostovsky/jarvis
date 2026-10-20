@@ -34,10 +34,22 @@
   @keyframes flow { to { stroke-dashoffset: -20; } }
   .pulse { fill: var(--cyan); filter: url(#glow); }
   .pulse.note { fill: var(--violet); }
-  .node { cursor: pointer; transition: transform .8s cubic-bezier(.2, .8, .2, 1); }
+  .node { cursor: pointer; }
   .node .ring { fill: rgba(4, 30, 48, .9); stroke: var(--c, var(--cyan-dim)); stroke-width: 2; filter: url(#glow); }
   .node .halo { fill: none; stroke: var(--c, var(--cyan-dim)); stroke-width: 1; opacity: .5; stroke-dasharray: 3 9; transform-box: fill-box; transform-origin: center; animation: spin 12s linear infinite; }
-  .node.selected .ring { stroke-width: 3.5; }
+  .node.selected .ring { stroke-width: 3.5; fill: rgba(8, 52, 80, .95); }
+  .node.selected text:not(.sub):not(.act) { fill: #fff; font-weight: 600; }
+  .node:focus, #core:focus { outline: none; } /* the selection reticle marks the node; a browser box would only add noise */
+  .node:focus-visible .ring { stroke: var(--text); } #core:focus-visible .a1 { stroke: var(--text); }
+  /* Selection: a lock-on reticle around the node, its path to the arbiter lit, unrelated nodes dimmed. */
+  #lock { pointer-events: none; transform-box: fill-box; transform-origin: center; animation: lockon .35s cubic-bezier(.2, .8, .2, 1); }
+  #lock .br { fill: none; stroke: var(--cyan); stroke-width: 3; filter: url(#glow); transform-box: fill-box; transform-origin: center; animation: spin 16s linear infinite; }
+  #lock .tk { fill: none; stroke: var(--cyan); stroke-width: 1; opacity: .3; }
+  @keyframes lockon { from { transform: scale(1.6); opacity: 0; } }
+  .link.stopped { stroke: var(--gray); opacity: .5; animation: none; } /* nothing flows to a stopped agent */
+  .link.lit { stroke: var(--cyan); stroke-width: 2; opacity: 1; }
+  .node { transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
+  #nodes.focus .node:not(.selected):not(.kin):not(:hover) { opacity: .45; }
   .node text { fill: var(--text); text-anchor: middle; font-size: 15px; pointer-events: none; }
   .node .sub { fill: var(--c, var(--cyan-dim)); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
   .node .act { fill: #8fb8cc; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
@@ -317,6 +329,7 @@ function setStatus(id, status) {
   a.g.classList.add(status);
   if (a.sub) a.sub.textContent = [status, a.agent.model, a.agent.effort, ctxPct(a.agent) && `${ctxPct(a.agent)}%`].filter(Boolean).join(' · ');
   if (a.link) a.link.style.stroke = status === 'running' ? 'var(--cyan)' : '';
+  a.link?.classList.toggle('stopped', status === 'stopped');
   if (id === selected) syncStop();
 }
 
@@ -413,11 +426,32 @@ function appendLog(cls, text, cost) {
   if (stick) box.scrollTop = box.scrollHeight;
 }
 
+// Reticle and lineage for the selected node. Re-inserting #lock restarts its lock-on animation.
+const lock = el('g', { id: 'lock' });
+el('circle', { class: 'tk' }, lock);
+el('circle', { class: 'br', pathLength: 100, 'stroke-dasharray': '14 11' }, lock);
+function markSelected(id) {
+  document.querySelectorAll('.node.selected, .node.kin, .link.lit').forEach((n) => n.classList.remove('selected', 'kin', 'lit'));
+  lock.remove();
+  $('nodes').classList.toggle('focus', !!id && id !== ARBITER);
+  const a = agents.get(id);
+  if (!a) return;
+  const [r1, r2] = id === ARBITER ? [118, 108] : [64, 56];
+  lock.children[0].setAttribute('r', r1);
+  lock.children[1].setAttribute('r', r2);
+  a.g.prepend(lock);
+  if (id === ARBITER) return;
+  a.g.classList.add('selected');
+  for (let p = a; p && p.agent.id !== ARBITER; p = agents.get(p.agent.parentId ?? ARBITER)) {
+    p.link.classList.add('lit');
+    if (p !== a) p.g.classList.add('kin');
+  }
+}
+
 function select(id) {
   selected = id;
   const a = agents.get(id);
-  document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
-  if (id !== ARBITER) a.g.classList.add('selected');
+  markSelected(id);
   renderTitle();
   $('pdelete').hidden = id === ARBITER;
   syncStop();
@@ -719,7 +753,7 @@ $('direct').onsubmit = (ev) => {
 };
 $('dinput').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('direct').requestSubmit(); } };
 $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; }; // empty: skip, a wrapped placeholder would inflate scrollHeight
-$('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
+$('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; markSelected(null); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
 $('pcompact').onclick = () => selected && post('/compact', { id: selected });
 // Modal with a list of choices; resolves to the chosen value, or '' on cancel.
