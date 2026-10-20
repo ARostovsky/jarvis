@@ -27,7 +27,8 @@ createServer(async (req, res) => {
   } else if (req.method === 'GET' && req.url === '/events') {
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
     const send = (e: object) => res.write(`data: ${JSON.stringify(e)}\n\n`);
-    snapshot().forEach(send);
+    for (const line of snapshot()) res.write(`data: ${line}\n\n`);
+    send({ type: 'ready' }); // end of replay: UI animates only events after this
     bus.on('event', send);
     req.on('close', () => bus.off('event', send));
   } else if (req.method === 'POST' && commands[req.url ?? '']) {

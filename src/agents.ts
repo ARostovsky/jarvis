@@ -1,8 +1,8 @@
-import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 export type Status = 'running' | 'idle' | 'waiting' | 'error' | 'stopped';
@@ -15,17 +15,35 @@ export type Agent = {
   status: Status;
   lastText: string;
   costUsd: number;
+  sessionId?: string;
 };
 
-// Every UI-visible change goes through here: spawned, status, text, tool, routed, ask, result.
+// Every UI-visible change goes through here: spawned, status, text, delta, tool, routed, ask, answered, result, session.
 export const bus = new EventEmitter();
-const emit = (type: string, data: object) => bus.emit('event', { type, ...data });
+
+const ROOT = resolve(import.meta.dirname, '..');
+const WORKTREES = join(ROOT, 'worktrees');
+const STATE = join(ROOT, 'state');
+const LOG = join(STATE, 'events.jsonl');
+// Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
+const TRANSIENT = new Set(['delta', 'ask', 'answered']);
+// shortcut: whole event log is kept in memory and replayed to each UI, rotate it once it grows past a few MB
+const history: string[] = [];
+
+function emit(type: string, data: object) {
+  const event = { type, ...data };
+  if (!TRANSIENT.has(type)) {
+    const line = JSON.stringify(event);
+    history.push(line);
+    appendFileSync(LOG, line + '\n');
+  }
+  bus.emit('event', event);
+}
 
 export const agents = new Map<string, Agent>();
-const sessions = new Map<string, { push: (text: string) => void; q: Query; abort: AbortController }>();
+const sessions = new Map<string, { push: (text: string) => void; abort: AbortController }>();
 const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
 
-const WORKTREES = resolve(import.meta.dirname, '..', 'worktrees');
 export const ARBITER = 'arbiter';
 let seq = 0;
 
@@ -58,16 +76,35 @@ export function answerAsk(reqId: string, allow: boolean) {
   pendingAsks.delete(reqId);
 }
 
-// What a freshly connected UI needs to rebuild the screen.
-export function snapshot() {
-  return [
-    ...[...agents.values()].map((agent) => ({ type: 'spawned', agent })),
-    ...[...pendingAsks.values()].map((p) => p.event),
-  ];
+// What a freshly connected UI needs to rebuild the screen: the persisted log plus live asks.
+export function snapshot(): string[] {
+  return [...history, ...[...pendingAsks.values()].map((p) => JSON.stringify(p.event))];
 }
 
-// Long-lived SDK session fed by an inbox, so the arbiter can keep sending messages to it.
-function startSession(a: Agent, options: Parameters<typeof query>[0]['options']) {
+// Rebuild agents from the event log so a server restart keeps the graph, logs and SDK session ids.
+function restore() {
+  mkdirSync(STATE, { recursive: true });
+  if (!existsSync(LOG)) return;
+  for (const line of readFileSync(LOG, 'utf8').split('\n')) {
+    if (!line) continue;
+    history.push(line);
+    const e = JSON.parse(line);
+    const a = agents.get(e.agentId);
+    if (e.type === 'spawned') agents.set(e.agent.id, { ...e.agent });
+    else if (!a) continue;
+    else if (e.type === 'status') a.status = e.status;
+    else if (e.type === 'text') a.lastText = e.text;
+    else if (e.type === 'result') a.costUsd = e.costUsd;
+    else if (e.type === 'session') a.sessionId = e.sessionId;
+  }
+  // Their processes died with the old server; they resume on the next message.
+  for (const a of agents.values()) if (a.status !== 'stopped') setStatus(a, 'idle');
+}
+
+// Long-lived SDK session fed by an inbox. Started lazily, resuming the saved session id if there is one.
+function session(a: Agent) {
+  const existing = sessions.get(a.id);
+  if (existing) return existing;
   const box = inbox();
   const abort = new AbortController();
   const q = query({
@@ -76,7 +113,9 @@ function startSession(a: Agent, options: Parameters<typeof query>[0]['options'])
       cwd: a.cwd,
       settingSources: ['user'], // picks up the auth proxy (ANTHROPIC_BASE_URL + apiKeyHelper)
       permissionMode: 'acceptEdits',
+      includePartialMessages: true,
       abortController: abort,
+      resume: a.sessionId,
       canUseTool: (toolName, input) =>
         new Promise((done) => {
           const reqId = `${a.id}#${++seq}`;
@@ -92,24 +131,33 @@ function startSession(a: Agent, options: Parameters<typeof query>[0]['options'])
           });
           bus.emit('event', event);
         }),
-      ...options,
+      ...(a.id === ARBITER ? arbiterOptions : {}),
     },
   });
-  sessions.set(a.id, {
-    push: (text) => {
+  const s = {
+    push: (text: string) => {
       setStatus(a, 'running');
       box.push(text);
     },
-    q,
     abort,
-  });
+  };
+  sessions.set(a.id, s);
   pump(a, q);
+  return s;
 }
 
 async function pump(a: Agent, q: Query) {
   try {
     for await (const m of q) {
-      if (m.type === 'assistant') {
+      if (m.type === 'stream_event') {
+        const ev = m.event;
+        if (m.parent_tool_use_id === null && ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+          emit('delta', { agentId: a.id, text: ev.delta.text });
+        }
+      } else if (m.type === 'system' && m.subtype === 'init' && m.session_id !== a.sessionId) {
+        a.sessionId = m.session_id;
+        emit('session', { agentId: a.id, sessionId: m.session_id });
+      } else if (m.type === 'assistant') {
         for (const block of m.message.content) {
           if (block.type === 'text') {
             a.lastText = block.text;
@@ -130,19 +178,21 @@ async function pump(a: Agent, q: Query) {
   } catch (e) {
     setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
     emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
+  } finally {
+    sessions.delete(a.id);
   }
 }
 
 function report(from: string, text: string) {
   emit('routed', { from, to: ARBITER, text });
-  sessions.get(ARBITER)?.push(text);
+  session(agents.get(ARBITER)!).push(text);
 }
 
 function makeWorkdir(id: string, repo?: string): string {
   mkdirSync(WORKTREES, { recursive: true });
   const dir = join(WORKTREES, id);
   if (repo && existsSync(join(repo, '.git'))) {
-    execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir], { stdio: 'ignore' });
+    execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir], { stdio: 'pipe' });
     return dir;
   }
   // shortcut: non-git repo is used in place (no isolation), add copy/sandbox if this bites
@@ -152,29 +202,28 @@ function makeWorkdir(id: string, repo?: string): string {
 }
 
 export function spawnAgent(name: string, task: string, repo?: string): Agent {
-  const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${++seq}`;
+  // Time suffix keeps ids, worktree dirs and jarvis/<id> branches unique across server restarts.
+  const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
   const a: Agent = { id, name, task, cwd: makeWorkdir(id, repo), status: 'idle', lastText: '', costUsd: 0 };
   agents.set(id, a);
   emit('spawned', { agent: a });
-  startSession(a, {});
   emit('routed', { from: ARBITER, to: id, text: task });
-  sessions.get(id)!.push(task);
+  session(a).push(task);
   return a;
 }
 
 export function sendToAgent(id: string, text: string, from = ARBITER) {
-  const s = sessions.get(id);
-  if (!s) throw new Error(`no agent ${id}`);
+  const a = agents.get(id);
+  if (!a) throw new Error(`no agent ${id}`);
   emit('routed', { from, to: id, text });
-  s.push(text);
+  session(a).push(text);
 }
 
 export function stopAgent(id: string) {
-  const s = sessions.get(id);
-  if (!s) throw new Error(`no agent ${id}`);
-  setStatus(agents.get(id)!, 'stopped');
-  s.abort.abort();
-  sessions.delete(id);
+  const a = agents.get(id);
+  if (!a) throw new Error(`no agent ${id}`);
+  setStatus(a, 'stopped');
+  sessions.get(id)?.abort.abort();
 }
 
 const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
@@ -190,7 +239,7 @@ const arbiterTools = createSdkMcpServer({
       const a = spawnAgent(name, task, repo);
       return ok({ id: a.id, cwd: a.cwd });
     }),
-    tool('send_to_agent', 'Send a follow-up message or context to an existing agent.', {
+    tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
       id: z.string(),
       message: z.string(),
     }, async ({ id, message }) => (sendToAgent(id, message), ok('sent'))),
@@ -203,16 +252,18 @@ const ARBITER_PROMPT = `You are the arbiter. You do not write code yourself: you
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.`;
 
-export function startArbiter(cwd = process.cwd()): Agent {
+const arbiterOptions: Options = {
+  mcpServers: { jarvis: arbiterTools },
+  allowedTools: ['mcp__jarvis__spawn_agent', 'mcp__jarvis__send_to_agent', 'mcp__jarvis__list_agents', 'mcp__jarvis__stop_agent'],
+  systemPrompt: { type: 'preset', preset: 'claude_code', append: ARBITER_PROMPT },
+};
+
+export function startArbiter(cwd = process.cwd()) {
+  restore();
+  if (agents.has(ARBITER)) return;
   const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd, status: 'idle', lastText: '', costUsd: 0 };
   agents.set(a.id, a);
   emit('spawned', { agent: a });
-  startSession(a, {
-    mcpServers: { jarvis: arbiterTools },
-    allowedTools: ['mcp__jarvis__spawn_agent', 'mcp__jarvis__send_to_agent', 'mcp__jarvis__list_agents', 'mcp__jarvis__stop_agent'],
-    systemPrompt: { type: 'preset', preset: 'claude_code', append: ARBITER_PROMPT },
-  });
-  return a;
 }
 
 export const tellArbiter = (text: string) => sendToAgent(ARBITER, text, 'user');

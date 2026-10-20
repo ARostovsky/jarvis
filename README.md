@@ -15,12 +15,13 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Auth and prox
 
 ## How it works
 
-- `src/agents.ts` keeps one long-lived SDK session per agent and feeds it messages through an inbox.
+- `src/agents.ts` keeps one long-lived SDK session per agent and feeds it messages through an inbox. A session starts lazily on the first message.
   - The arbiter gets the MCP tools `spawn_agent`, `send_to_agent`, `list_agents` and `stop_agent`.
   - When a worker finishes a turn, its result is sent to the arbiter automatically.
 - Workers run in `worktrees/<id>`. If `repo` is a git repo, this is a git worktree on branch `jarvis/<id>`.
 - Permissions: workers use `acceptEdits`. Every other prompt becomes an `ask` event, which you answer with `/y <id>` or `/n <id>` in the CLI.
-- Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `tool`, `routed`, `ask`, `answered`, `result`.
+- Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `delta` (streamed text), `tool`, `routed`, `ask`, `answered`, `result`, `session`.
+- Persistence: every event except `delta`, `ask` and `answered` is appended to `state/events.jsonl`. When the server restarts, it replays this log to rebuild the agents and their logs. An agent's next message resumes its SDK session (`resume: sessionId`), so it keeps its conversation. Asks that were pending when the server stopped are dropped. To start fresh, delete `state/`.
 
 ## Web UI
 
@@ -32,4 +33,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Auth and prox
 On screen, the arbiter is the core in the center, with agents on a ring around it.
 - Node color shows status: cyan = running, dim = idle, amber = waiting for your approval, red = error, gray = stopped.
 - A pulse travels along a link whenever a message passes between two sessions.
-- Click a node to see its log and message it directly. Ask cards appear bottom-left.
+- Under each node is either the agent's current tool or its streaming text.
+- Click a node to open its log, where you can watch replies as they stream and message the agent directly. While the panel is open, the graph is re-centered in the space to the left of it.
+- Drag the background to pan and use the wheel to zoom. Drag a node to move it. Double-click the background to reset the view.
+- Ask cards appear bottom-left.
