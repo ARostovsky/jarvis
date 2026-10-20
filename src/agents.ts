@@ -1,4 +1,4 @@
-import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options } from '@anthropic-ai/claude-agent-sdk';
+import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options, type EffortLevel } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
@@ -17,7 +17,8 @@ export type Agent = {
   lastText: string;
   costUsd: number;
   parentId?: string; // undefined only for the arbiter
-  model?: string; // alias (haiku | sonnet | opus); unset = the arbiter's model from settings
+  model?: string; // alias (haiku | sonnet | opus); unset = model from settings
+  effort?: EffortLevel; // unset = the default for its role
   repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
 };
@@ -36,8 +37,11 @@ const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 export const ARBITER = 'arbiter';
 const REPORT_CAP = 2000;
 // auto: a classifier approves safe calls and only escalates to the UI what it can't decide.
-const MODELS = ['haiku', 'sonnet', 'opus'] as const;
+export const MODELS = ['haiku', 'sonnet', 'opus'] as const;
+export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const DEFAULT_AGENT_MODEL = process.env.JARVIS_AGENT_MODEL ?? 'sonnet';
+const ARBITER_MODEL = process.env.JARVIS_ARBITER_MODEL; // unset: model from settings
+const DEFAULT_EFFORT = { arbiter: (process.env.JARVIS_ARBITER_EFFORT ?? 'medium') as EffortLevel, agent: (process.env.JARVIS_AGENT_EFFORT ?? 'medium') as EffortLevel };
 const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
@@ -141,7 +145,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   const agents = new Map<string, Agent>();
-  const sessions = new Map<string, { push: (text: string) => void; abort: AbortController }>();
+  const sessions = new Map<string, { push: (text: string) => void; abort: AbortController; q: Query }>();
   const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
 
   // Shared board: notes addressed to specific agents (or "all"), delivered with their next message.
@@ -169,7 +173,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
   // For the tab bar: how much is going on in this workspace.
   const summary = () => {
     const all = [...agents.values()];
-    return { ...meta, running: all.filter((a) => a.status === 'running').length, waiting: pendingAsks.size };
+    const costUsd = all.reduce((sum, a) => sum + a.costUsd, 0);
+    return { ...meta, running: all.filter((a) => a.status === 'running').length, waiting: pendingAsks.size, costUsd };
   };
 
   // Rebuild agents from the event log so a server restart keeps the graph, logs and SDK session ids.
@@ -190,6 +195,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       else if (e.type === 'text') a.lastText = e.text;
       else if (e.type === 'result') a.costUsd = e.costUsd;
       else if (e.type === 'session') a.sessionId = e.sessionId;
+      else if (e.type === 'config') Object.assign(a, { model: e.model, effort: e.effort });
     }
     // Their processes died with the old server; they resume on the next message.
     for (const a of agents.values()) if (a.status !== 'stopped') setStatus(a, 'idle');
@@ -207,7 +213,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
         cwd: a.cwd,
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
-        model: a.model, // undefined: settings model (the arbiter)
+        model: a.model ?? (a.id === ARBITER ? ARBITER_MODEL : undefined),
+        effort: a.effort ?? (a.id === ARBITER ? DEFAULT_EFFORT.arbiter : DEFAULT_EFFORT.agent),
         plugins: PLUGINS,
         permissionMode: PERMISSION_MODE,
         includePartialMessages: true,
@@ -237,6 +244,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         box.push(text);
       },
       abort,
+      q,
     };
     sessions.set(a.id, s);
     pump(a, q);
@@ -244,6 +252,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   async function pump(a: Agent, q: Query) {
+    // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
+    const base = a.costUsd;
     try {
       for await (const m of q) {
         if (m.type === 'stream_event') {
@@ -264,7 +274,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
             }
           }
         } else if (m.type === 'result') {
-          a.costUsd = m.total_cost_usd;
+          a.costUsd = base + m.total_cost_usd;
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
           setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
@@ -324,7 +334,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return note;
   }
 
-  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL): Agent {
+  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL, effort?: EffortLevel): Agent {
     const parent = agents.get(parentId);
     if (!parent) throw new Error(`no agent ${parentId}`);
     if (depth(parent) >= MAX_DEPTH) throw new Error(`max depth ${MAX_DEPTH} reached`);
@@ -332,7 +342,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
     // Arbiter's agents default to the workspace project; sub-agents to their parent's checkout so they see its work.
     const wd = makeWorkdir(id, repo ?? (parentId === ARBITER ? meta.project : parent.repo ?? parent.cwd));
-    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model };
+    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort };
     agents.set(id, a);
     emit('spawned', { agent: a });
     emit('routed', { from: parentId, to: id, text: task });
@@ -369,6 +379,19 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (!a) throw new Error(`no agent ${id}`);
     emit('routed', { from, to: id, text });
     deliver(a, text);
+  }
+
+  // Model and effort can change mid-conversation; a live session switches right away.
+  function configure(id: string, cfg: { model?: string; effort?: EffortLevel }) {
+    const a = agents.get(id);
+    if (!a) throw new Error(`no agent ${id}`);
+    if (cfg.model && !(MODELS as readonly string[]).includes(cfg.model)) throw new Error(`unknown model ${cfg.model}`);
+    if (cfg.effort && !EFFORTS.includes(cfg.effort)) throw new Error(`unknown effort ${cfg.effort}`);
+    Object.assign(a, { model: cfg.model ?? a.model, effort: cfg.effort ?? a.effort });
+    emit('config', { agentId: id, model: a.model, effort: a.effort });
+    const q = sessions.get(id)?.q;
+    if (cfg.model) void q?.setModel(cfg.model);
+    if (cfg.effort) void q?.applyFlagSettings({ effortLevel: cfg.effort });
   }
 
   function stopAgent(id: string) {
@@ -409,9 +432,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
           repo: z.string().optional().describe('absolute path to the repository to work on'),
           model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: architecture, hard debugging, design, ambiguous problems.`),
-        }, async ({ name, task, repo, model }) => {
-          const a = spawnAgent(name, task, repo, owner, model);
-          return ok({ id: a.id, cwd: a.cwd, model: a.model });
+          effort: z.enum(EFFORTS).optional().describe(`reasoning effort, default ${DEFAULT_EFFORT.agent}. low for mechanical work, high or xhigh only for genuinely hard problems.`),
+        }, async ({ name, task, repo, model, effort }) => {
+          const a = spawnAgent(name, task, repo, owner, model, effort);
+          return ok({ id: a.id, cwd: a.cwd, model: a.model, effort: a.effort ?? DEFAULT_EFFORT.agent });
         }),
         tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
           id: z.string(),
@@ -512,6 +536,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     stopAgent,
     deleteAgent,
     stopAll,
+    configure,
     postNote,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
   };
@@ -525,11 +550,12 @@ function saveRegistry() {
   writeFileSync(REGISTRY, JSON.stringify([...workspaces.values()].map((w) => w.meta), null, 2));
 }
 
-export function addWorkspace(name: string, project?: string): Workspace {
+export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ws';
   const meta: WorkspaceMeta = { id: `${slug}-${Date.now().toString(36).slice(-4)}`, name, ...(project ? { project: resolve(project) } : {}) };
   const w = createWorkspace(meta);
+  if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
   saveRegistry();
   return w;

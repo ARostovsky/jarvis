@@ -63,7 +63,8 @@
   #pgrip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 1; }
   #pgrip:hover, #pgrip.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
   #panel header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
-  #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; flex: 1; }
+  #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #pmeta { font-size: 12px; letter-spacing: .1em; color: var(--cyan-dim); }
   #log { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; }
   #log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
   #log .note { color: var(--violet); }
@@ -97,7 +98,8 @@
   #tabs .dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
   #tabs .dot.wait { background: var(--amber); animation: blink .8s steps(2) infinite; }
   #newws label { display: block; margin: 10px 0 4px; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
-  #newws input { width: 100%; border: 1px solid var(--line); padding: 8px 10px; }
+  #newws input, #newws select { width: 100%; border: 1px solid var(--line); padding: 8px 10px; background: transparent; color: var(--text); font: 16px Rajdhani, sans-serif; }
+  #newws option { background: #06141f; }
   #newws { border-color: var(--cyan); min-width: 420px; }
   #archived { border-color: var(--cyan); min-width: 480px; }
   #archivedList div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
@@ -142,6 +144,10 @@
   <form method="dialog" id="newwsForm">
     <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
     <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off">
+    <div style="display:flex;gap:12px">
+      <div style="flex:1"><label for="wsModel">ARBITER MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
+      <div style="flex:1"><label for="wsEffort">ARBITER EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
+    </div>
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
   </form>
 </dialog>
@@ -160,7 +166,7 @@
 
 <aside id="panel">
   <div id="pgrip" title="Drag to resize · double-click to reset"></div>
-  <header><h2 id="ptitle"></h2><button id="pview" title="What to show in the log">VIEW</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="log"></div>
   <form id="direct"><input id="dinput" placeholder="Message…" autocomplete="off"><button>SEND</button></form>
@@ -268,6 +274,8 @@ function addAgent(agent) {
   draggable(g, agent.id);
   g.oncontextmenu = (ev) => menu(ev, [
     ['Open log', () => select(agent.id)],
+    ['Model…', () => pickModel(agent.id)],
+    ['Effort…', () => pickEffort(agent.id)],
     ...(stoppable(agent.id) ? [['Stop', () => post('/stop', { id: agent.id })]] : []),
     ['Delete agent…', () => deleteAgentUi(agent.id), true],
   ]);
@@ -295,7 +303,7 @@ function setStatus(id, status) {
   a.agent.status = status;
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
   a.g.classList.add(status);
-  if (a.sub) a.sub.textContent = a.agent.model ? `${status} · ${a.agent.model}` : status;
+  if (a.sub) a.sub.textContent = [status, a.agent.model, a.agent.effort].filter(Boolean).join(' · ');
   if (a.link) a.link.style.stroke = status === 'running' ? 'var(--cyan)' : '';
   if (id === selected) syncStop();
 }
@@ -324,6 +332,18 @@ function log(id, cls, text, cost) {
   a.log.push({ cls, text, cost });
   if (selected === id) appendLog(cls, text, cost);
 }
+// Cost of an agent plus everything it spawned, recursively.
+const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + [...agents.values()].filter((c) => (c.agent.parentId ?? (c.agent.id === ARBITER ? null : ARBITER)) === id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
+function renderTitle() {
+  const a = agents.get(selected);
+  if (!a) return;
+  const name = selected === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${selected}`;
+  const cfg = [a.agent.model ?? (selected === ARBITER ? 'settings model' : ''), a.agent.effort ?? 'medium'].filter(Boolean).join(' · ');
+  const own = a.agent.costUsd ?? 0, total = subtreeCost(selected);
+  $('ptitle').textContent = name;
+  $('ptitle').title = `${cfg}\n$${own.toFixed(3)} own${total > own ? `, $${total.toFixed(3)} with sub-agents` : ''}`;
+  $('pmeta').textContent = `${cfg} · $${own.toFixed(2)}${total > own + 0.0005 ? ` (Σ $${total.toFixed(2)})` : ''}`;
+}
 const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 function appendLog(cls, text, cost) {
   const d = document.createElement('div');
@@ -341,7 +361,7 @@ function select(id) {
   const a = agents.get(id);
   document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected'));
   if (id !== ARBITER) a.g.classList.add('selected');
-  $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}${a.agent.model ? ` · ${a.agent.model}` : ''}`;
+  renderTitle();
   $('pdelete').hidden = id === ARBITER;
   syncStop();
   applyView();
@@ -424,7 +444,19 @@ const handlers = {
     log(e.from, 'note', `✎ board #${e.n} → ${e.to.join(', ')}: ${e.text}`);
     to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${e.from}: ${e.text}`));
   },
-  result: (e) => log(e.agentId, 'result', '■ done', ` · $${e.costUsd.toFixed(3)}`),
+  result: (e) => {
+    const a = agents.get(e.agentId);
+    if (a) a.agent.costUsd = e.costUsd;
+    log(e.agentId, 'result', '■ done', ` · $${e.costUsd.toFixed(3)}`);
+    renderTitle();
+  },
+  config: (e) => {
+    const a = agents.get(e.agentId);
+    if (!a) return;
+    Object.assign(a.agent, { model: e.model, effort: e.effort });
+    setStatus(e.agentId, a.agent.status);
+    renderTitle();
+  },
   ask: showAsk,
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };
@@ -442,7 +474,7 @@ async function refreshTabs() {
   $('tabs').replaceChildren(...list.map((w) => {
     const b = document.createElement('button');
     b.className = w.id === WS ? 'active' : '';
-    b.title = w.project ?? 'no project folder';
+    b.title = `${w.project ?? 'no project folder'} · spent $${(w.costUsd ?? 0).toFixed(2)}`;
     b.append(w.name);
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
@@ -542,7 +574,7 @@ function switchTo(id) {
 
 $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
-  const r = await fetch('/workspaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('wsName').value.trim(), project: $('wsProject').value.trim() }) });
+  const r = await fetch('/workspaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('wsName').value.trim(), project: $('wsProject').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value }) });
   if (!r.ok) return toast(`create failed: ${await r.text()}`);
   $('wsName').value = $('wsProject').value = '';
   switchTo((await r.json()).id);
@@ -603,6 +635,19 @@ async function askDirty(id, text) {
     [{ value: 'commit', label: 'COMMIT & DELETE' }, { value: 'discard', label: 'DISCARD & DELETE', danger: true }]);
   if (v) post('/delete', { id, dirty: v });
 }
+async function pickModel(id) {
+  const a = agents.get(id)?.agent;
+  const v = await choose('MODEL', '', `Model for ${id === ARBITER ? 'the arbiter' : a?.name}. A running session switches right away.`,
+    ['haiku', 'sonnet', 'opus'].map((m) => ({ value: m, label: m === a?.model ? `${m.toUpperCase()} ✓` : m.toUpperCase() })));
+  if (v) post('/config', { id, model: v });
+}
+async function pickEffort(id) {
+  const a = agents.get(id)?.agent;
+  const cur = a?.effort ?? 'medium';
+  const v = await choose('EFFORT', '', `Reasoning effort for ${id === ARBITER ? 'the arbiter' : a?.name}. Higher is slower and pricier.`,
+    ['low', 'medium', 'high', 'xhigh', 'max'].map((e) => ({ value: e, label: e === cur ? `${e.toUpperCase()} ✓` : e.toUpperCase() })));
+  if (v) post('/config', { id, effort: v });
+}
 function deleteAgentUi(id) {
   if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
 }
@@ -610,6 +655,8 @@ $('pdelete').onclick = () => selected && deleteAgentUi(selected);
 $('core').onclick = () => select(ARBITER);
 $('core').oncontextmenu = (ev) => menu(ev, [
   ['Open log', () => select(ARBITER)],
+  ['Model…', () => pickModel(ARBITER)],
+  ['Effort…', () => pickEffort(ARBITER)],
   ['Stop all agents', () => stopAllWs(WS)],
 ]);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };

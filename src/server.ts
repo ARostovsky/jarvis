@@ -22,7 +22,7 @@ function ws(id: unknown): Workspace {
 
 // Each returns a JSON-able value or nothing (204).
 const commands: Record<string, (b: any) => unknown> = {
-  '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined).meta,
+  '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }).meta,
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
@@ -31,6 +31,7 @@ const commands: Record<string, (b: any) => unknown> = {
   '/send': (b) => ws(b.ws).sendToAgent(String(b.id), String(b.text), 'user'),
   '/stop': (b) => ws(b.ws).stopAgent(String(b.id)),
   '/stopall': (b) => ws(b.ws).stopAll(),
+  '/config': (b) => ws(b.ws).configure(String(b.id), { model: b.model ? String(b.model) : undefined, effort: b.effort || undefined }),
   '/delete': (b) => ws(b.ws).deleteAgent(String(b.id), b.dirty === 'commit' || b.dirty === 'discard' ? b.dirty : undefined),
   '/board': (b) => void ws(b.ws).postNote('user', Array.isArray(b.to) ? b.to.map(String) : ['all'], String(b.text)),
 };
