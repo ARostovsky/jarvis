@@ -68,7 +68,7 @@
   #log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
   #log .note { color: var(--violet); }
   #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
-  #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-cost .cost { display: none; }
+  #log.hide-user .user, #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-cost .cost { display: none; }
   #viewMenu { position: absolute; top: 52px; right: 12px; z-index: 3; background: var(--panel); border: 1px solid var(--cyan); padding: 8px 12px; display: none; font-size: 14px; }
   #viewMenu.open { display: block; }
   #viewMenu label { display: flex; gap: 8px; align-items: center; padding: 5px 0; cursor: pointer; white-space: nowrap; }
@@ -344,6 +344,8 @@ function select(id) {
   $('ptitle').textContent = id === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${id}`;
   $('pdelete').hidden = id === ARBITER;
   syncStop();
+  applyView();
+  $('viewMenu').classList.remove('open');
   $('log').replaceChildren();
   if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
   if (a.agent.cwd) appendLog('meta', `cwd: ${a.agent.cwd}`);
@@ -411,7 +413,9 @@ const handlers = {
   },
   routed: (e) => {
     if (!replaying) pulse(e.from, e.to);
-    log(e.to, e.from === 'user' ? 'user' : 'report', `⇐ ${e.from}: ${e.text}`);
+    // Messages from the user or from the agent's own parent are its inputs; from anyone else, reports.
+    const input = e.from === 'user' || e.from === parentOf(e.to);
+    log(e.to, input ? 'user' : 'report', `⇐ ${e.from}: ${e.text}`);
     if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${e.to}: ${short(e.text, 300)}`);
   },
   board: (e) => {
@@ -714,33 +718,52 @@ $('pgrip').addEventListener('pointerdown', (ev) => {
 });
 $('pgrip').ondblclick = () => { setPanelW(440); try { localStorage.removeItem('jarvis.panelW'); } catch {} };
 
-// Log filters: which kinds of lines the panel shows. Your messages and agents' own replies always show.
+// Log filters, per agent. An agent without its own setting inherits from its parent, up to the arbiter.
 const VIEW = [
-  ['report', 'Reports from agents', false],
+  ['user', 'Inputs (your messages, tasks from the parent)', true],
+  ['report', 'Reports from sub-agents', false],
   ['outgoing', 'Messages sent to agents', true],
   ['tool', 'Tool calls', false],
   ['note', 'Board notes', true],
   ['cost', 'Cost', true],
 ];
-const viewState = (() => { try { return JSON.parse(localStorage.getItem('jarvis.view')) ?? {}; } catch { return {}; } })();
-const shown = (k, def) => viewState[k] ?? def;
-function applyView() {
-  for (const [k, , def] of VIEW) $('log').classList.toggle(`hide-${k}`, !shown(k, def));
+const viewKey = () => `jarvis.view.${WS}`;
+const viewAll = () => { try { return JSON.parse(localStorage.getItem(viewKey())) ?? {}; } catch { return {}; } };
+const saveView = (v) => { try { localStorage.setItem(viewKey(), JSON.stringify(v)); } catch {} };
+const parentOf = (id) => (id === ARBITER ? null : agents.get(id)?.agent.parentId ?? ARBITER);
+function shown(id, k, all = viewAll()) {
+  for (let cur = id; cur; cur = parentOf(cur)) if (all[cur]?.[k] !== undefined) return all[cur][k];
+  return VIEW.find((v) => v[0] === k)[2];
 }
-$('viewMenu').replaceChildren(...VIEW.map(([k, label, def]) => {
-  const l = document.createElement('label');
-  const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: shown(k, def) });
-  c.onchange = () => {
-    viewState[k] = c.checked;
-    try { localStorage.setItem('jarvis.view', JSON.stringify(viewState)); } catch {}
-    applyView();
-  };
-  l.append(c, label);
-  return l;
-}));
-$('pview').onclick = () => $('viewMenu').classList.toggle('open');
+function applyView() {
+  if (!selected) return;
+  const all = viewAll();
+  for (const [k] of VIEW) $('log').classList.toggle(`hide-${k}`, !shown(selected, k, all));
+}
+function renderViewMenu() {
+  const id = selected, all = viewAll(), own = all[id] ?? {};
+  const rows = VIEW.map(([k, label]) => {
+    const l = document.createElement('label');
+    const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: shown(id, k, all) });
+    c.onchange = () => {
+      const v = viewAll();
+      v[id] = { ...v[id], [k]: c.checked };
+      saveView(v);
+      applyView();
+      renderViewMenu();
+    };
+    l.append(c, label);
+    if (own[k] === undefined && id !== ARBITER) l.append(Object.assign(document.createElement('small'), { textContent: 'inherited', style: 'opacity:.5' }));
+    return l;
+  });
+  const head = Object.assign(document.createElement('div'), { textContent: id === ARBITER ? 'Arbiter (agents inherit this)' : `${agents.get(id)?.agent.name ?? id}`, style: 'font-size:12px;letter-spacing:.15em;color:var(--cyan-dim);padding-bottom:4px' });
+  const reset = Object.keys(own).length && id !== ARBITER
+    ? [Object.assign(document.createElement('button'), { textContent: 'RESET TO INHERITED', style: 'border:1px solid var(--line);padding:4px 10px;margin-top:6px', onclick: () => { const v = viewAll(); delete v[id]; saveView(v); applyView(); renderViewMenu(); } })]
+    : [];
+  $('viewMenu').replaceChildren(head, ...rows, ...reset);
+}
+$('pview').onclick = () => { renderViewMenu(); $('viewMenu').classList.toggle('open'); };
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pview')) $('viewMenu').classList.remove('open'); });
-applyView();
 
 refreshTabs();
 setInterval(refreshTabs, 2000);
