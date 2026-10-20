@@ -24,9 +24,11 @@ export type Agent = {
 // Every UI-visible change goes through here: spawned, removed, status, text, delta, tool, routed, board, board_seen, ask, answered, result, session.
 export const bus = new EventEmitter();
 
-const ROOT = resolve(import.meta.dirname, '..');
-const WORKTREES = join(ROOT, 'worktrees');
-const STATE = join(ROOT, 'state');
+// All runtime data lives outside the repo, in the XDG data dir.
+const DATA = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis');
+const WORKTREES = join(DATA, 'worktrees');
+const STATE = join(DATA, 'state');
+const ARBITER_HOME = join(DATA, 'arbiter');
 const LOG = join(STATE, 'events.jsonl');
 // Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
@@ -389,15 +391,14 @@ function agentOptions(a: Agent): Options {
   };
 }
 
-// The arbiter only reads, so its folder is just where it looks around; agents get their own repos.
-export function startArbiter(dir?: string) {
+// The SDK needs some cwd; the arbiter doesn't work on code, so it gets its own empty home.
+export function startArbiter() {
   restore();
-  const cwd = resolve(dir ?? process.env.JARVIS_CWD ?? homedir());
-  if (!existsSync(cwd)) throw new Error(`arbiter folder does not exist: ${cwd}`);
+  mkdirSync(ARBITER_HOME, { recursive: true });
   const old = agents.get(ARBITER);
-  if (old && old.cwd === cwd) return;
-  // SDK sessions are stored per folder, so a new folder means a fresh arbiter conversation.
-  const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd, status: 'idle', lastText: '', costUsd: old?.costUsd ?? 0 };
+  if (old && old.cwd === ARBITER_HOME) return;
+  // SDK sessions are stored per folder, so a moved arbiter starts a fresh conversation.
+  const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd: ARBITER_HOME, status: 'idle', lastText: '', costUsd: old?.costUsd ?? 0 };
   agents.set(a.id, a);
   emit('spawned', { agent: a });
 }

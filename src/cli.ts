@@ -19,7 +19,7 @@ bus.on('event', (e) => {
   }
 });
 
-startArbiter(process.argv[2]);
+startArbiter();
 const rl = createInterface({ input: process.stdin });
 rl.on('line', (line) => {
   const m = line.match(/^\/([yn]) (\S+)/);
