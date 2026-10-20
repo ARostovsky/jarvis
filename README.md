@@ -14,7 +14,7 @@ jarvis stop | restart | status | logs
 
 The server logs to `~/.local/share/jarvis/server.log`. `npm start` runs it in the foreground instead, and `npm run check` runs the typecheck.
 
-Node 24+ runs the `.ts` files directly, so there is no build step. Agents take only `apiKeyHelper`, `env` and `model` from `~/.claude/settings.json`, which is enough for an auth proxy. They also load the repo's own settings and CLAUDE.md (`settingSources: ['project', 'local']`). Your user plugins and hooks are deliberately not loaded: with them, every turn costs about 5x more tokens.
+Node 24+ runs the `.ts` files directly, so there is no build step. Agents take only `apiKeyHelper`, `env` and `model` from `~/.claude/settings.json`, which is enough for an auth proxy. They also load the repo's own settings and CLAUDE.md (`settingSources: ['project', 'local']`). Of your user plugins, only the ones listed in `JARVIS_PLUGINS` are loaded (comma-separated ids as in `enabledPlugins`; default `caveman@caveman,ponytail@ponytail`; set it empty for none). Loading all of them makes every turn cost about 5x more tokens.
 
 ## How it works
 
