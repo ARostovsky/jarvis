@@ -6,9 +6,13 @@ One arbiter agent that spawns, steers and watches other Claude Code agent sessio
 
 ```bash
 npm install
-npm start        # web UI at http://127.0.0.1:7777
-npm run check    # typecheck
+ln -s "$PWD/bin/jarvis.mjs" ~/.local/bin/jarvis   # once
+
+jarvis            # start the server in the background (if not running) and open the UI
+jarvis stop | restart | status | logs
 ```
+
+The server logs to `~/.local/share/jarvis/server.log`. `npm start` runs it in the foreground instead, and `npm run check` runs the typecheck.
 
 Node 24+ runs the `.ts` files directly, so there is no build step. Agents take only `apiKeyHelper`, `env` and `model` from `~/.claude/settings.json`, which is enough for an auth proxy. They also load the repo's own settings and CLAUDE.md (`settingSources: ['project', 'local']`). Your user plugins and hooks are deliberately not loaded: with them, every turn costs about 5x more tokens.
 
