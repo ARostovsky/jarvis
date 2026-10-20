@@ -78,13 +78,22 @@
   dialog button { border: 1px solid var(--line); padding: 8px 14px; margin-right: 6px; }
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; }
   #toast.show { display: block; }
-  #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
-  @media (max-width: 700px) { #hint { display: none; } }
-  #conn { position: fixed; top: 16px; left: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
+  #hint { position: fixed; top: 36px; right: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
+  #tabs { position: fixed; top: 12px; left: 16px; right: 260px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
+  #tabs button { border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); }
+  #tabs button.active { color: var(--text); border-color: var(--cyan); box-shadow: 0 0 8px rgba(79, 216, 255, .35); }
+  #tabs .dot { width: 7px; height: 7px; border-radius: 50%; }
+  #tabs .dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
+  #tabs .dot.wait { background: var(--amber); animation: blink .8s steps(2) infinite; }
+  #newws label { display: block; margin: 10px 0 4px; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
+  #newws input { width: 100%; border: 1px solid var(--line); padding: 8px 10px; }
+  #newws { border-color: var(--cyan); min-width: 420px; }
+  #conn { position: fixed; top: 16px; right: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
 </style>
 </head>
 <body>
 <div id="grid"></div>
+<nav id="tabs" aria-label="Workspaces"></nav>
 <div id="conn">LINK…</div>
 <div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
 <svg id="view" viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
@@ -108,6 +117,14 @@
 
 <div id="asks"></div>
 <div id="toast" role="alert"></div>
+<dialog id="newws">
+  <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
+  <form method="dialog" id="newwsForm">
+    <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
+    <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off">
+    <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
+  </form>
+</dialog>
 <dialog id="dirty">
   <h3>UNCOMMITTED CHANGES</h3>
   <pre id="dirtyText"></pre>
@@ -200,10 +217,10 @@ function place(a) {
 }
 
 // Positions of dragged nodes survive page reloads.
-const POS_KEY = 'jarvis.positions';
-const savedPos = () => { try { return JSON.parse(localStorage.getItem(POS_KEY)) ?? {}; } catch { return {}; } };
+const posKey = () => `jarvis.positions.${WS}`;
+const savedPos = () => { try { return JSON.parse(localStorage.getItem(posKey())) ?? {}; } catch { return {}; } };
 function savePos(id, p) {
-  try { localStorage.setItem(POS_KEY, JSON.stringify({ ...savedPos(), [id]: p })); } catch {}
+  try { localStorage.setItem(posKey(), JSON.stringify({ ...savedPos(), [id]: p })); } catch {}
 }
 
 function addAgent(agent) {
@@ -362,8 +379,47 @@ const handlers = {
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };
 
+// ---- workspaces (tabs) ----
+let WS = (() => { try { return localStorage.getItem('jarvis.ws'); } catch { return null; } })();
+let es = null;
+
+async function refreshTabs() {
+  let list;
+  try { list = await (await fetch('/workspaces')).json(); } catch { return; }
+  if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
+  if (!es) connect();
+  $('tabs').replaceChildren(...list.map((w) => {
+    const b = document.createElement('button');
+    b.className = w.id === WS ? 'active' : '';
+    b.title = w.project ?? 'no project folder';
+    b.append(w.name);
+    if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
+    else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
+    b.onclick = () => switchTo(w.id);
+    return b;
+  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }));
+}
+
+function switchTo(id) {
+  WS = id;
+  try { localStorage.setItem('jarvis.ws', id); } catch {}
+  $('pclose').onclick();
+  userView = false;
+  connect();
+  refreshTabs();
+}
+
+$('newwsForm').onsubmit = async (ev) => {
+  if (ev.submitter?.value !== 'ok') return;
+  const r = await fetch('/workspaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('wsName').value.trim(), project: $('wsProject').value.trim() }) });
+  if (!r.ok) return toast(`create failed: ${await r.text()}`);
+  $('wsName').value = $('wsProject').value = '';
+  switchTo((await r.json()).id);
+};
+
 function connect() {
-  const es = new EventSource('/events');
+  es?.close();
+  es = new EventSource(`/events?ws=${encodeURIComponent(WS)}`);
   es.onopen = () => {
     $('conn').textContent = 'LINK ONLINE';
     // Snapshot is replayed on every connect, so start clean.
@@ -376,14 +432,18 @@ function connect() {
   es.onerror = () => { $('conn').textContent = 'LINK LOST · RETRYING'; };
 }
 
+function toast(text) {
+  $('toast').textContent = text;
+  $('toast').classList.add('show');
+  clearTimeout(toast.t);
+  toast.t = setTimeout(() => $('toast').classList.remove('show'), 6000);
+}
+
 async function post(path, data) {
-  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...data, ws: WS }) });
   if (r.ok) return;
   if (r.status === 409 && path === '/delete') return askDirty(data.id, await r.text());
-  $('toast').textContent = `${path.slice(1)} failed: ${(await r.text()) || r.status}`;
-  $('toast').classList.add('show');
-  clearTimeout(post.t);
-  post.t = setTimeout(() => $('toast').classList.remove('show'), 6000);
+  toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
 }
 
 $('bar').onsubmit = (ev) => {
@@ -490,11 +550,12 @@ svg.addEventListener('dblclick', (ev) => {
   if (ev.target.closest('.node, #core')) return;
   userView = false;
   agents.forEach((a) => { a.pinned = false; });
-  try { localStorage.removeItem(POS_KEY); } catch {}
+  try { localStorage.removeItem(posKey()); } catch {}
   layout();
 });
 
-connect();
+refreshTabs();
+setInterval(refreshTabs, 2000);
 </script>
 </body>
 </html>

@@ -7,7 +7,6 @@ One arbiter agent that spawns, steers and watches other Claude Code agent sessio
 ```bash
 npm install
 npm start        # web UI at http://127.0.0.1:7777
-npm run cli      # console client
 npm run check    # typecheck
 ```
 
@@ -21,17 +20,22 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
   - Every agent has a shared board with `board_post` (to agent ids or names, or `"all"`) and `board_read`. Unseen notes addressed to an agent are prepended to the next message it receives, so they arrive without interrupting its current turn.
   - When an agent finishes a turn, its result is sent to its parent automatically. The report is capped at 2000 characters, and the parent can fetch the full text with `read_agent`.
 - Deleting an agent stops it and removes its own workdir. If a git worktree has uncommitted changes, the server answers 409 and the UI asks you to choose: commit the changes to the agent's branch, or discard them. The `jarvis/<id>` branch is kept either way. An agent that still has sub-agents cannot be deleted.
-- Runtime data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`): `arbiter/` is the arbiter's own empty working dir, `state/events.jsonl` is the event log, and `worktrees/<id>` holds the agents' workdirs. Agents work in the repo you name in the task.
+- Workspaces: each UI tab is an independent workspace with its own arbiter, agents, board and event log. A workspace can have a project folder, which becomes the default repo for the arbiter's agents. The list of workspaces is kept in `workspaces.json`.
+- Runtime data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`):
+  - `workspaces/<id>/arbiter/` is the arbiter's own empty working dir;
+  - `workspaces/<id>/events.jsonl` is the workspace's event log;
+  - `worktrees/<id>` holds the agents' workdirs. Agents work in the repo named in the task, or in the workspace project.
 - Workers run in `worktrees/<id>`. If `repo` is a git repo, this is a git worktree on branch `jarvis/<id>`.
-- Permissions: workers use `acceptEdits`. Every other prompt becomes an `ask` event, which you answer with `/y <id>` or `/n <id>` in the CLI.
+- Permissions: workers use `acceptEdits`. Every other prompt becomes an `ask` event, which you answer in the UI.
 - Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `delta` (streamed text), `tool`, `routed`, `ask`, `answered`, `result`, `session`.
-- Persistence: every event except `delta`, `ask` and `answered` is appended to `state/events.jsonl`. When the server restarts, it replays this log to rebuild the agents and their logs. An agent's next message resumes its SDK session (`resume: sessionId`), so it keeps its conversation. Asks that were pending when the server stopped are dropped. To start fresh, delete `~/.local/share/jarvis/state/`.
+- Persistence: every event except `delta`, `ask` and `answered` is appended to the workspace's `events.jsonl`. When the server restarts, it replays this log to rebuild the agents and their logs. An agent's next message resumes its SDK session (`resume: sessionId`), so it keeps its conversation. Asks that were pending when the server stopped are dropped. To reset a workspace, delete its `workspaces/<id>/` folder.
 
 ## Web UI
 
 `src/server.ts` serves `public/index.html`, which is one file with no build step.
-- Events stream over SSE at `GET /events`. On connect the server first sends a snapshot of the agents and any pending asks.
-- Commands are JSON POSTs: `/say` (to the arbiter), `/send` (directly to an agent), `/answer` (approve or deny an ask), `/stop`, `/delete` (`dirty: 'commit' | 'discard'`) and `/board` (a note from the user).
+- `GET /workspaces` lists the tabs with their running and waiting counts. `POST /workspaces {name, project?}` creates one.
+- Events stream over SSE at `GET /events?ws=<id>`. On connect the server first sends a snapshot of the agents and any pending asks.
+- Commands are JSON POSTs that carry `ws`: `/say` (to the arbiter), `/send` (directly to an agent), `/answer` (approve or deny an ask), `/stop`, `/delete` (`dirty: 'commit' | 'discard'`) and `/board` (a note from the user).
 - The server binds to 127.0.0.1 only. POST requests are rejected unless the `Origin` is the page itself, so other websites cannot drive your agents.
 
 On screen, the arbiter is the core in the center, with agents on a ring around it.
