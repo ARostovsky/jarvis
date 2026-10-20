@@ -13,7 +13,11 @@
     --bg: #03080f; --cyan: #4fd8ff; --cyan-dim: #1b5f7a; --amber: #ffb547; --violet: #c58bff; --red: #ff5a5a; --gray: #4a5a66;
     --text: #cfefff; --panel: rgba(6, 20, 32, .88); --line: rgba(79, 216, 255, .25);
   }
-  * { box-sizing: border-box; }
+  * { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: var(--cyan-dim) transparent; }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--cyan-dim); border-radius: 4px; }
+  ::-webkit-scrollbar-thumb:hover { background: var(--cyan); }
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Rajdhani, system-ui, sans-serif; overflow: hidden; }
   body { background: radial-gradient(ellipse at center, #08243a 0%, var(--bg) 70%); }
   #grid { position: fixed; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 48px 48px; opacity: .12; pointer-events: none; }
@@ -304,14 +308,15 @@ function log(id, cls, text) {
   a.log.push({ cls, text });
   if (selected === id) appendLog(cls, text);
 }
+const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 function appendLog(cls, text) {
   const d = document.createElement('div');
   d.className = cls;
   d.textContent = text;
   const box = $('log');
-  const atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+  const stick = atBottom(box);
   box.appendChild(d);
-  if (atBottom) box.scrollTop = box.scrollHeight;
+  if (stick) box.scrollTop = box.scrollHeight;
 }
 
 function select(id) {
@@ -367,10 +372,12 @@ const handlers = {
     speak(a);
     if (a.act) a.act.textContent = '…' + a.live.replace(/\s+/g, ' ').slice(-22);
     if (selected === e.agentId) {
-      let live = $('log').querySelector('.live');
-      if (!live) { appendLog('live', ''); live = $('log').querySelector('.live'); }
+      const box = $('log');
+      const stick = atBottom(box); // follow the stream only if the user hasn't scrolled up
+      let live = box.querySelector('.live');
+      if (!live) { appendLog('live', ''); live = box.querySelector('.live'); }
       live.textContent = a.live;
-      $('log').scrollTop = $('log').scrollHeight;
+      if (stick) box.scrollTop = box.scrollHeight;
     }
   },
   spawned: (e) => addAgent(e.agent),
