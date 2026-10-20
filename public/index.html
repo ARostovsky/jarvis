@@ -196,6 +196,7 @@ const pos = (id) => {
 const kidsOf = (id) => [...agents.values()].filter((a) => (a.agent.parentId ?? ARBITER) === id && a.agent.id !== ARBITER);
 
 // Arbiter's agents sit on the main ring; sub-agents fan out from their parent, away from the center.
+const SUB_GAP = 190; // node plus its widest status label, e.g. "WAITING · SONNET · MEDIUM"
 function layout() {
   kidsOf(ARBITER).forEach((a, i, all) => {
     const t = -Math.PI / 2 + (i * 2 * Math.PI) / all.length;
@@ -205,9 +206,12 @@ function layout() {
     place(a);
     const subs = kidsOf(a.agent.id);
     const base = Math.atan2(a.p.y, a.p.x);
+    // Siblings must sit SUB_GAP apart so their status labels don't overlap; many siblings move further out instead of wrapping around.
+    const dist = Math.max(SUB_GAP, (SUB_GAP * (subs.length - 1)) / 2.4);
+    const step = 2 * Math.asin(SUB_GAP / (2 * dist));
     subs.forEach((c, j) => {
-      const u = base + (j - (subs.length - 1) / 2) * 0.55;
-      if (!c.pinned) c.p = { x: a.p.x + Math.cos(u) * 170, y: a.p.y + Math.sin(u) * 170 };
+      const u = base + (j - (subs.length - 1) / 2) * step;
+      if (!c.pinned) c.p = { x: a.p.x + Math.cos(u) * dist, y: a.p.y + Math.sin(u) * dist };
       place(c);
     });
   });
