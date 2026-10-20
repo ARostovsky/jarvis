@@ -16,7 +16,14 @@
   html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font-family: Rajdhani, system-ui, sans-serif; overflow: hidden; }
   body { background: radial-gradient(ellipse at center, #08243a 0%, var(--bg) 70%); }
   #grid { position: fixed; inset: 0; background-image: linear-gradient(var(--line) 1px, transparent 1px), linear-gradient(90deg, var(--line) 1px, transparent 1px); background-size: 48px 48px; opacity: .12; pointer-events: none; }
-  svg { position: fixed; inset: 0; width: 100%; height: 100%; }
+  svg { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; }
+  svg.panning { cursor: grabbing; }
+  /* Keep the graph centered in the space left of the panel. */
+  body.panel-open svg { width: calc(100% - min(440px, 100vw - 32px) - 32px); }
+  .node.dragging { transition: none; cursor: grabbing; }
+  .node.speaking .ring { stroke-width: 3.5; }
+  #log .live { color: #e6f8ff; opacity: .85; }
+  #log .live::after { content: '▍'; animation: blink .8s steps(2) infinite; }
   .link { stroke: var(--cyan-dim); stroke-width: 1.2; stroke-dasharray: 4 6; animation: flow 1.2s linear infinite; }
   @keyframes flow { to { stroke-dashoffset: -20; } }
   .pulse { fill: var(--cyan); filter: url(#glow); }
@@ -40,6 +47,7 @@
   #core.running .a1 { animation-duration: 4s; } #core.running .a3 { animation-duration: 2s; }
   #core .disc { fill: url(#coreFill); filter: url(#glow); }
   #core.running .disc { animation: corepulse 1.4s ease-in-out infinite; }
+  #core.speaking .disc { opacity: .75; }
   @keyframes corepulse { 50% { opacity: .65; } }
   #core text { fill: var(--text); text-anchor: middle; font-size: 22px; letter-spacing: .3em; font-weight: 600; pointer-events: none; }
 
@@ -60,17 +68,21 @@
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
   .ask button { border: 1px solid var(--line); padding: 6px 14px; margin-right: 6px; }
   .ask .deny { color: var(--red); }
+  #hint { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
+  @media (max-width: 700px) { #hint { display: none; } }
   #conn { position: fixed; top: 16px; left: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
 </style>
 </head>
 <body>
 <div id="grid"></div>
 <div id="conn">LINK…</div>
-<svg viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
+<div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
+<svg id="view" viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
   <defs>
     <filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="3" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
     <radialGradient id="coreFill"><stop offset="0" stop-color="#bff3ff"/><stop offset=".35" stop-color="#4fd8ff" stop-opacity=".8"/><stop offset="1" stop-color="#0a3a55" stop-opacity=".2"/></radialGradient>
   </defs>
+  <g id="world">
   <g id="links"></g>
   <g id="pulses"></g>
   <g id="nodes"></g>
@@ -80,6 +92,7 @@
     <circle class="arc a3" r="64"/>
     <circle class="disc" r="44"/>
     <text y="128">ARBITER</text>
+  </g>
   </g>
 </svg>
 
@@ -117,14 +130,18 @@ function layout() {
   const kids = [...agents.values()].filter((a) => a.agent.id !== ARBITER);
   kids.forEach((a, i) => {
     const t = -Math.PI / 2 + (i * 2 * Math.PI) / Math.max(kids.length, 1);
-    a.p = { x: Math.cos(t) * R * 1.35, y: Math.sin(t) * R };
-    a.g.style.transform = `translate(${a.p.x}px, ${a.p.y}px)`;
-    const k = 100 / Math.hypot(a.p.x, a.p.y); // start at the core's edge, not its center
-    a.link.setAttribute('x1', a.p.x * k);
-    a.link.setAttribute('y1', a.p.y * k);
-    a.link.setAttribute('x2', a.p.x);
-    a.link.setAttribute('y2', a.p.y);
+    if (!a.pinned) a.p = { x: Math.cos(t) * R * 1.35, y: Math.sin(t) * R };
+    place(a);
   });
+}
+
+function place(a) {
+  a.g.style.transform = `translate(${a.p.x}px, ${a.p.y}px)`;
+  const k = Math.min(1, 100 / (Math.hypot(a.p.x, a.p.y) || 1)); // start at the core's edge, not its center
+  a.link.setAttribute('x1', a.p.x * k);
+  a.link.setAttribute('y1', a.p.y * k);
+  a.link.setAttribute('x2', a.p.x);
+  a.link.setAttribute('y2', a.p.y);
 }
 
 function addAgent(agent) {
@@ -140,7 +157,7 @@ function addAgent(agent) {
   el('text', { y: 5 }, g).textContent = short(agent.name, 12);
   const sub = el('text', { class: 'sub', y: 64 }, g);
   const act = el('text', { class: 'act', y: 80 }, g);
-  g.onclick = () => select(agent.id);
+  draggable(g, agent.id);
   g.onkeydown = (e) => { if (e.key === 'Enter') select(agent.id); };
   agents.set(agent.id, { agent, g, link, sub, act, log: [] });
   setStatus(agent.id, agent.status);
@@ -199,6 +216,7 @@ function select(id) {
   a.log.forEach((l) => appendLog(l.cls, l.text));
   $('log').scrollTop = $('log').scrollHeight;
   $('panel').classList.add('open');
+  document.body.classList.add('panel-open');
   $('dinput').focus();
 }
 
@@ -217,17 +235,44 @@ function showAsk(e) {
   $('asks').append(card);
 }
 
+function speak(a) {
+  a.g.classList.add('speaking');
+  clearTimeout(a.speakT);
+  a.speakT = setTimeout(() => a.g.classList.remove('speaking'), 120);
+}
+function endLive(id) {
+  const a = agents.get(id);
+  if (a) a.live = '';
+  if (selected === id) $('log').querySelector('.live')?.remove();
+}
+
+let replaying = true;
 const handlers = {
+  ready: () => { replaying = false; },
+  delta: (e) => {
+    const a = agents.get(e.agentId);
+    if (!a) return;
+    a.live = (a.live ?? '') + e.text;
+    speak(a);
+    if (a.act) a.act.textContent = '…' + a.live.replace(/\s+/g, ' ').slice(-22);
+    if (selected === e.agentId) {
+      let live = $('log').querySelector('.live');
+      if (!live) { appendLog('live', ''); live = $('log').querySelector('.live'); }
+      live.textContent = a.live;
+      $('log').scrollTop = $('log').scrollHeight;
+    }
+  },
   spawned: (e) => addAgent(e.agent),
   status: (e) => setStatus(e.agentId, e.status),
-  text: (e) => log(e.agentId, '', e.text),
+  text: (e) => { endLive(e.agentId); log(e.agentId, '', e.text); },
   tool: (e) => {
+    endLive(e.agentId);
     log(e.agentId, 'tool', `→ ${e.name} ${short(JSON.stringify(e.input), 400)}`);
     const a = agents.get(e.agentId);
     if (a?.act) a.act.textContent = short(e.name.replace(/^mcp__\w+?__/, ''), 18);
   },
   routed: (e) => {
-    pulse(e.from, e.to);
+    if (!replaying) pulse(e.from, e.to);
     log(e.to, 'routed', `⇐ ${e.from}: ${e.text}`);
     if (e.from !== 'user') log(e.from, 'routed', `⇒ ${e.to}: ${short(e.text, 300)}`);
   },
@@ -244,6 +289,7 @@ function connect() {
     agents.forEach((a, id) => { if (id !== ARBITER) { a.g.remove(); a.link.remove(); } });
     agents.clear();
     $('asks').replaceChildren();
+    replaying = true;
   };
   es.onmessage = (m) => { const e = JSON.parse(m.data); handlers[e.type]?.(e); };
   es.onerror = () => { $('conn').textContent = 'LINK LOST · RETRYING'; };
@@ -266,11 +312,80 @@ $('direct').onsubmit = (ev) => {
   if (text && selected) post('/send', { id: selected, text });
   $('dinput').value = '';
 };
-$('pclose').onclick = () => { $('panel').classList.remove('open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
+$('pclose').onclick = () => { $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
 $('core').onclick = () => select(ARBITER);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => { if (e.key === 'Escape') $('pclose').onclick(); };
+
+// ---- pan, zoom, drag ----
+const svg = $('view');
+const vb = { x: -600, y: -400, w: 1200, h: 800 };
+const applyVB = () => svg.setAttribute('viewBox', `${vb.x} ${vb.y} ${vb.w} ${vb.h}`);
+const toWorld = (ev) => {
+  const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(svg.getScreenCTM().inverse());
+  return { x: p.x, y: p.y };
+};
+
+// Drag a node; a press without movement still counts as a click.
+function draggable(g, id) {
+  g.addEventListener('pointerdown', (ev) => {
+    ev.stopPropagation();
+    const a = agents.get(id), start = toWorld(ev), p0 = { ...(a.p ?? { x: 0, y: 0 }) };
+    let moved = false;
+    g.setPointerCapture(ev.pointerId);
+    const move = (e) => {
+      const w = toWorld(e), dx = w.x - start.x, dy = w.y - start.y;
+      if (!moved && Math.hypot(dx, dy) < 4) return;
+      moved = true;
+      g.classList.add('dragging');
+      a.p = { x: p0.x + dx, y: p0.y + dy };
+      a.pinned = true;
+      place(a);
+    };
+    const up = () => {
+      g.removeEventListener('pointermove', move);
+      g.classList.remove('dragging');
+      if (!moved) select(id);
+    };
+    g.addEventListener('pointermove', move);
+    g.addEventListener('pointerup', up, { once: true });
+  });
+}
+
+svg.addEventListener('pointerdown', (ev) => {
+  if (ev.target.closest('#core')) return;
+  const start = toWorld(ev);
+  svg.setPointerCapture(ev.pointerId);
+  svg.classList.add('panning');
+  const move = (e) => {
+    const w = toWorld(e);
+    vb.x -= w.x - start.x;
+    vb.y -= w.y - start.y;
+    applyVB();
+  };
+  svg.addEventListener('pointermove', move);
+  svg.addEventListener('pointerup', () => { svg.removeEventListener('pointermove', move); svg.classList.remove('panning'); }, { once: true });
+});
+
+svg.addEventListener('wheel', (ev) => {
+  ev.preventDefault();
+  const w = toWorld(ev), k = Math.exp(ev.deltaY * 0.0015);
+  const nw = Math.min(Math.max(vb.w * k, 400), 4000), f = nw / vb.w;
+  vb.x = w.x - (w.x - vb.x) * f;
+  vb.y = w.y - (w.y - vb.y) * f;
+  vb.w = nw;
+  vb.h *= f;
+  applyVB();
+}, { passive: false });
+
+svg.addEventListener('dblclick', (ev) => {
+  if (ev.target.closest('.node, #core')) return;
+  Object.assign(vb, { x: -600, y: -400, w: 1200, h: 800 });
+  applyVB();
+  agents.forEach((a) => { a.pinned = false; });
+  layout();
+});
 
 connect();
 </script>
