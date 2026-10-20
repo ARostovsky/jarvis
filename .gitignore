@@ -2,3 +2,4 @@ node_modules/
 worktrees/
 .idea/
 state/
+.claude/settings.local.json
