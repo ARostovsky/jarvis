@@ -65,6 +65,7 @@
   #panel header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
   #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #pmeta { font-size: 12px; letter-spacing: .1em; color: var(--cyan-dim); }
+  #pmeta.full { color: var(--amber); }
   #log { flex: 1; overflow-y: auto; padding: 12px 16px; font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.5; }
   #log div { margin-bottom: 8px; white-space: pre-wrap; word-break: break-word; }
   #log .note { color: var(--violet); }
@@ -173,7 +174,7 @@
 
 <aside id="panel">
   <div id="pgrip" title="Drag to resize · double-click to reset"></div>
-  <header><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="log"></div>
   <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button>SEND</button></form>
@@ -314,14 +315,20 @@ function setStatus(id, status) {
   a.agent.status = status;
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
   a.g.classList.add(status);
-  if (a.sub) a.sub.textContent = [status, a.agent.model, a.agent.effort].filter(Boolean).join(' · ');
+  if (a.sub) a.sub.textContent = [status, a.agent.model, a.agent.effort, ctxPct(a.agent) && `${ctxPct(a.agent)}%`].filter(Boolean).join(' · ');
   if (a.link) a.link.style.stroke = status === 'running' ? 'var(--cyan)' : '';
   if (id === selected) syncStop();
 }
 
 // STOP only means something while an agent is working or waiting for you.
 const stoppable = (id) => ['running', 'waiting'].includes(agents.get(id)?.agent.status);
-const syncStop = () => { $('pstop').hidden = !stoppable(selected); };
+const syncStop = () => {
+  $('pstop').hidden = !stoppable(selected);
+  $('pcompact').hidden = stoppable(selected) || !agents.get(selected)?.agent.sessionId; // compact needs an idle session with history
+};
+// Share of the context window used after the last turn; 0 until the first measurement.
+const ctxPct = (ag) => ag.context ? Math.round(100 * ag.context.tokens / ag.context.max) : 0;
+const kTok = (n) => `${Math.round(n / 1000)}k`;
 
 function pulse(from, to, cls = '') {
   const a = pos(from), b = pos(to);
@@ -356,7 +363,9 @@ function renderTitle() {
   const own = a.agent.costUsd ?? 0, total = subtreeCost(selected);
   $('ptitle').textContent = name;
   $('ptitle').title = `${cfg}\n$${own.toFixed(3)} own${total > own ? `, $${total.toFixed(3)} with sub-agents` : ''}`;
-  $('pmeta').textContent = `${cfg} · $${own.toFixed(2)}${total > own + 0.0005 ? ` (Σ $${total.toFixed(2)})` : ''}`;
+  const ctx = a.agent.context;
+  $('pmeta').textContent = `${cfg} · $${own.toFixed(2)}${total > own + 0.0005 ? ` (Σ $${total.toFixed(2)})` : ''}${ctx ? ` · ctx ${kTok(ctx.tokens)}/${kTok(ctx.max)} (${ctxPct(a.agent)}%)` : ''}`;
+  $('pmeta').classList.toggle('full', ctxPct(a.agent) >= 80);
 }
 const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
 // Markdown subset agents use: ``` fences, pipe tables, `code`, **bold**. Built with DOM nodes, never innerHTML, so agent text cannot inject markup.
@@ -512,6 +521,20 @@ const handlers = {
     setStatus(e.agentId, a.agent.status);
     renderTitle();
   },
+  session: (e) => {
+    const a = agents.get(e.agentId);
+    if (!a) return;
+    a.agent.sessionId = e.sessionId;
+    if (e.agentId === selected) syncStop();
+  },
+  context: (e) => {
+    const a = agents.get(e.agentId);
+    if (!a) return;
+    a.agent.context = { tokens: e.tokens, max: e.max };
+    setStatus(e.agentId, a.agent.status);
+    renderTitle();
+  },
+  compacted: (e) => log(e.agentId, 'result', `⇣ ${e.trigger === 'auto' ? 'auto-' : ''}compacted ${kTok(e.pre)}${e.post ? ` → ${kTok(e.post)}` : ''}`),
   ask: showAsk,
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };
@@ -698,6 +721,7 @@ $('dinput').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isCo
 $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; }; // empty: skip, a wrapped placeholder would inflate scrollHeight
 $('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; document.querySelectorAll('.node.selected').forEach((n) => n.classList.remove('selected')); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
+$('pcompact').onclick = () => selected && post('/compact', { id: selected });
 // Modal with a list of choices; resolves to the chosen value, or '' on cancel.
 function choose(title, text, question, choices) {
   $('choiceTitle').textContent = title;

@@ -110,7 +110,8 @@ type Agent = {
 | `system/init` | `session` (new session id), `runtime` (actual model) |
 | `assistant` text block | `text` |
 | `assistant` tool_use block | `tool` |
-| `result` | `status`, `result` (with cumulative cost), then a capped report `routed` to the parent |
+| `system/compact_boundary` | `compacted` |
+| `result` | `status`, `result` (with cumulative cost), then a capped report `routed` to the parent (skipped for a `/compact` turn), then `context` from `q.getContextUsage()` |
 
 SDK options per session: `cwd`, `settingSources: ['project', 'local']`, `settings` (only `apiKeyHelper`, `env`, `model` from `~/.claude/settings.json`), `plugins` (only `JARVIS_PLUGINS`), `permissionMode` (default `auto`), `canUseTool` (turns undecided calls into UI `ask` cards), `resume: sessionId`, plus `agentOptions(a)` for MCP servers, allowed tools and the system prompt append.
 
@@ -128,7 +129,7 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 
 Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`.
 
-When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (2000) characters. The parent can call `read_agent` for the full text.
+When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (1000) characters, so reports do not fill the parent's context. The parent can call `read_agent` for the full text.
 
 ### Board
 
@@ -157,6 +158,8 @@ Everything visible goes through `emit(type, data)` in `createWorkspace`. The UI 
 | `session` | `{agentId, sessionId}` | yes |
 | `runtime` | `{agentId, model}` | yes |
 | `config` | `{agentId, model, effort}` | yes |
+| `context` | `{agentId, tokens, max}` context window use after a turn | yes |
+| `compacted` | `{agentId, trigger, pre, post}` the session was compacted (`manual` or `auto`) | yes |
 | `ask` | `{reqId, agentId, tool, input}` permission prompt | no |
 | `answered` | `{reqId}` | no |
 | `ready` | `{}` sent by the server after the snapshot | no (SSE only) |
@@ -224,6 +227,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `POST /send` | `{ws, id, text}` | message to any agent |
 | `POST /answer` | `{ws, reqId, allow}` | answer a permission prompt |
 | `POST /stop` | `{ws, id}` | |
+| `POST /compact` | `{ws, id}` sends `/compact` straight into the idle session, bypassing board notes | |
 | `POST /stopall` | `{ws}` | |
 | `POST /config` | `{ws, id, model?, effort?}` | |
 | `POST /delete` | `{ws, id, dirty?: 'commit' \| 'discard'}` | 409 if dirty and no choice |
