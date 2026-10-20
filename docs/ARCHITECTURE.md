@@ -243,6 +243,7 @@ curl -X POST http://127.0.0.1:7777/say \
 
 - Graph state: the `agents` map (`id -> {agent, g, link, act, live}`), `layout()`, `fit()`, `place()`, positions in `localStorage` (`jarvis.positions.<ws>`).
 - `addAgent`, `removeAgent`, `setStatus`, `pulse` (animation along a link), `log`, `renderTitle`, `select` (side panel), `showAsk`.
+- `renderMd`: the Markdown subset shown in the log (``` fences, pipe tables, `code`, `**bold**`). It builds DOM nodes with `textContent` and never uses `innerHTML`: agent text is untrusted, and the page can answer permission requests. Tool and meta lines stay plain text.
 - `handlers`: one function per event type. To show a new event, add a handler here.
 - Workspaces: `refreshTabs`, `menu` (right-click menus), archive dialogs, `switchTo`, `connect` (SSE).
 - `post()` for commands, `choose()` for modal choices, model/effort pickers, delete flow.
