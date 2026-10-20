@@ -45,7 +45,7 @@ Each tab at the top is a separate **workspace**: its own arbiter, team and histo
 
 ### The log and chat
 
-Click any circle to open its log on the right: the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Type at the bottom to message that agent directly. The arbiter's chat is where you give new goals.
+Click any circle to open its log on the right: the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. The arbiter's chat is where you give new goals.
 
 ![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
 
