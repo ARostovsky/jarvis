@@ -6,7 +6,8 @@
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
     "cli": "node src/cli.ts",
-    "check": "tsc"
+    "check": "tsc",
+    "start": "node src/server.ts"
   },
   "keywords": [],
   "author": "",

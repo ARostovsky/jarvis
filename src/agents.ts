@@ -23,7 +23,7 @@ const emit = (type: string, data: object) => bus.emit('event', { type, ...data }
 
 export const agents = new Map<string, Agent>();
 const sessions = new Map<string, { push: (text: string) => void; q: Query; abort: AbortController }>();
-const pendingAsks = new Map<string, (allow: boolean) => void>();
+const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
 
 const WORKTREES = resolve(import.meta.dirname, '..', 'worktrees');
 export const ARBITER = 'arbiter';
@@ -54,8 +54,16 @@ function setStatus(a: Agent, status: Status) {
 }
 
 export function answerAsk(reqId: string, allow: boolean) {
-  pendingAsks.get(reqId)?.(allow);
+  pendingAsks.get(reqId)?.resolve(allow);
   pendingAsks.delete(reqId);
+}
+
+// What a freshly connected UI needs to rebuild the screen.
+export function snapshot() {
+  return [
+    ...[...agents.values()].map((agent) => ({ type: 'spawned', agent })),
+    ...[...pendingAsks.values()].map((p) => p.event),
+  ];
 }
 
 // Long-lived SDK session fed by an inbox, so the arbiter can keep sending messages to it.
@@ -73,11 +81,16 @@ function startSession(a: Agent, options: Parameters<typeof query>[0]['options'])
         new Promise((done) => {
           const reqId = `${a.id}#${++seq}`;
           setStatus(a, 'waiting');
-          pendingAsks.set(reqId, (allow) => {
-            setStatus(a, 'running');
-            done(allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'User denied' });
+          const event = { type: 'ask', reqId, agentId: a.id, tool: toolName, input };
+          pendingAsks.set(reqId, {
+            resolve: (allow) => {
+              setStatus(a, 'running');
+              emit('answered', { reqId });
+              done(allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'User denied' });
+            },
+            event,
           });
-          emit('ask', { reqId, agentId: a.id, tool: toolName, input });
+          bus.emit('event', event);
         }),
       ...options,
     },
