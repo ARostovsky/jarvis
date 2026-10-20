@@ -34,6 +34,8 @@ const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
 export const ARBITER = 'arbiter';
 const REPORT_CAP = 2000;
+// auto: a classifier approves safe calls and only escalates to the UI what it can't decide.
+const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
@@ -188,7 +190,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         cwd: a.cwd,
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
-        permissionMode: 'acceptEdits',
+        permissionMode: PERMISSION_MODE,
         includePartialMessages: true,
         abortController: abort,
         resume: a.sessionId,

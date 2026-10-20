@@ -39,7 +39,7 @@ Node 24+ runs the `.ts` files directly, so there is no build step. Agents take o
   - `workspaces/<id>/events.jsonl` is the workspace's event log;
   - `worktrees/<id>` holds the agents' workdirs. Agents work in the repo named in the task, or in the workspace project.
 - Workers run in `worktrees/<id>`. If `repo` is a git repo, this is a git worktree on branch `jarvis/<id>`.
-- Permissions: workers use `acceptEdits`. Every other prompt becomes an `ask` event, which you answer in the UI.
+- Permissions: agents run in Claude Code's `auto` mode by default. A classifier approves safe calls on its own, and only what it can't decide becomes an `ask` card in the UI. Override with `JARVIS_PERMISSION_MODE` (`acceptEdits`, `default`, ...).
 - Every change goes out as an event on `bus`: `spawned`, `status`, `text`, `delta` (streamed text), `tool`, `routed`, `ask`, `answered`, `result`, `session`.
 - Persistence: every event except `delta`, `ask` and `answered` is appended to the workspace's `events.jsonl`. When the server restarts, it replays this log to rebuild the agents and their logs. An agent's next message resumes its SDK session (`resume: sessionId`), so it keeps its conversation. Asks that were pending when the server stopped are dropped. To reset a workspace, delete its `workspaces/<id>/` folder.
 
