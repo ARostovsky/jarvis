@@ -94,7 +94,7 @@
   #viewMenu input { flex: none; width: auto; accent-color: var(--cyan); }
   #direct { display: flex; border-top: 1px solid var(--line); }
   #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
-  .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; }
+  .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; backdrop-filter: blur(8px); }
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
   input, #dinput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 16px Rajdhani, sans-serif; padding: 14px 16px; outline: none; }
   #dinput { resize: none; max-height: 40vh; line-height: 1.3; }
@@ -103,6 +103,16 @@
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
   .ask button { border: 1px solid var(--line); padding: 6px 14px; margin-right: 6px; }
   .ask .deny, .danger { color: var(--red); }
+  #asks { max-height: calc(100vh - 32px); overflow: auto; }
+  .ask button:disabled { opacity: .4; cursor: default; }
+  .q { margin: 10px 0; }
+  .q .chip { display: inline-block; border: 1px solid var(--amber); color: var(--amber); font-size: 11px; letter-spacing: .1em; padding: 0 6px; margin-right: 6px; }
+  .q .opts { display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .ask .q .opts button { text-align: left; margin: 0; letter-spacing: 0; padding: 6px 10px; color: var(--text); }
+  .ask .q .opts button.on { border-color: var(--amber); background: rgba(255, 181, 71, .12); }
+  .q .opts small { display: block; font-weight: 400; color: var(--gray); }
+  .q .opts pre { margin: 4px 0 0; white-space: pre; max-height: 260px; }
+  .q input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; box-sizing: border-box; margin-top: 4px; }
   dialog { background: var(--panel); color: var(--text); border: 1px solid var(--amber); padding: 20px 24px; max-width: 640px; }
   dialog::backdrop { background: rgba(0, 0, 0, .6); }
   dialog h3 { margin: 0 0 8px; letter-spacing: .15em; color: var(--amber); }
@@ -473,6 +483,7 @@ function showAsk(e) {
   const card = document.createElement('div');
   card.className = 'ask';
   card.dataset.req = e.reqId;
+  if (e.tool === 'AskUserQuestion' && Array.isArray(e.input?.questions)) return showQuestions(e, card);
   const title = document.createElement('div');
   title.textContent = `${e.agentId} wants ${e.tool}`;
   const pre = document.createElement('pre');
@@ -480,6 +491,61 @@ function showAsk(e) {
   const yes = Object.assign(document.createElement('button'), { textContent: 'ALLOW', onclick: () => post('/answer', { reqId: e.reqId, allow: true }) });
   const no = Object.assign(document.createElement('button'), { className: 'deny', textContent: 'DENY', onclick: () => post('/answer', { reqId: e.reqId, allow: false }) });
   card.append(title, pre, yes, no);
+  $('asks').append(card);
+}
+
+// AskUserQuestion: pick options (or type an answer), sent back as input.answers keyed by question text.
+function showQuestions(e, card) {
+  const title = document.createElement('div');
+  title.textContent = `${e.agentId} asks`;
+  card.append(title);
+  const send = Object.assign(document.createElement('button'), { textContent: 'ANSWER', disabled: true });
+  const reads = e.input.questions.map((q) => {
+    const box = document.createElement('div');
+    box.className = 'q';
+    const chip = Object.assign(document.createElement('span'), { className: 'chip', textContent: q.header || '' });
+    box.append(chip, document.createTextNode(q.question));
+    const opts = document.createElement('div');
+    opts.className = 'opts';
+    const picked = new Set();
+    for (const o of q.options || []) {
+      const b = document.createElement('button');
+      b.append(o.label);
+      if (o.description) b.append(Object.assign(document.createElement('small'), { textContent: o.description }));
+      const pre = o.preview ? Object.assign(document.createElement('pre'), { textContent: o.preview, hidden: true }) : null;
+      if (pre) b.append(pre);
+      b.onclick = () => {
+        if (!q.multiSelect) for (const x of opts.querySelectorAll('button.on')) if (x !== b) { x.classList.remove('on'); x.querySelector('pre')?.setAttribute('hidden', ''); }
+        if (!q.multiSelect) picked.clear();
+        const on = b.classList.toggle('on');
+        if (pre) pre.hidden = !on;
+        on ? picked.add(o.label) : picked.delete(o.label);
+        if (on && !q.multiSelect) other.value = '';
+        check();
+      };
+      opts.append(b);
+    }
+    const other = Object.assign(document.createElement('input'), { placeholder: 'Other…' });
+    other.oninput = () => {
+      if (!q.multiSelect && other.value) { picked.clear(); for (const x of opts.querySelectorAll('button.on')) { x.classList.remove('on'); x.querySelector('pre')?.setAttribute('hidden', ''); } }
+      check();
+    };
+    const notes = Object.assign(document.createElement('input'), { placeholder: 'Notes for the agent (optional)…' });
+    box.append(opts, other, notes);
+    card.append(box);
+    return () => {
+      const preview = (q.options || []).filter((o) => picked.has(o.label) && o.preview).map((o) => o.preview).join('\n\n');
+      const note = Object.fromEntries([['preview', preview], ['notes', notes.value.trim()]].filter(([, v]) => v));
+      return { q: q.question, answer: [...picked, other.value.trim()].filter(Boolean).join(', '), note };
+    };
+  });
+  const check = () => { send.disabled = !reads.every((r) => r().answer); };
+  send.onclick = () => {
+    const all = reads.map((r) => r());
+    post('/answer', { reqId: e.reqId, allow: true, answers: Object.fromEntries(all.map((r) => [r.q, r.answer])), annotations: Object.fromEntries(all.filter((r) => Object.keys(r.note).length).map((r) => [r.q, r.note])) });
+  };
+  const no = Object.assign(document.createElement('button'), { className: 'deny', textContent: 'SKIP', onclick: () => post('/answer', { reqId: e.reqId, allow: false }) });
+  card.append(send, no);
   $('asks').append(card);
 }
 

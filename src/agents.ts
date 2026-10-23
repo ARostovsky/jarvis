@@ -27,6 +27,8 @@ export type Agent = {
 
 // One tab in the UI: its own arbiter, agents, board and event log.
 export type WorkspaceMeta = { id: string; name: string; project?: string };
+// The user's reply to AskUserQuestion, merged into its input.
+export type AskReply = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> };
 
 // All runtime data lives outside the repo, in the XDG data dir.
 const DATA = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis');
@@ -150,7 +152,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const agents = new Map<string, Agent>();
   const sessions = new Map<string, { push: (text: string) => void; abort: AbortController; q: Query }>();
   const compacting = new Set<string>(); // agents whose next result is a /compact, not a report for the parent
-  const pendingAsks = new Map<string, { resolve: (allow: boolean) => void; event: object }>();
+  const pendingAsks = new Map<string, { resolve: (allow: boolean, reply?: AskReply) => void; event: object }>();
 
   // Shared board: notes addressed to specific agents (or "all"), delivered with their next message.
   type Note = { n: number; from: string; to: string[]; text: string };
@@ -166,8 +168,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
     emit('status', { agentId: a.id, status });
   }
 
-  function answerAsk(reqId: string, allow: boolean) {
-    pendingAsks.get(reqId)?.resolve(allow);
+  function answerAsk(reqId: string, allow: boolean, reply?: AskReply) {
+    pendingAsks.get(reqId)?.resolve(allow, reply);
     pendingAsks.delete(reqId);
   }
 
@@ -232,10 +234,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
             setStatus(a, 'waiting');
             const event = { type: 'ask', reqId, agentId: a.id, tool: toolName, input };
             pendingAsks.set(reqId, {
-              resolve: (allow) => {
+              resolve: (allow, reply) => {
                 setStatus(a, 'running');
                 emit('answered', { reqId });
-                done(allow ? { behavior: 'allow', updatedInput: input } : { behavior: 'deny', message: 'User denied' });
+                // AskUserQuestion reads the user's choices from input.answers and input.annotations, keyed by question text.
+                done(allow ? { behavior: 'allow', updatedInput: { ...input, ...reply } } : { behavior: 'deny', message: 'User denied' });
               },
               event,
             });

@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, listArchived, archivedInfo, deleteArchived, DirtyWorktree, type Workspace } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, archiveWorkspace, restoreWorkspace, listArchived, archivedInfo, deleteArchived, DirtyWorktree, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -20,6 +20,12 @@ function ws(id: unknown): Workspace {
   return w;
 }
 
+// AskUserQuestion reply from the UI: keep only the known string fields.
+const strings = (v: unknown, keys?: string[]): Record<string, string> =>
+  Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {}).filter(([k, x]) => x != null && (!keys || keys.includes(k))).map(([k, x]) => [k, String(x)]));
+const replyOf = (b: any): AskReply | undefined =>
+  b.answers ? { answers: strings(b.answers), annotations: Object.fromEntries(Object.entries(b.annotations && typeof b.annotations === 'object' ? b.annotations : {}).map(([q, x]) => [q, strings(x, ['preview', 'notes'])])) } : undefined;
+
 // Each returns a JSON-able value or nothing (204).
 const commands: Record<string, (b: any) => unknown> = {
   '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }).meta,
@@ -29,7 +35,7 @@ const commands: Record<string, (b: any) => unknown> = {
   '/workspaces/archived/info': (b) => archivedInfo(String(b.id)),
   '/workspaces/archived/delete': (b) => deleteArchived(String(b.id), String(b.name ?? '')),
   '/say': (b) => ws(b.ws).tellArbiter(String(b.text)),
-  '/answer': (b) => ws(b.ws).answerAsk(String(b.reqId), Boolean(b.allow)),
+  '/answer': (b) => ws(b.ws).answerAsk(String(b.reqId), Boolean(b.allow), replyOf(b)),
   '/send': (b) => ws(b.ws).sendToAgent(String(b.id), String(b.text), 'user'),
   '/stop': (b) => ws(b.ws).stopAgent(String(b.id)),
   '/compact': (b) => ws(b.ws).compactAgent(String(b.id)),

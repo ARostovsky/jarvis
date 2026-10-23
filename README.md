@@ -53,7 +53,7 @@ The **VIEW** button picks what the log shows (your messages, reports, tool calls
 
 ### Approvals
 
-Agents run in Claude Code's `auto` permission mode: a built-in classifier approves safe actions on its own. Only what it cannot decide shows up as a card in the bottom-left corner. You read the exact command and press ALLOW or DENY. The agent waits (amber) until you answer.
+Agents run in Claude Code's `auto` permission mode: a built-in classifier approves safe actions on its own. Only what it cannot decide shows up as a card in the bottom-left corner. You read the exact command and press ALLOW or DENY. The agent waits (amber) until you answer. When an agent asks you a question, the card shows its options instead: pick one (or several), or type your own answer under "Other", add notes for the agent if you want, then press ANSWER. SKIP tells the agent you did not answer.
 
 ![An approval card: the tests agent wants to run a shell command](docs/screenshots/approve.png)
 
