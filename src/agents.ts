@@ -47,6 +47,7 @@ const DEFAULT_AGENT_MODEL = process.env.JARVIS_AGENT_MODEL ?? 'sonnet';
 const ARBITER_MODEL = process.env.JARVIS_ARBITER_MODEL; // unset: model from settings
 const DEFAULT_EFFORT = { arbiter: (process.env.JARVIS_ARBITER_EFFORT ?? 'medium') as EffortLevel, agent: (process.env.JARVIS_AGENT_EFFORT ?? 'medium') as EffortLevel };
 const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
+const PLAYWRIGHT = process.env.JARVIS_PLAYWRIGHT ?? '1'; // browser MCP for every session: '1' headless, 'headed' visible windows, '0' off
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
@@ -490,8 +491,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const prompt = a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT;
     return {
-      mcpServers: { jarvis: jarvisTools(a.id, team) },
-      allowedTools: team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS,
+      // Each agent gets its own browser: isolated, so parallel agents don't fight over one profile dir.
+      // Screenshots go outside the worktree, so they don't get committed or block deletion.
+      mcpServers: { jarvis: jarvisTools(a.id, team), ...(PLAYWRIGHT !== '0' ? { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--isolated', ...(PLAYWRIGHT === 'headed' ? [] : ['--headless']), '--output-dir', join(dir, 'playwright', a.id)] } } : {}) },
+      allowedTools: [...(team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS), ...(PLAYWRIGHT !== '0' ? ['mcp__playwright'] : [])],
       // Built-in subagents are invisible in the graph; whoever has spawn_agent must use it instead.
       ...(team ? { disallowedTools: ['Agent', 'Task'] } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },

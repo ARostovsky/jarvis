@@ -124,6 +124,7 @@ All optional, set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | How agents ask for permission: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail` | Which of your Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
+| `JARVIS_PLAYWRIGHT` | `1` | Give every agent a headless browser (Playwright MCP, its own isolated profile); `headed` shows the browser windows on screen; `0` turns it off |
 
 Data (workspaces, logs, agent workdirs, archive) lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never inside this repo.
 

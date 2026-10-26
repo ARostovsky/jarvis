@@ -113,7 +113,7 @@ type Agent = {
 | `system/compact_boundary` | `compacted` |
 | `result` | `status`, `result` (with cumulative cost), then a capped report `routed` to the parent (skipped for a `/compact` turn), then `context` from `q.getContextUsage()` |
 
-SDK options per session: `cwd`, `settingSources: ['project', 'local']`, `settings` (only `apiKeyHelper`, `env`, `model` from `~/.claude/settings.json`), `plugins` (only `JARVIS_PLUGINS`), `permissionMode` (default `auto`), `canUseTool` (turns undecided calls into UI `ask` cards), `resume: sessionId`, plus `agentOptions(a)` for MCP servers, allowed tools and the system prompt append.
+SDK options per session: `cwd`, `settingSources: ['project', 'local']`, `settings` (only `apiKeyHelper`, `env`, `model` from `~/.claude/settings.json`), `plugins` (only `JARVIS_PLUGINS`), `permissionMode` (default `auto`), `canUseTool` (turns undecided calls into UI `ask` cards), `resume: sessionId`, plus `agentOptions(a)` for MCP servers, allowed tools and the system prompt append. MCP servers: `jarvis` (below) and, unless `JARVIS_PLAYWRIGHT=0`, `playwright` (`npx @playwright/mcp@latest --isolated --headless`, without `--headless` when `JARVIS_PLAYWRIGHT=headed`, one browser per session, all its tools allowed, output in `workspaces/<ws>/playwright/<agent>/`).
 
 Why so little from user settings: loading all user plugins and hooks into every agent made a trivial turn cost about 5x more tokens.
 
@@ -269,6 +269,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
+| `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |
 
 ## Invariants you must keep
 
