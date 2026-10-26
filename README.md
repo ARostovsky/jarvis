@@ -80,7 +80,7 @@ Every agent is a separate Claude session, and every turn costs tokens. Jarvis he
 - Each agent's cost is shown in its panel, plus **Σ**: the total including all the helpers it hired. The tab tooltip shows the workspace total.
 - The arbiter is told to pick the cheapest model that can do each job well: `haiku` for mechanical work, `sonnet` for normal coding, `opus` only for hard problems. You can change any agent's model or effort at any time.
 - The panel shows how full each agent's context is (`ctx 92k/200k (46%)`, amber from 80%), and the node shows the percentage. A long conversation makes every turn more expensive: press **COMPACT** to have the agent summarize it and continue with a short context. Claude Code also compacts on its own when the context is nearly full.
-- Agents load only the minimum from your Claude Code settings. Loading all your plugins and hooks into every agent would make each turn cost about 5x more.
+- Agents load only the minimum from your Claude Code settings (auth, proxy, model and commit attribution, so `"attribution": {"commit": ""}` keeps the Co-Authored-By line out of their commits). Loading all your plugins and hooks into every agent would make each turn cost about 5x more.
 
 ## Quick start
 

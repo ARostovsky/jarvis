@@ -51,12 +51,12 @@ const PLAYWRIGHT = process.env.JARVIS_PLAYWRIGHT ?? '1'; // browser MCP for ever
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
-// Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL) and model.
+// Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
 // Loading full user settings drags in all plugins and hooks: ~5x the tokens per turn.
 function userSettings() {
   try {
-    const { apiKeyHelper, env, model } = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'));
-    return { apiKeyHelper, env, model };
+    const { apiKeyHelper, env, model, attribution, includeCoAuthoredBy } = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'));
+    return { apiKeyHelper, env, model, attribution, includeCoAuthoredBy };
   } catch {
     return {};
   }
