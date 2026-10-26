@@ -129,6 +129,8 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 
 Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`.
 
+Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
+
 When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (1000) characters, so reports do not fill the parent's context. The parent can call `read_agent` for the full text.
 
 ### Board

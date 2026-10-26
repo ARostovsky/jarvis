@@ -118,9 +118,10 @@ const ARBITER_PROMPT = `You are the arbiter. You do not write code yourself: you
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.
 For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.
-Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning).`;
+Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning).
+Agents you spawn can spawn their own sub-agents. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent per area and tell it to split its area into sub-agents, instead of managing every small task yourself.`;
 
-const LEAD_PROMPT = `You can delegate with spawn_agent when your task splits into large independent parts that can run in parallel; sub-agents work in the same repository on their own branches. Do small or sequential work yourself. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
+const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. Do small or sequential work yourself. Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
 
 const BOARD_PROMPT = `There is a shared board with other agents. Notes addressed to you arrive at the top of your messages as "[board notes for you]"; board_read fetches new ones mid-task. Use board_post only for things another agent actually needs (an interface you defined, a decision, a blocker), addressed to those agents.`;
 
@@ -491,6 +492,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return {
       mcpServers: { jarvis: jarvisTools(a.id, team) },
       allowedTools: team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS,
+      // Built-in subagents are invisible in the graph; whoever has spawn_agent must use it instead.
+      ...(team ? { disallowedTools: ['Agent', 'Task'] } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },
     };
   }
