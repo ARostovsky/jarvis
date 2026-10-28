@@ -4,7 +4,7 @@
 
 You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK.
 
-![Jarvis: Jarvis in the center, agents around it, chat on the right](docs/screenshots/hero.png)
+![Jarvis splits a goal into tasks, hires agents and a lead with its own helpers, and asks for approval when needed](docs/screenshots/demo.webp)
 
 ## Why
 
@@ -14,7 +14,7 @@ Jarvis works like a small team with a lead:
 
 - **Jarvis** (the glowing core) is the team lead. It does not write code. It plans, hires agents, passes information between them, and reports back to you.
 - **Agents** (the circles) do the actual work. Each one has its own copy of the code (a separate git branch), so they never overwrite each other.
-- **Lead agents** can hire their own helpers for big sub-tasks, like `backend` above with `migration` and `apple-pay`.
+- **Lead agents** can hire their own helpers for big sub-tasks, like `deploy` above with `ci` and `preview`.
 - **You** watch, chat with anyone, and approve actions that the safety check is not sure about.
 
 ## Who it is for
@@ -30,6 +30,8 @@ You do not need to read the code to use Jarvis. You need to be comfortable with 
 ### The map
 
 Jarvis sits in the center with its agents on a ring around it; each lead gets its own slice of the circle, and its helpers sit on an outer ring inside that slice, so groups never overlap. The rings grow as the team grows.
+
+![Jarvis in the center, agents around it, Jarvis's chat on the right](docs/screenshots/hero.png)
 
 | Color | Meaning |
 |-------|---------|
@@ -59,11 +61,25 @@ Agents run in Claude Code's `auto` permission mode: a built-in classifier approv
 
 ### Controls
 
-Right-click an agent to open its log, change its model or effort, stop it, or delete it. Right-click a tab to rename it, stop all its agents, or archive it.
+Right-click opens a menu. What it offers depends on what you clicked:
 
-![Right-click menu on an agent](docs/screenshots/menu.png)
+- **An agent:** open its log, change its model or effort, hide it (if it works for Jarvis), fold or unfold its helpers (if it is a lead) or its whole group (if it is a helper), stop it while it works, delete it.
+- **Jarvis:** open its chat, change its model or effort, hide idle agents or show them all, stop every agent.
+- **A workspace tab:** rename it, stop all its agents, or archive it. Archived workspaces sit behind the `ARCHIVE n` button next to the tabs.
 
-Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. The agent panel: drag any edge to resize, drag its header to move it; double-click either to reset. A lead folds its helpers into a `+N` badge on its circle while none of them is working, and unfolds as soon as one gets a task. Click the badge (or use the right-click menu, on the lead or on any of its helpers) to fold or unfold by hand; your choice holds until the automatic one agrees with it again. Jarvis has a badge too: once it has more than 8 agents it hides the ones that have been idle for over 10 minutes (with their helpers) behind `+N` and shows each again as soon as it gets work; click the badge or use its right-click menu to show or hide them by hand: **Hide idle agents** puts away every agent that is not working right now (the selected one too) and is offered while any is still shown, **Show all agents** brings everything back. Hiding or folding away the agent whose chat is open switches the panel to Jarvis's chat. Right-click one of Jarvis's agents and pick **Hide** to put just that one away; it comes back when it or one of its helpers gets work, or when you click Jarvis's `+N`.
+![Right-click menu on the frontend agent: Open log, Model, Effort, Hide, Stop, Delete agent](docs/screenshots/menu.png)
+
+Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. Drag any edge of the agent panel to resize it and its header to move it; double-click either to reset.
+
+### Big teams
+
+A team of 30 agents does not fit on one screen, so Jarvis keeps the map to the agents that matter right now:
+
+- **Leads fold their helpers.** While none of a lead's helpers is working, they fold into a `+N` badge on the lead's circle, and unfold as soon as one gets a task. Click the badge, or use the right-click menu on the lead or any helper, to fold or unfold by hand. Your choice holds until the automatic one agrees with it again.
+- **Jarvis hides idle agents.** Once Jarvis has more than 8 agents, it hides the ones that have been idle for over 10 minutes (with their helpers) behind its own `+N`. Each comes back as soon as it gets work.
+- **You can hide by hand.** Right-click one of Jarvis's agents and pick **Hide**, or right-click Jarvis and pick **Hide idle agents** to put away everyone who is not working right now. **Show all agents**, or a click on Jarvis's `+N`, brings everything back.
+
+![A big team: two leads with their helpers out, one folded into +5, and Jarvis hiding 9 idle agents](docs/screenshots/fold.png)
 
 ## Safety: what Jarvis will and will not do
 
