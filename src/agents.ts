@@ -67,7 +67,7 @@ export const SETTINGS_MODEL: string | undefined = SETTINGS.model;
 // Only the user plugins listed here are loaded into agents (all of them would ~5x the tokens per turn).
 // Ids as in enabledPlugins; JARVIS_PLUGINS="" turns them off.
 function userPlugins(): Options['plugins'] {
-  const ids = (process.env.JARVIS_PLUGINS ?? 'caveman@caveman,ponytail@ponytail').split(',').map((x) => x.trim()).filter(Boolean);
+  const ids = (process.env.JARVIS_PLUGINS ?? 'caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official').split(',').map((x) => x.trim()).filter(Boolean);
   try {
     const installed = JSON.parse(readFileSync(join(homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins;
     return ids.flatMap((id) => (installed[id]?.[0]?.installPath ? [{ type: 'local' as const, path: installed[id][0].installPath }] : []));

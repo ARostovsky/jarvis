@@ -268,7 +268,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_ARBITER_MODEL` | model from settings | Arbiter model when the workspace does not set one |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
-| `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
+| `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
 | `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |
 
 ## Invariants you must keep
