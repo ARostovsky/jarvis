@@ -51,11 +51,14 @@ const PLAYWRIGHT = process.env.JARVIS_PLAYWRIGHT ?? '1'; // browser MCP for ever
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
+const readJson = (file: string) => JSON.parse(readFileSync(file, 'utf8'));
+const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
+
 // Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
 // Loading full user settings drags in all plugins and hooks: ~5x the tokens per turn.
 function userSettings() {
   try {
-    const { apiKeyHelper, env, model, attribution, includeCoAuthoredBy } = JSON.parse(readFileSync(join(homedir(), '.claude', 'settings.json'), 'utf8'));
+    const { apiKeyHelper, env, model, attribution, includeCoAuthoredBy } = readJson(join(homedir(), '.claude', 'settings.json'));
     return { apiKeyHelper, env, model, attribution, includeCoAuthoredBy };
   } catch {
     return {};
@@ -69,7 +72,7 @@ export const SETTINGS_MODEL: string | undefined = SETTINGS.model;
 function userPlugins(): Options['plugins'] {
   const ids = (process.env.JARVIS_PLUGINS ?? 'caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official').split(',').map((x) => x.trim()).filter(Boolean);
   try {
-    const installed = JSON.parse(readFileSync(join(homedir(), '.claude', 'plugins', 'installed_plugins.json'), 'utf8')).plugins;
+    const installed = readJson(join(homedir(), '.claude', 'plugins', 'installed_plugins.json')).plugins;
     return ids.flatMap((id) => (installed[id]?.[0]?.installPath ? [{ type: 'local' as const, path: installed[id][0].installPath }] : []));
   } catch {
     return [];
@@ -99,7 +102,7 @@ function makeWorkdir(id: string, repo?: string): { cwd: string; repo?: string } 
   mkdirSync(WORKTREES, { recursive: true });
   const dir = join(WORKTREES, id);
   if (repo && existsSync(join(repo, '.git'))) {
-    execFileSync('git', ['-C', repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir], { stdio: 'pipe' });
+    git(repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir);
     return { cwd: dir, repo: resolve(repo) };
   }
   // shortcut: non-git repo is used in place (no isolation), add copy/sandbox if this bites
@@ -161,6 +164,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const board: Note[] = [];
   const boardSeen = new Map<string, number>(); // agent id -> last note number delivered to it
 
+  function agent(id: string) {
+    const a = agents.get(id);
+    if (!a) throw new Error(`no agent ${id}`);
+    return a;
+  }
+  const working = (a: Agent) => a.status === 'running' || a.status === 'waiting';
   const depth = (a: Agent): number => (a.parentId ? 1 + depth(agents.get(a.parentId)!) : 0);
   const children = (id: string) => [...agents.values()].filter((c) => c.parentId === id);
 
@@ -361,8 +370,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL, effort?: EffortLevel): Agent {
-    const parent = agents.get(parentId);
-    if (!parent) throw new Error(`no agent ${parentId}`);
+    const parent = agent(parentId);
     if (depth(parent) >= MAX_DEPTH) throw new Error(`max depth ${MAX_DEPTH} reached`);
     // Time suffix keeps ids, worktree dirs and jarvis/<id> branches unique across server restarts.
     const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
@@ -382,17 +390,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const a = agents.get(id);
     if (!a || id === ARBITER) throw new Error(`cannot delete ${id}`);
     if (children(id).length) throw new Error(`${id} has sub-agents, delete them first`);
-    const git = (...args: string[]) => execFileSync('git', ['-C', a.cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
-    const changes = a.repo ? git('status', '--porcelain').trim() : '';
+    const changes = a.repo ? git(a.cwd, 'status', '--porcelain').trim() : '';
     if (changes && !dirty) throw new DirtyWorktree(`${id} has uncommitted changes:\n${changes.split('\n').slice(0, 10).join('\n')}`);
     stopAgent(id);
     if (a.repo) {
       if (changes && dirty === 'commit') {
-        git('add', '-A');
-        git('commit', '-m', `jarvis: save uncommitted work of ${id} before delete`);
+        git(a.cwd, 'add', '-A');
+        git(a.cwd, 'commit', '-m', `jarvis: save uncommitted work of ${id} before delete`);
       }
-      execFileSync('git', ['-C', a.repo, 'worktree', 'remove', ...(dirty === 'discard' ? ['--force'] : []), a.cwd], { stdio: 'pipe' });
-    } else if (resolve(a.cwd) === join(WORKTREES, id)) {
+      git(a.repo, 'worktree', 'remove', ...(dirty === 'discard' ? ['--force'] : []), a.cwd);
+    } else if (ownPlainDir(a)) {
       // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
       rmSync(a.cwd, { recursive: true, force: true });
     }
@@ -401,16 +408,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   function sendToAgent(id: string, text: string, from = ARBITER) {
-    const a = agents.get(id);
-    if (!a) throw new Error(`no agent ${id}`);
+    const a = agent(id);
     emit('routed', { from, to: id, text });
     deliver(a, text);
   }
 
   // Model and effort can change mid-conversation; a live session switches right away.
   function configure(id: string, cfg: { model?: string; effort?: EffortLevel }) {
-    const a = agents.get(id);
-    if (!a) throw new Error(`no agent ${id}`);
+    const a = agent(id);
     if (cfg.model && !(MODELS as readonly string[]).includes(cfg.model)) throw new Error(`unknown model ${cfg.model}`);
     if (cfg.effort && !EFFORTS.includes(cfg.effort)) throw new Error(`unknown effort ${cfg.effort}`);
     Object.assign(a, { model: cfg.model ?? a.model, effort: cfg.effort ?? a.effort });
@@ -423,17 +428,15 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Sent straight to the session: deliver() would put board notes in front of the slash command.
   function compactAgent(id: string) {
-    const a = agents.get(id);
-    if (!a) throw new Error(`no agent ${id}`);
-    if (a.status === 'running' || a.status === 'waiting') throw new Error(`${id} is busy, compact it when it is idle`);
+    const a = agent(id);
+    if (working(a)) throw new Error(`${id} is busy, compact it when it is idle`);
     compacting.add(id);
     emit('routed', { from: 'user', to: id, text: '/compact' });
     session(a).push('/compact');
   }
 
   function stopAgent(id: string) {
-    const a = agents.get(id);
-    if (!a) throw new Error(`no agent ${id}`);
+    const a = agent(id);
     setStatus(a, 'stopped');
     sessions.get(id)?.abort.abort();
     // Its permission prompts die with the session.
@@ -441,7 +444,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   // Stops everything that is working, waiting or holding a session. Each resumes on its next message.
-  const stopAll = () => [...agents.values()].filter((a) => a.status === 'running' || a.status === 'waiting' || sessions.has(a.id)).forEach((a) => stopAgent(a.id));
+  const stopAll = () => [...agents.values()].filter((a) => working(a) || sessions.has(a.id)).forEach((a) => stopAgent(a.id));
 
   const boardTools = (owner: string) => [
     tool('board_post', 'Post a note to the shared board for specific agents or "all": decisions, interfaces, findings others need. Recipients get it with their next message.', {
@@ -506,12 +509,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const ownPlainDir = (a: Agent) => !a.repo && resolve(a.cwd) === join(WORKTREES, a.id);
   const workers = () => [...agents.values()].filter((a) => a.id !== ARBITER);
 
-  const busy = () => [...agents.values()].filter((a) => a.status === 'running' || a.status === 'waiting').map((a) => a.id);
+  const busy = () => [...agents.values()].filter(working).map((a) => a.id);
 
   const dirty = () =>
     workers()
       .filter((a) => a.repo && existsSync(a.cwd))
-      .map((a) => ({ id: a.id, changes: execFileSync('git', ['-C', a.cwd, 'status', '--porcelain'], { encoding: 'utf8' }).trim() }))
+      .map((a) => ({ id: a.id, changes: git(a.cwd, 'status', '--porcelain').trim() }))
       .filter((d) => d.changes);
 
   // Leaves nothing behind that isn't recoverable: dirty worktrees are committed to their own branch first,
@@ -520,14 +523,15 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const d = dirty();
     if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${x.changes.split('\n').slice(0, 5).join('\n')}`).join('\n\n'));
     for (const x of d) {
-      execFileSync('git', ['-C', agents.get(x.id)!.cwd, 'add', '-A']);
-      execFileSync('git', ['-C', agents.get(x.id)!.cwd, 'commit', '-m', `jarvis: save uncommitted work of ${x.id} before archiving workspace`]);
+      const cwd = agents.get(x.id)!.cwd;
+      git(cwd, 'add', '-A');
+      git(cwd, 'commit', '-m', `jarvis: save uncommitted work of ${x.id} before archiving workspace`);
     }
     closed = true;
     for (const s of sessions.values()) s.abort.abort();
     try {
       for (const a of workers()) {
-        if (a.repo && existsSync(a.cwd)) execFileSync('git', ['-C', a.repo, 'worktree', 'remove', a.cwd], { stdio: 'pipe' });
+        if (a.repo && existsSync(a.cwd)) git(a.repo, 'worktree', 'remove', a.cwd);
         else if (ownPlainDir(a) && existsSync(a.cwd)) {
           mkdirSync(PARKED, { recursive: true });
           renameSync(a.cwd, join(PARKED, a.id));
@@ -545,7 +549,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function reattach() {
     for (const a of workers()) {
       if (existsSync(a.cwd)) continue;
-      if (a.repo) execFileSync('git', ['-C', a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`], { stdio: 'pipe' });
+      if (a.repo) git(a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`);
       else if (ownPlainDir(a) && existsSync(join(PARKED, a.id))) {
         mkdirSync(WORKTREES, { recursive: true });
         renameSync(join(PARKED, a.id), a.cwd);
@@ -567,7 +571,6 @@ export function createWorkspace(meta: WorkspaceMeta) {
     dir,
     bus,
     busy,
-    dirty,
     detach,
     reattach,
     snapshot,
@@ -630,7 +633,7 @@ export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {
   if (!existsSync(ARCHIVE)) return [];
   return readdirSync(ARCHIVE)
     .filter((d) => existsSync(join(ARCHIVE, d, 'meta.json')))
-    .map((d) => JSON.parse(readFileSync(join(ARCHIVE, d, 'meta.json'), 'utf8')))
+    .map((d) => readJson(join(ARCHIVE, d, 'meta.json')))
     .sort((a, b) => b.archivedAt.localeCompare(a.archivedAt));
 }
 
@@ -638,7 +641,7 @@ export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {
 export function archivedInfo(id: string) {
   const dir = join(ARCHIVE, id);
   if (!existsSync(join(dir, 'meta.json'))) throw new Error(`no archived workspace ${id}`);
-  const meta = JSON.parse(readFileSync(join(dir, 'meta.json'), 'utf8'));
+  const meta = readJson(join(dir, 'meta.json'));
   const agents = new Map<string, Agent>();
   for (const line of readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n')) {
     if (!line) continue;
@@ -662,7 +665,7 @@ export function deleteArchived(id: string, confirmName: string) {
 export function restoreWorkspace(id: string) {
   const from = join(ARCHIVE, id);
   if (!existsSync(join(from, 'meta.json')) || workspaces.has(id)) throw new Error(`cannot restore ${id}`);
-  const { archivedAt, ...meta } = JSON.parse(readFileSync(join(from, 'meta.json'), 'utf8'));
+  const { archivedAt, ...meta } = readJson(join(from, 'meta.json'));
   mkdirSync(join(DATA, 'workspaces'), { recursive: true });
   renameSync(from, join(DATA, 'workspaces', id));
   rmSync(join(DATA, 'workspaces', id, 'meta.json'));
@@ -675,7 +678,7 @@ export function restoreWorkspace(id: string) {
 
 export function loadWorkspaces() {
   mkdirSync(DATA, { recursive: true });
-  const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? JSON.parse(readFileSync(REGISTRY, 'utf8')) : [];
+  const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? readJson(REGISTRY) : [];
   for (const m of metas) workspaces.set(m.id, createWorkspace(m));
   if (!workspaces.size) addWorkspace('Main');
 }

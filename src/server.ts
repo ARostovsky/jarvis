@@ -21,10 +21,11 @@ function ws(id: unknown): Workspace {
 }
 
 // AskUserQuestion reply from the UI: keep only the known string fields.
+const obj = (v: unknown): object => (v && typeof v === 'object' ? v : {});
 const strings = (v: unknown, keys?: string[]): Record<string, string> =>
-  Object.fromEntries(Object.entries(v && typeof v === 'object' ? v : {}).filter(([k, x]) => x != null && (!keys || keys.includes(k))).map(([k, x]) => [k, String(x)]));
+  Object.fromEntries(Object.entries(obj(v)).filter(([k, x]) => x != null && (!keys || keys.includes(k))).map(([k, x]) => [k, String(x)]));
 const replyOf = (b: any): AskReply | undefined =>
-  b.answers ? { answers: strings(b.answers), annotations: Object.fromEntries(Object.entries(b.annotations && typeof b.annotations === 'object' ? b.annotations : {}).map(([q, x]) => [q, strings(x, ['preview', 'notes'])])) } : undefined;
+  b.answers ? { answers: strings(b.answers), annotations: Object.fromEntries(Object.entries(obj(b.annotations)).map(([q, x]) => [q, strings(x, ['preview', 'notes'])])) } : undefined;
 
 // Each returns a JSON-able value or nothing (204).
 const commands: Record<string, (b: any) => unknown> = {

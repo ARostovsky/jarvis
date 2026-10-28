@@ -4,6 +4,7 @@ import { spawn, execFileSync } from 'node:child_process';
 import { openSync, readFileSync, writeFileSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
+import { setTimeout as sleep } from 'node:timers/promises';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const URL = `http://127.0.0.1:${PORT}`;
@@ -23,7 +24,7 @@ async function start() {
     const child = spawn(process.execPath, [join(ROOT, 'src', 'server.ts')], { cwd: ROOT, detached: true, stdio: ['ignore', out, out], env: process.env });
     child.unref();
     writeFileSync(PID, String(child.pid));
-    for (let i = 0; i < 50 && !(await up()); i++) await new Promise((r) => setTimeout(r, 200));
+    for (let i = 0; i < 50 && !(await up()); i++) await sleep(200);
     if (!(await up())) return console.error(`server did not start, see ${LOG}`), process.exit(1);
   }
   console.log(`jarvis: ${URL}`);
@@ -34,7 +35,7 @@ async function stop() {
   const p = pid();
   if (p) { try { process.kill(p); } catch {} }
   rmSync(PID, { force: true });
-  for (let i = 0; i < 25 && (await up()); i++) await new Promise((r) => setTimeout(r, 200));
+  for (let i = 0; i < 25 && (await up()); i++) await sleep(200);
   console.log((await up()) ? `still running on ${PORT} (not started by jarvis?)` : 'stopped');
 }
 

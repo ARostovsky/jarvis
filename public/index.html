@@ -34,7 +34,6 @@
   @keyframes flow { to { stroke-dashoffset: -20; } }
   .pulse { fill: var(--cyan); filter: url(#glow); }
   .pulse.note { fill: var(--violet); }
-  .node { cursor: pointer; }
   .node .ring { fill: rgba(4, 30, 48, .9); stroke: var(--c, var(--cyan-dim)); stroke-width: 2; filter: url(#glow); }
   .node .halo { fill: none; stroke: var(--c, var(--cyan-dim)); stroke-width: 1; opacity: .5; stroke-dasharray: 3 9; transform-box: fill-box; transform-origin: center; animation: spin 12s linear infinite; }
   .node.selected .ring { stroke-width: 3.5; fill: rgba(8, 52, 80, .95); }
@@ -48,7 +47,7 @@
   @keyframes lockon { from { transform: scale(1.6); opacity: 0; } }
   .link.stopped { stroke: var(--gray); opacity: .5; animation: none; } /* nothing flows to a stopped agent */
   .link.lit { stroke: var(--cyan); stroke-width: 2; opacity: 1; }
-  .node { transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
+  .node { cursor: pointer; transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
   #nodes.focus .node:not(.selected):not(.kin):not(:hover) { opacity: .45; }
   .folded { display: none; }
   .node .badge { cursor: pointer; } .node .badge circle { fill: rgba(4, 30, 48, .95); stroke: var(--cyan); stroke-width: 1.5; }
@@ -80,8 +79,8 @@
   #pgripT, #pgripB { left: 0; right: 0; height: 10px; cursor: ns-resize; } #pgripT { top: -5px; } #pgripB { bottom: -5px; }
   #pgrip:hover, #pgrip.dragging, #pgripR:hover, #pgripR.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
   #pgripT:hover, #pgripT.dragging, #pgripB:hover, #pgripB.dragging { background: linear-gradient(180deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
-  #panel header { cursor: move; } #panel header button { cursor: pointer; }
-  #panel header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
+  #panel header button { cursor: pointer; }
+  #panel header { cursor: move; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
   #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #pmeta { font-size: 12px; letter-spacing: .1em; color: var(--cyan-dim); }
   #pmeta.full { color: var(--amber); }
@@ -100,7 +99,7 @@
   #viewMenu label { display: flex; gap: 8px; align-items: center; padding: 5px 0; cursor: pointer; white-space: nowrap; }
   #viewMenu input { flex: none; width: auto; accent-color: var(--cyan); }
   #direct { display: flex; border-top: 1px solid var(--line); }
-  #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); }
+  #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
   .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; backdrop-filter: blur(8px); }
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
   input, #dinput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 16px Rajdhani, sans-serif; padding: 14px 16px; outline: none; }
@@ -111,7 +110,6 @@
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
   .ask button { border: 1px solid var(--line); padding: 6px 14px; margin-right: 6px; }
   .ask .deny, .danger { color: var(--red); }
-  #asks { max-height: calc(100vh - 32px); overflow: auto; }
   .ask button:disabled { opacity: .4; cursor: default; }
   .q { margin: 10px 0; }
   .q .chip { display: inline-block; border: 1px solid var(--amber); color: var(--amber); font-size: 11px; letter-spacing: .1em; padding: 0 6px; margin-right: 6px; }
@@ -215,6 +213,7 @@
 <script>
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
 const who = (id) => (id === ARBITER ? 'jarvis' : id);
+const nameOf = (id) => (id === ARBITER ? 'Jarvis' : agents.get(id)?.agent.name);
 const $ = (id) => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
 const el = (tag, attrs = {}, parent) => {
@@ -223,15 +222,15 @@ const el = (tag, attrs = {}, parent) => {
   parent?.appendChild(e);
   return e;
 };
+// localStorage can be blocked or hold junk: reads fall back to {}, failed writes are ignored.
+const loadJson = (key) => { try { return JSON.parse(localStorage.getItem(key)) ?? {}; } catch { return {}; } };
+const saveJson = (key, v) => { try { localStorage.setItem(key, JSON.stringify(v)); } catch {} };
 const short = (s, n) => (s = String(s ?? '').replace(/\s+/g, ' ')).length > n ? s.slice(0, n) + '…' : s;
 
 const agents = new Map(); // id -> { agent, g, link, log: [] }
 let selected = null;
 
-const pos = (id) => {
-  if (id === ARBITER || id === 'user') return id === 'user' ? { x: 0, y: 400 } : { x: 0, y: 0 };
-  return agents.get(id)?.p ?? { x: 0, y: 0 };
-};
+const pos = (id) => (id === 'user' ? { x: 0, y: 400 } : agents.get(id)?.p ?? { x: 0, y: 0 }); // Jarvis has no p: it sits at the origin
 
 const kidsOf = (id) => [...agents.values()].filter((a) => (a.agent.parentId ?? ARBITER) === id && a.agent.id !== ARBITER);
 
@@ -313,14 +312,12 @@ function place(a) {
 const active = (a) => ['running', 'waiting'].includes(a.agent.status);
 const overrides = {};
 const override = () => overrides[WS] ??= (() => {
-  try {
-    const v = JSON.parse(localStorage.getItem(`jarvis.collapsed.${WS}`)) ?? {};
-    return Array.isArray(v) ? Object.fromEntries(v.map((id) => [id, true])) : v; // older format: list of folded ids
-  } catch { return {}; }
+  const v = loadJson(`jarvis.collapsed.${WS}`);
+  return Array.isArray(v) ? Object.fromEntries(v.map((id) => [id, true])) : v; // older format: list of folded ids
 })();
 const autoFold = (id) => !kidsOf(id).some(active);
 const isFolded = (id) => override()[id] ?? autoFold(id);
-const saveOverride = () => { try { localStorage.setItem(`jarvis.collapsed.${WS}`, JSON.stringify(override())); } catch {} };
+const saveOverride = () => saveJson(`jarvis.collapsed.${WS}`, override());
 function toggleCollapse(id) {
   const o = override(), want = !isFolded(id);
   if (want === autoFold(id)) delete o[id]; else o[id] = want;
@@ -330,10 +327,8 @@ function toggleCollapse(id) {
 
 // Positions of dragged nodes survive page reloads.
 const posKey = () => `jarvis.positions.${WS}`;
-const savedPos = () => { try { return JSON.parse(localStorage.getItem(posKey())) ?? {}; } catch { return {}; } };
-function savePos(id, p) {
-  try { localStorage.setItem(posKey(), JSON.stringify({ ...savedPos(), [id]: p })); } catch {}
-}
+const savedPos = () => loadJson(posKey());
+const savePos = (id, p) => saveJson(posKey(), { ...savedPos(), [id]: p });
 
 function addAgent(agent) {
   if (agents.has(agent.id)) return Object.assign(agents.get(agent.id).agent, agent);
@@ -433,7 +428,7 @@ function log(id, cls, text, cost) {
 let settingsModel = null;
 const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? settingsModel ?? '';
 // Cost of an agent plus everything it spawned, recursively.
-const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + [...agents.values()].filter((c) => (c.agent.parentId ?? (c.agent.id === ARBITER ? null : ARBITER)) === id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
+const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + kidsOf(id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
 function renderTitle() {
   const a = agents.get(selected);
   if (!a) return;
@@ -531,9 +526,9 @@ function select(id) {
   $('log').scrollTop = $('log').scrollHeight;
   document.body.classList.add('panel-open');
   // Every agent takes orders from its parent (Jarvis or a lead); a stray message from the user derails it, so typing needs a double-click first.
-  const lead = id === ARBITER ? null : a.agent.parentId && a.agent.parentId !== ARBITER ? agents.get(a.agent.parentId)?.agent.name ?? a.agent.parentId : 'Jarvis';
+  const lead = id === ARBITER ? null : nameOf(parentOf(id)) ?? parentOf(id);
   $('dinput').readOnly = !!lead;
-  $('dinput').placeholder = lead ? `Works for ${lead} · double-click to write anyway` : `Message ${id === ARBITER ? 'Jarvis' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
+  $('dinput').placeholder = lead ? `Works for ${lead} · double-click to write anyway` : `Message ${nameOf(id)}…  (Enter to send, Shift+Enter for new line)`;
   $('dinput').focus();
 }
 
@@ -567,6 +562,7 @@ function showQuestions(e, card) {
     const opts = document.createElement('div');
     opts.className = 'opts';
     const picked = new Set();
+    const unpick = (keep) => { for (const x of opts.querySelectorAll('button.on')) if (x !== keep) { x.classList.remove('on'); x.querySelector('pre')?.setAttribute('hidden', ''); } };
     for (const o of q.options || []) {
       const b = document.createElement('button');
       b.append(o.label);
@@ -574,8 +570,7 @@ function showQuestions(e, card) {
       const pre = o.preview ? Object.assign(document.createElement('pre'), { textContent: o.preview, hidden: true }) : null;
       if (pre) b.append(pre);
       b.onclick = () => {
-        if (!q.multiSelect) for (const x of opts.querySelectorAll('button.on')) if (x !== b) { x.classList.remove('on'); x.querySelector('pre')?.setAttribute('hidden', ''); }
-        if (!q.multiSelect) picked.clear();
+        if (!q.multiSelect) { unpick(b); picked.clear(); }
         const on = b.classList.toggle('on');
         if (pre) pre.hidden = !on;
         on ? picked.add(o.label) : picked.delete(o.label);
@@ -586,7 +581,7 @@ function showQuestions(e, card) {
     }
     const other = Object.assign(document.createElement('input'), { placeholder: 'Other…' });
     other.oninput = () => {
-      if (!q.multiSelect && other.value) { picked.clear(); for (const x of opts.querySelectorAll('button.on')) { x.classList.remove('on'); x.querySelector('pre')?.setAttribute('hidden', ''); } }
+      if (!q.multiSelect && other.value) { picked.clear(); unpick(); }
       check();
     };
     const notes = Object.assign(document.createElement('input'), { placeholder: 'Notes for the agent (optional)…' });
@@ -712,11 +707,10 @@ async function refreshTabs() {
   $('tabs').replaceChildren(...list.map((w) => {
     const b = document.createElement('button');
     b.className = w.id === WS ? 'active' : '';
-    b.title = `${w.project ?? 'no project folder'} · spent $${(w.costUsd ?? 0).toFixed(2)}`;
+    b.title = `${w.project ?? 'no project folder'} · spent $${(w.costUsd ?? 0).toFixed(2)} · right-click for actions`;
     b.append(w.name);
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
-    b.title += ' · right-click for actions';
     b.onclick = () => switchTo(w.id);
     b.ondblclick = () => renameWs(w);
     b.oncontextmenu = (ev) => menu(ev, [
@@ -761,8 +755,9 @@ const closeMenu = () => $('menu').classList.remove('open');
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#menu')) closeMenu(); });
 addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
 
+const postJson = (path, data) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
 async function wsPost(path, data) {
-  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
+  const r = await postJson(path, data);
   return { ok: r.ok, status: r.status, text: r.ok ? '' : await r.text() };
 }
 
@@ -784,7 +779,7 @@ async function archiveWs(w) {
 }
 
 async function deleteArchivedUi(a) {
-  const r = await fetch('/workspaces/archived/info', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ id: a.id }) });
+  const r = await postJson('/workspaces/archived/info', { id: a.id });
   if (!r.ok) return toast(`delete failed: ${await r.text()}`);
   const info = await r.json();
   const lines = [
@@ -807,17 +802,13 @@ function renderArchived(archived) {
     const row = document.createElement('div');
     const label = document.createElement('span');
     label.append(a.name, Object.assign(document.createElement('small'), { textContent: `${a.project ?? 'no project folder'} · archived ${new Date(a.archivedAt).toLocaleString()}` }));
-    const btn = Object.assign(document.createElement('button'), { textContent: 'RESTORE', onclick: async () => {
+    const btn = Object.assign(document.createElement('button'), { textContent: 'RESTORE', style: 'border:1px solid var(--line);padding:6px 12px', onclick: async () => {
       const r = await wsPost('/workspaces/restore', { id: a.id });
       if (!r.ok) return toast(`restore failed: ${r.text}`);
       $('archived').close();
       switchTo(a.id);
     } });
-    btn.style.border = '1px solid var(--line)';
-    btn.style.padding = '6px 12px';
-    const del = Object.assign(document.createElement('button'), { textContent: 'DELETE', className: 'danger', onclick: () => deleteArchivedUi(a) });
-    del.style.border = '1px solid var(--line)';
-    del.style.padding = '6px 12px';
+    const del = Object.assign(document.createElement('button'), { textContent: 'DELETE', className: 'danger', style: 'border:1px solid var(--line);padding:6px 12px', onclick: () => deleteArchivedUi(a) });
     row.append(label, btn, del);
     return row;
   }));
@@ -834,7 +825,7 @@ function switchTo(id) {
 
 $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
-  const r = await fetch('/workspaces', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ name: $('wsName').value.trim(), project: $('wsProject').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value }) });
+  const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
   if (!r.ok) return toast(`create failed: ${await r.text()}`);
   $('wsName').value = $('wsProject').value = '';
   switchTo((await r.json()).id);
@@ -863,7 +854,7 @@ function toast(text) {
 }
 
 async function post(path, data) {
-  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...data, ws: WS }) });
+  const r = await postJson(path, { ...data, ws: WS });
   if (r.ok) return;
   if (r.status === 409 && path === '/delete') return askDirty(data.id, await r.text());
   toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
@@ -901,19 +892,13 @@ async function askDirty(id, text) {
     [{ value: 'commit', label: 'COMMIT & DELETE' }, { value: 'discard', label: 'DISCARD & DELETE', danger: true }]);
   if (v) post('/delete', { id, dirty: v });
 }
-async function pickModel(id) {
-  const a = agents.get(id)?.agent;
-  const v = await choose('MODEL', '', `Model for ${id === ARBITER ? 'Jarvis' : a?.name}. A running session switches right away.`,
-    ['haiku', 'sonnet', 'opus'].map((m) => ({ value: m, label: m === a?.model ? `${m.toUpperCase()} ✓` : m.toUpperCase() })));
-  if (v) post('/config', { id, model: v });
+// Picks one value of `key` for an agent and sends it to /config; the current one is ticked.
+async function pickConfig(id, key, question, values, cur) {
+  const v = await choose(key.toUpperCase(), '', question, values.map((x) => ({ value: x, label: x === cur ? `${x.toUpperCase()} ✓` : x.toUpperCase() })));
+  if (v) post('/config', { id, [key]: v });
 }
-async function pickEffort(id) {
-  const a = agents.get(id)?.agent;
-  const cur = a?.effort ?? 'medium';
-  const v = await choose('EFFORT', '', `Reasoning effort for ${id === ARBITER ? 'Jarvis' : a?.name}. Higher is slower and pricier.`,
-    ['low', 'medium', 'high', 'xhigh', 'max'].map((e) => ({ value: e, label: e === cur ? `${e.toUpperCase()} ✓` : e.toUpperCase() })));
-  if (v) post('/config', { id, effort: v });
-}
+const pickModel = (id) => pickConfig(id, 'model', `Model for ${nameOf(id)}. A running session switches right away.`, ['haiku', 'sonnet', 'opus'], agents.get(id)?.agent.model);
+const pickEffort = (id) => pickConfig(id, 'effort', `Reasoning effort for ${nameOf(id)}. Higher is slower and pricier.`, ['low', 'medium', 'high', 'xhigh', 'max'], agents.get(id)?.agent.effort ?? 'medium');
 function deleteAgentUi(id) {
   if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
 }
@@ -1015,8 +1000,7 @@ svg.addEventListener('dblclick', (ev) => {
 
 // Panel geometry: drag the edges to resize, the header to move; remembered across reloads, double-click resets.
 const PANEL0 = { w: 440, x: 16, t: 56, b: 16 }; // t clears LINK and the DRAG hint
-let panelBox = { ...PANEL0 };
-try { panelBox = { ...PANEL0, ...JSON.parse(localStorage.getItem('jarvis.panel')) }; } catch {}
+let panelBox = { ...PANEL0, ...loadJson('jarvis.panel') };
 function setPanel(p) {
   const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
   const w = clamp(p.w, 320, innerWidth - 240), t = clamp(p.t, 0, innerHeight - p.b - 200);
@@ -1037,7 +1021,7 @@ function panelDrag(el, apply) {
     el.addEventListener('pointerup', () => {
       el.removeEventListener('pointermove', move);
       el.classList.remove('dragging');
-      try { localStorage.setItem('jarvis.panel', JSON.stringify(panelBox)); } catch {}
+      saveJson('jarvis.panel', panelBox);
     }, { once: true });
   });
   el.addEventListener('dblclick', (ev) => {
@@ -1066,8 +1050,8 @@ const VIEW = [
   ['cost', 'Cost', true],
 ];
 const viewKey = () => `jarvis.view.${WS}`;
-const viewAll = () => { try { return JSON.parse(localStorage.getItem(viewKey())) ?? {}; } catch { return {}; } };
-const saveView = (v) => { try { localStorage.setItem(viewKey(), JSON.stringify(v)); } catch {} };
+const viewAll = () => loadJson(viewKey());
+const saveView = (v) => saveJson(viewKey(), v);
 const parentOf = (id) => (id === ARBITER ? null : agents.get(id)?.agent.parentId ?? ARBITER);
 function shown(id, k, all = viewAll()) {
   for (let cur = id; cur; cur = parentOf(cur)) if (all[cur]?.[k] !== undefined) return all[cur][k];
