@@ -994,6 +994,7 @@ const toWorld = (ev) => {
 function draggable(g, id) {
   g.addEventListener('pointerdown', (ev) => {
     ev.stopPropagation();
+    if (ev.button) return; // right-click opens the menu; selecting here would refit the map under it
     const a = agents.get(id), start = toWorld(ev), p0 = { ...(a.p ?? { x: 0, y: 0 }) };
     let moved = false;
     g.setPointerCapture(ev.pointerId);
@@ -1018,7 +1019,7 @@ function draggable(g, id) {
 }
 
 svg.addEventListener('pointerdown', (ev) => {
-  if (ev.target.closest('#core')) return;
+  if (ev.button || ev.target.closest('#core')) return;
   const start = toWorld(ev);
   svg.setPointerCapture(ev.pointerId);
   svg.classList.add('panning');
