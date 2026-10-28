@@ -121,8 +121,9 @@
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; }
   #toast.show { display: block; }
   #hint { position: fixed; top: 36px; right: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
-  #tabs { position: fixed; top: 12px; left: 16px; right: 260px; display: flex; gap: 6px; flex-wrap: wrap; z-index: 2; }
-  #tabs button { border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); }
+  #tabs { position: fixed; top: 8px; left: 16px; right: 260px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 4px 0; z-index: 2; }
+  body.panel-open #tabs { right: calc(min(var(--panel-w), 100vw - 32px) + 32px); }
+  #tabs button { flex: none; white-space: nowrap; border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); }
   #tabs button.active { color: var(--text); border-color: var(--cyan); box-shadow: 0 0 8px rgba(79, 216, 255, .35); }
   #tabs .dot { width: 7px; height: 7px; border-radius: 50%; }
   #tabs .dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
@@ -1017,6 +1018,8 @@ function renderViewMenu() {
 $('pview').onclick = () => { renderViewMenu(); $('viewMenu').classList.toggle('open'); };
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pview')) $('viewMenu').classList.remove('open'); });
 
+// Vertical wheel scrolls the tab strip sideways.
+$('tabs').addEventListener('wheel', (ev) => { if (!ev.deltaY) return; ev.preventDefault(); $('tabs').scrollLeft += ev.deltaY; }, { passive: false });
 refreshTabs();
 setInterval(refreshTabs, 2000);
 </script>
