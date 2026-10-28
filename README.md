@@ -63,7 +63,7 @@ Right-click an agent to open its log, change its model or effort, stop it, or de
 
 ![Right-click menu on an agent](docs/screenshots/menu.png)
 
-Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view.
+Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. The agent panel: drag any edge to resize, drag its header to move it; double-click either to reset.
 
 ## Safety: what Jarvis will and will not do
 

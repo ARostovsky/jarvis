@@ -9,7 +9,7 @@
 <link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;600&family=JetBrains+Mono:wght@400&display=swap" rel="stylesheet">
 <style>
   :root {
-    --panel-w: 440px;
+    --panel-w: 440px; --panel-x: 16px; --panel-t: 56px; --panel-b: 16px;
     --bg: #03080f; --cyan: #4fd8ff; --cyan-dim: #1b5f7a; --amber: #ffb547; --violet: #c58bff; --red: #ff5a5a; --gray: #4a5a66;
     --text: #cfefff; --panel: rgba(6, 20, 32, .88); --line: rgba(79, 216, 255, .25);
   }
@@ -24,7 +24,7 @@
   svg { position: fixed; inset: 0; width: 100%; height: 100%; cursor: grab; touch-action: none; user-select: none; }
   svg.panning { cursor: grabbing; }
   /* Keep the graph centered in the space left of the panel. */
-  body.panel-open svg { width: calc(100% - min(var(--panel-w), 100vw - 32px) - 32px); }
+  body.panel-open svg { width: calc(100% - min(var(--panel-w), 100vw - 32px) - var(--panel-x) - 16px); }
   .node.dragging { transition: none; cursor: grabbing; }
   .node.speaking .ring { stroke-width: 3.5; }
   #log .live { color: #e6f8ff; opacity: .85; }
@@ -70,10 +70,14 @@
   @keyframes corepulse { 50% { opacity: .65; } }
   #core text { fill: var(--text); text-anchor: middle; font-size: 22px; letter-spacing: .3em; font-weight: 600; pointer-events: none; }
 
-  #panel { position: fixed; top: 16px; right: 16px; bottom: 16px; width: min(var(--panel-w), calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); display: none; flex-direction: column; backdrop-filter: blur(6px); }
+  #panel { position: fixed; top: var(--panel-t); right: var(--panel-x); bottom: var(--panel-b); width: min(var(--panel-w), calc(100vw - 32px)); background: var(--panel); border: 1px solid var(--line); display: none; flex-direction: column; backdrop-filter: blur(6px); }
   #panel.open { display: flex; }
-  #pgrip { position: absolute; left: -5px; top: 0; bottom: 0; width: 10px; cursor: ew-resize; z-index: 1; }
-  #pgrip:hover, #pgrip.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
+  .grip { position: absolute; z-index: 1; }
+  #pgrip, #pgripR { top: 0; bottom: 0; width: 10px; cursor: ew-resize; } #pgrip { left: -5px; } #pgripR { right: -5px; }
+  #pgripT, #pgripB { left: 0; right: 0; height: 10px; cursor: ns-resize; } #pgripT { top: -5px; } #pgripB { bottom: -5px; }
+  #pgrip:hover, #pgrip.dragging, #pgripR:hover, #pgripR.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
+  #pgripT:hover, #pgripT.dragging, #pgripB:hover, #pgripB.dragging { background: linear-gradient(180deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
+  #panel header { cursor: move; } #panel header button { cursor: pointer; }
   #panel header { padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
   #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #pmeta { font-size: 12px; letter-spacing: .1em; color: var(--cyan-dim); }
@@ -121,8 +125,8 @@
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; }
   #toast.show { display: block; }
   #hint { position: fixed; top: 36px; right: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
-  #tabs { position: fixed; top: 8px; left: 16px; right: 260px; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 4px 0; z-index: 2; }
-  body.panel-open #tabs { right: calc(min(var(--panel-w), 100vw - 32px) + 32px); }
+  #tabs { position: fixed; top: 8px; left: 16px; right: 400px; /* clears LINK and the DRAG hint */ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 4px 0; z-index: 2; }
+  body.panel-open #tabs { right: max(400px, calc(min(var(--panel-w), 100vw - 32px) + var(--panel-x) + 16px)); }
   #tabs button { flex: none; white-space: nowrap; border: 1px solid var(--line); background: var(--panel); padding: 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); }
   #tabs button.active { color: var(--text); border-color: var(--cyan); box-shadow: 0 0 8px rgba(79, 216, 255, .35); }
   #tabs .dot { width: 7px; height: 7px; border-radius: 50%; }
@@ -196,8 +200,8 @@
 </dialog>
 
 <aside id="panel">
-  <div id="pgrip" title="Drag to resize · double-click to reset"></div>
-  <header><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <div id="pgrip" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripT" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripB" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripR" class="grip" title="Drag to resize · double-click to reset"></div>
+  <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="log"></div>
   <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button>SEND</button></form>
@@ -953,23 +957,48 @@ svg.addEventListener('dblclick', (ev) => {
   layout();
 });
 
-// Panel width: drag the left edge; remembered across reloads.
-const setPanelW = (w) => document.documentElement.style.setProperty('--panel-w', `${Math.round(w)}px`);
-try { const w = Number(localStorage.getItem('jarvis.panelW')); if (w) setPanelW(w); } catch {}
-$('pgrip').addEventListener('pointerdown', (ev) => {
-  ev.preventDefault();
-  const grip = $('pgrip');
-  grip.setPointerCapture(ev.pointerId);
-  grip.classList.add('dragging');
-  const move = (e) => setPanelW(Math.min(Math.max(innerWidth - 16 - e.clientX, 320), innerWidth - 240));
-  grip.addEventListener('pointermove', move);
-  grip.addEventListener('pointerup', () => {
-    grip.removeEventListener('pointermove', move);
-    grip.classList.remove('dragging');
-    try { localStorage.setItem('jarvis.panelW', parseInt(getComputedStyle(document.documentElement).getPropertyValue('--panel-w'))); } catch {}
-  }, { once: true });
+// Panel geometry: drag the edges to resize, the header to move; remembered across reloads, double-click resets.
+const PANEL0 = { w: 440, x: 16, t: 56, b: 16 }; // t clears LINK and the DRAG hint
+let panelBox = { ...PANEL0 };
+try { panelBox = { ...PANEL0, ...JSON.parse(localStorage.getItem('jarvis.panel')) }; } catch {}
+function setPanel(p) {
+  const clamp = (v, lo, hi) => Math.min(Math.max(v, lo), Math.max(lo, hi));
+  const w = clamp(p.w, 320, innerWidth - 240), t = clamp(p.t, 0, innerHeight - p.b - 200);
+  panelBox = { w, t, x: clamp(p.x, 0, innerWidth - w), b: clamp(p.b, 0, innerHeight - t - 200) };
+  for (const k in panelBox) document.documentElement.style.setProperty(`--panel-${k}`, `${Math.round(panelBox[k])}px`);
+}
+setPanel(panelBox);
+addEventListener('resize', () => setPanel(panelBox));
+function panelDrag(el, apply) {
+  el.addEventListener('pointerdown', (ev) => {
+    if (ev.button || ev.target.closest('button')) return;
+    ev.preventDefault();
+    const p0 = { ...panelBox }, x0 = ev.clientX, y0 = ev.clientY;
+    el.setPointerCapture(ev.pointerId);
+    el.classList.add('dragging');
+    const move = (e) => setPanel({ ...p0, ...apply(p0, e.clientX - x0, e.clientY - y0) });
+    el.addEventListener('pointermove', move);
+    el.addEventListener('pointerup', () => {
+      el.removeEventListener('pointermove', move);
+      el.classList.remove('dragging');
+      try { localStorage.setItem('jarvis.panel', JSON.stringify(panelBox)); } catch {}
+    }, { once: true });
+  });
+  el.addEventListener('dblclick', (ev) => {
+    if (ev.target.closest('button')) return;
+    setPanel(PANEL0);
+    try { localStorage.removeItem('jarvis.panel'); } catch {}
+  });
+}
+panelDrag($('pgrip'), (p, dx) => ({ w: p.w - dx }));
+panelDrag($('pgripT'), (p, dx, dy) => ({ t: p.t + dy }));
+panelDrag($('pgripB'), (p, dx, dy) => ({ b: p.b - dy }));
+panelDrag($('pgripR'), (p, dx) => { dx = Math.min(Math.max(dx, 320 - p.w), p.x, innerWidth - 240 - p.w); return { w: p.w + dx, x: p.x - dx }; }); // the left edge stays put
+// Moving keeps the height: the vertical shift is limited by the free space above and below.
+panelDrag($('panel').querySelector('header'), (p, dx, dy) => {
+  dy = Math.min(Math.max(dy, -p.t), p.b);
+  return { x: p.x - dx, t: p.t + dy, b: p.b - dy };
 });
-$('pgrip').ondblclick = () => { setPanelW(440); try { localStorage.removeItem('jarvis.panelW'); } catch {} };
 
 // Log filters, per agent. An agent without its own setting inherits from its parent, up to the arbiter.
 const VIEW = [

@@ -253,7 +253,7 @@ curl -X POST http://127.0.0.1:7777/say \
 - `handlers`: one function per event type. To show a new event, add a handler here.
 - Workspaces: `refreshTabs`, `menu` (right-click menus), archive dialogs, `switchTo`, `connect` (SSE).
 - `post()` for commands, `choose()` for modal choices, model/effort pickers, delete flow.
-- Pan, zoom, drag; panel resize; the VIEW filter (`jarvis.view.<ws>` in `localStorage`, inherited from parent to child).
+- Pan, zoom, drag; panel geometry (all four edges resize, header moves, `jarvis.panel` in `localStorage`, double-click resets); the VIEW filter (`jarvis.view.<ws>` in `localStorage`, inherited from parent to child).
 
 During the snapshot replay `replaying` is true, so pulses are not animated. `ready` ends the replay.
 
