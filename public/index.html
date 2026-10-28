@@ -50,6 +50,9 @@
   .link.lit { stroke: var(--cyan); stroke-width: 2; opacity: 1; }
   .node { transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
   #nodes.focus .node:not(.selected):not(.kin):not(:hover) { opacity: .45; }
+  .folded { display: none; }
+  .node .badge { cursor: pointer; } .node .badge circle { fill: rgba(4, 30, 48, .95); stroke: var(--cyan); stroke-width: 1.5; }
+  .node .badge text { font-size: 12px; fill: var(--cyan); }
   .node text { fill: var(--text); text-anchor: middle; font-size: 15px; pointer-events: none; }
   .node .sub { fill: var(--c, var(--cyan-dim)); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
   .node .act { fill: #8fb8cc; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
@@ -232,25 +235,38 @@ const pos = (id) => {
 
 const kidsOf = (id) => [...agents.values()].filter((a) => (a.agent.parentId ?? ARBITER) === id && a.agent.id !== ARBITER);
 
-// Arbiter's agents sit on the main ring; sub-agents fan out from their parent, away from the center.
-const SUB_GAP = 190; // node plus its widest status label, e.g. "WAITING · SONNET · MEDIUM"
+// Jarvis's agents sit on an inner ring, sub-agents on an outer ring inside their lead's own sector, so fans never cross.
+// Both rings grow until every node is GAP from its neighbours; the x axis is stretched to the window's shape.
+const GAP = 165; // node plus its labels, measured along the ring's short (vertical) axis
+const RING_GAP = 230; // inner ring to outer ring
 function layout() {
-  kidsOf(ARBITER).forEach((a, i, all) => {
-    const t = -Math.PI / 2 + (i * 2 * Math.PI) / all.length;
-    // Stretch the ring to the window's shape so wide screens get used.
-    const rx = R * Math.min(Math.max(screenAspect() * 0.85, 1.2), 2.4);
-    if (!a.pinned) a.p = { x: Math.cos(t) * rx, y: Math.sin(t) * R };
+  const tops = kidsOf(ARBITER);
+  const subsOf = new Map(tops.map((a) => [a, kidsOf(a.agent.id)]));
+  const shownSubs = (a) => (isFolded(a.agent.id) ? 0 : subsOf.get(a).length);
+  // Angle each top agent needs: room for itself on the inner ring, or for its fan on the outer one.
+  const need = (r1) => tops.map((a) => Math.max(GAP / r1, (shownSubs(a) * GAP) / (r1 + RING_GAP)));
+  let r1 = R;
+  while (need(r1).reduce((x, y) => x + y, 0) > 2 * Math.PI) r1 += 20;
+  const want = need(r1), scale = (2 * Math.PI) / (want.reduce((x, y) => x + y, 0) || 1);
+  const sx = Math.min(Math.max(screenAspect() * 0.85, 1.2), 2.4);
+  const at = (t, r) => ({ x: Math.cos(t) * r * sx, y: Math.sin(t) * r });
+  let t0 = -Math.PI / 2 - (want[0] ?? 0) * scale / 2; // first agent straight above Jarvis
+  tops.forEach((a, i) => {
+    const span = want[i] * scale, mid = t0 + span / 2;
+    if (!a.pinned) a.p = at(mid, r1);
     place(a);
-    const subs = kidsOf(a.agent.id);
-    const base = Math.atan2(a.p.y, a.p.x);
-    // Siblings must sit SUB_GAP apart so their status labels don't overlap; many siblings move further out instead of wrapping around.
-    const dist = Math.max(SUB_GAP, (SUB_GAP * (subs.length - 1)) / 2.4);
-    const step = 2 * Math.asin(SUB_GAP / (2 * dist));
+    const subs = subsOf.get(a), fold = isFolded(a.agent.id);
+    a.badge.classList.toggle('folded', !subs.length);
+    a.badge.lastChild.textContent = fold ? `+${subs.length}` : '−';
+    a.badge.firstChild.setAttribute('r', fold && subs.length > 9 ? 15 : 12);
     subs.forEach((c, j) => {
-      const u = base + (j - (subs.length - 1) / 2) * step;
-      if (!c.pinned) c.p = { x: a.p.x + Math.cos(u) * dist, y: a.p.y + Math.sin(u) * dist };
+      if (!c.pinned) c.p = fold ? { ...a.p } : at(t0 + ((j + 0.5) * span) / subs.length, r1 + RING_GAP);
+      c.hidden = fold;
+      c.g.classList.toggle('folded', fold);
+      c.link.classList.toggle('folded', fold);
       place(c);
     });
+    t0 += span;
   });
   fit();
 }
@@ -263,7 +279,7 @@ function fit() {
   // Fit the actual content (core with its label, nodes with theirs) plus a margin, not a fixed home box.
   let x0 = -150, y0 = -140, x1 = 150, y1 = 170;
   agents.forEach((a) => {
-    if (!a.p || a.agent.id === ARBITER) return;
+    if (!a.p || a.hidden || a.agent.id === ARBITER) return;
     x0 = Math.min(x0, a.p.x - 110); x1 = Math.max(x1, a.p.x + 110);
     y0 = Math.min(y0, a.p.y - 70); y1 = Math.max(y1, a.p.y + 100);
   });
@@ -292,6 +308,26 @@ function place(a) {
   a.link.setAttribute('y2', a.p.y);
 }
 
+// A lead folds its sub-agents into a +N badge while none of them is working, and unfolds when one gets a task.
+// Clicking the badge overrides that (remembered per workspace) until auto agrees with it again.
+const active = (a) => ['running', 'waiting'].includes(a.agent.status);
+const overrides = {};
+const override = () => overrides[WS] ??= (() => {
+  try {
+    const v = JSON.parse(localStorage.getItem(`jarvis.collapsed.${WS}`)) ?? {};
+    return Array.isArray(v) ? Object.fromEntries(v.map((id) => [id, true])) : v; // older format: list of folded ids
+  } catch { return {}; }
+})();
+const autoFold = (id) => !kidsOf(id).some(active);
+const isFolded = (id) => override()[id] ?? autoFold(id);
+const saveOverride = () => { try { localStorage.setItem(`jarvis.collapsed.${WS}`, JSON.stringify(override())); } catch {} };
+function toggleCollapse(id) {
+  const o = override(), want = !isFolded(id);
+  if (want === autoFold(id)) delete o[id]; else o[id] = want;
+  saveOverride();
+  layout();
+}
+
 // Positions of dragged nodes survive page reloads.
 const posKey = () => `jarvis.positions.${WS}`;
 const savedPos = () => { try { return JSON.parse(localStorage.getItem(posKey())) ?? {}; } catch { return {}; } };
@@ -310,19 +346,25 @@ function addAgent(agent) {
   el('circle', { class: 'halo', r: 50 }, g);
   el('circle', { class: 'ring', r: 38 }, g);
   el('text', { y: 5 }, g).textContent = short(agent.name, 12);
-  const sub = el('text', { class: 'sub', y: 64 }, g);
-  const act = el('text', { class: 'act', y: 80 }, g);
+  const sub = el('text', { class: 'sub', y: 72 }, g); // labels start below the selection reticle (r 58)
+  const act = el('text', { class: 'act', y: 88 }, g);
+  const badge = el('g', { class: 'badge folded' }, g);
+  el('circle', { cx: 36, cy: -36, r: 12 }, badge);
+  el('text', { x: 36, y: -32 }, badge);
+  badge.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); toggleCollapse(agent.id); });
   draggable(g, agent.id);
   g.oncontextmenu = (ev) => menu(ev, [
     ['Open log', () => select(agent.id)],
     ['Model…', () => pickModel(agent.id)],
     ['Effort…', () => pickEffort(agent.id)],
+    ...(kidsOf(agent.id).length ? [[isFolded(agent.id) ? 'Expand sub-agents' : 'Collapse sub-agents', () => toggleCollapse(agent.id)]] : []),
+    ...(agent.parentId && agent.parentId !== ARBITER ? [['Collapse with siblings', () => toggleCollapse(agent.parentId)]] : []), // a visible sub-agent means its lead is unfolded
     ...(stoppable(agent.id) ? [['Stop', () => post('/stop', { id: agent.id })]] : []),
     ['Delete agent…', () => deleteAgentUi(agent.id), true],
   ]);
   g.onkeydown = (e) => { if (e.key === 'Enter') select(agent.id); };
   const p = savedPos()[agent.id];
-  agents.set(agent.id, { agent, g, link, sub, act, log: [], p, pinned: !!p });
+  agents.set(agent.id, { agent, g, link, sub, act, badge, log: [], p, pinned: !!p });
   if (agent.parentId && agent.parentId !== ARBITER) link.classList.add('sublink');
   setStatus(agent.id, agent.status);
   layout();
@@ -341,7 +383,13 @@ function removeAgent(id) {
 function setStatus(id, status) {
   const a = agents.get(id);
   if (!a) return;
+  const was = active(a);
   a.agent.status = status;
+  const lead = a.agent.parentId;
+  if (was !== active(a) && lead && lead !== ARBITER) {
+    if (override()[lead] === autoFold(lead)) { delete override()[lead]; saveOverride(); }
+    layout(); // may fold or unfold its lead
+  }
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
   a.g.classList.add(status);
   if (a.sub) a.sub.textContent = [status, a.agent.model, a.agent.effort, ctxPct(a.agent) && `${ctxPct(a.agent)}%`].filter(Boolean).join(' · ');
@@ -361,7 +409,8 @@ const ctxPct = (ag) => ag.context ? Math.round(100 * ag.context.tokens / ag.cont
 const kTok = (n) => `${Math.round(n / 1000)}k`;
 
 function pulse(from, to, cls = '') {
-  const a = pos(from), b = pos(to);
+  const shown = (id) => (agents.get(id)?.hidden ? agents.get(id).agent.parentId : id); // a folded sub-agent pulses from its lead
+  const a = pos(shown(from)), b = pos(shown(to));
   const dot = el('circle', { class: `pulse ${cls}`, r: 5 }, $('pulses'));
   const t0 = performance.now(), dur = 900;
   (function step(now) {
@@ -453,7 +502,7 @@ function markSelected(id) {
   $('nodes').classList.toggle('focus', !!id && id !== ARBITER);
   const a = agents.get(id);
   if (!a) return;
-  const [r1, r2] = id === ARBITER ? [118, 108] : [64, 56];
+  const [r1, r2] = id === ARBITER ? [118, 108] : [58, 53];
   lock.children[0].setAttribute('r', r1);
   lock.children[1].setAttribute('r', r2);
   a.g.prepend(lock);

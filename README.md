@@ -29,7 +29,7 @@ You do not need to read the code to use Jarvis. You need to be comfortable with 
 
 ### The map
 
-Jarvis sits in the center, agents sit around it, and helpers fan out from their lead.
+Jarvis sits in the center with its agents on a ring around it; each lead gets its own slice of the circle, and its helpers sit on an outer ring inside that slice, so groups never overlap. The rings grow as the team grows.
 
 | Color | Meaning |
 |-------|---------|
@@ -63,7 +63,7 @@ Right-click an agent to open its log, change its model or effort, stop it, or de
 
 ![Right-click menu on an agent](docs/screenshots/menu.png)
 
-Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. The agent panel: drag any edge to resize, drag its header to move it; double-click either to reset.
+Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. The agent panel: drag any edge to resize, drag its header to move it; double-click either to reset. A lead folds its helpers into a `+N` badge on its circle while none of them is working, and unfolds as soon as one gets a task. Click the badge (or use the right-click menu, on the lead or on any of its helpers) to fold or unfold by hand; your choice holds until the automatic one agrees with it again.
 
 ## Safety: what Jarvis will and will not do
 
