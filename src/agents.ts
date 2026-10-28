@@ -145,7 +145,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   function emit(type: string, data: object) {
     if (closed) return;
-    const event = { type, ...data };
+    const event = { type, at: Date.now(), ...data }; // at: when it happened, so the UI can tell how long an agent has been idle
     if (!TRANSIENT.has(type)) {
       const line = JSON.stringify(event);
       history.push(line);

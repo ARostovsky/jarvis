@@ -50,8 +50,8 @@
   .node { cursor: pointer; transition: transform .8s cubic-bezier(.2, .8, .2, 1), opacity .3s; }
   #nodes.focus .node:not(.selected):not(.kin):not(:hover) { opacity: .45; }
   .folded { display: none; }
-  .node .badge { cursor: pointer; } .node .badge circle { fill: rgba(4, 30, 48, .95); stroke: var(--cyan); stroke-width: 1.5; }
-  .node .badge text { font-size: 12px; fill: var(--cyan); }
+  .badge { cursor: pointer; } .badge circle { fill: rgba(4, 30, 48, .95); stroke: var(--cyan); stroke-width: 1.5; }
+  .node .badge text, #core .badge text { font-size: 12px; letter-spacing: 0; font-weight: 400; fill: var(--cyan); }
   .node text { fill: var(--text); text-anchor: middle; font-size: 15px; pointer-events: none; }
   .node .sub { fill: var(--c, var(--cyan-dim)); font-size: 11px; letter-spacing: .1em; text-transform: uppercase; }
   .node .act { fill: #8fb8cc; font-size: 11px; font-family: 'JetBrains Mono', monospace; }
@@ -170,6 +170,7 @@
     <circle class="arc a3" r="64"/>
     <circle class="disc" r="44"/>
     <text y="150">JARVIS</text> <!-- below the selection reticle (r 118) -->
+    <g id="coreBadge" class="badge folded"><circle cx="90" cy="-90" r="14"/><text x="90" y="-86"></text></g>
   </g>
   </g>
 </svg>
@@ -239,7 +240,20 @@ const kidsOf = (id) => [...agents.values()].filter((a) => (a.agent.parentId ?? A
 const GAP = 165; // node plus its labels, measured along the ring's short (vertical) axis
 const RING_GAP = 230; // inner ring to outer ring
 function layout() {
-  const tops = kidsOf(ARBITER);
+  const all = kidsOf(ARBITER), foldJ = isFolded(ARBITER), hand = hiddenByHand();
+  const keep = (a) => !hand[a.agent.id] && (!foldJ || busyTree(a) || a.agent.id === selected || a.agent.id === parentOf(selected));
+  const tops = all.filter(keep);
+  all.filter((a) => !tops.includes(a)).forEach((a) => {
+    for (const n of [a, ...kidsOf(a.agent.id)]) {
+      if (!n.pinned) n.p = { x: 0, y: 0 };
+      n.hidden = true;
+      n.g.classList.add('folded');
+      n.link.classList.add('folded');
+    }
+  });
+  tops.forEach((a) => { a.hidden = false; a.g.classList.remove('folded'); a.link.classList.remove('folded'); });
+  $('coreBadge').classList.toggle('folded', !all.length);
+  $('coreBadge').lastChild.textContent = all.length > tops.length ? `+${all.length - tops.length}` : '−';
   const subsOf = new Map(tops.map((a) => [a, kidsOf(a.agent.id)]));
   const shownSubs = (a) => (isFolded(a.agent.id) ? 0 : subsOf.get(a).length);
   // Angle each top agent needs: room for itself on the inner ring, or for its fan on the outer one.
@@ -315,14 +329,52 @@ const override = () => overrides[WS] ??= (() => {
   const v = loadJson(`jarvis.collapsed.${WS}`);
   return Array.isArray(v) ? Object.fromEntries(v.map((id) => [id, true])) : v; // older format: list of folded ids
 })();
-const autoFold = (id) => !kidsOf(id).some(active);
+// Jarvis folds differently: it hides only groups that have been idle for a while, and does so on its own once it has more than 8 agents.
+const JARVIS_FOLD_AT = 8, IDLE_HIDE_MS = 10 * 60 * 1000;
+const fresh = (a) => active(a) || Date.now() - (a.since ?? 0) < IDLE_HIDE_MS;
+const busyTree = (a) => fresh(a) || kidsOf(a.agent.id).some(fresh);
+// Idle time passes without events, so check now and then whether a group should go.
+setInterval(() => { if (isFolded(ARBITER) && kidsOf(ARBITER).some((a) => !a.hidden && !busyTree(a) && a.agent.id !== selected && a.agent.id !== parentOf(selected))) layout(); }, 30000);
+const autoFold = (id) => (id === ARBITER ? kidsOf(ARBITER).length > JARVIS_FOLD_AT : !kidsOf(id).some(active));
 const isFolded = (id) => override()[id] ?? autoFold(id);
 const saveOverride = () => saveJson(`jarvis.collapsed.${WS}`, override());
+// Single agents of Jarvis can be hidden by hand; one comes back when it, or one of its sub-agents, gets work.
+const hiddenSets = {};
+const hiddenByHand = () => hiddenSets[WS] ??= loadJson(`jarvis.hidden.${WS}`);
+function hideAgent(id, on) {
+  if (on) hiddenByHand()[id] = true; else delete hiddenByHand()[id];
+  saveJson(`jarvis.hidden.${WS}`, hiddenByHand());
+  layout();
+  leaveHidden();
+}
+// After the user hides the agent whose chat is open, fall back to Jarvis's chat. Automatic folding never hides the selected agent.
+const leaveHidden = () => { if (selected && agents.get(selected)?.hidden) select(ARBITER); };
+// Jarvis's badge: with anything hidden it shows everything, otherwise it hides the idle agents.
+const anyHidden = () => kidsOf(ARBITER).some((a) => a.hidden);
+const idleShown = () => kidsOf(ARBITER).filter((a) => !a.hidden && !active(a) && !kidsOf(a.agent.id).some(active));
+const toggleJarvis = () => (anyHidden() ? showAll() : hideIdle());
+function showAll() {
+  hiddenSets[WS] = {};
+  saveJson(`jarvis.hidden.${WS}`, {});
+  override()[ARBITER] = false; // until the user hides idle agents again
+  saveOverride();
+  layout();
+}
+// Hides every group idle right now, the selected one too, and hands hiding back to auto.
+function hideIdle() {
+  for (const a of idleShown()) hiddenByHand()[a.agent.id] = true;
+  saveJson(`jarvis.hidden.${WS}`, hiddenByHand());
+  delete override()[ARBITER];
+  saveOverride();
+  layout();
+  leaveHidden();
+}
 function toggleCollapse(id) {
   const o = override(), want = !isFolded(id);
   if (want === autoFold(id)) delete o[id]; else o[id] = want;
   saveOverride();
   layout();
+  leaveHidden();
 }
 
 // Positions of dragged nodes survive page reloads.
@@ -330,11 +382,11 @@ const posKey = () => `jarvis.positions.${WS}`;
 const savedPos = () => loadJson(posKey());
 const savePos = (id, p) => saveJson(posKey(), { ...savedPos(), [id]: p });
 
-function addAgent(agent) {
+function addAgent(agent, at = Date.now()) {
   if (agents.has(agent.id)) return Object.assign(agents.get(agent.id).agent, agent);
   if (agent.id === ARBITER) {
     agents.set(ARBITER, { agent, g: $('core'), log: [] });
-    return setStatus(ARBITER, agent.status);
+    return setStatus(ARBITER, agent.status, at);
   }
   const link = el('line', { class: 'link', x1: 0, y1: 0, x2: 0, y2: 0 }, $('links'));
   const g = el('g', { class: 'node', role: 'button', tabindex: 0 }, $('nodes'));
@@ -353,6 +405,7 @@ function addAgent(agent) {
     ['Model…', () => pickModel(agent.id)],
     ['Effort…', () => pickEffort(agent.id)],
     ...(kidsOf(agent.id).length ? [[isFolded(agent.id) ? 'Expand sub-agents' : 'Collapse sub-agents', () => toggleCollapse(agent.id)]] : []),
+    ...((agent.parentId ?? ARBITER) === ARBITER ? [['Hide', () => hideAgent(agent.id, true)]] : []),
     ...(agent.parentId && agent.parentId !== ARBITER ? [['Collapse with siblings', () => toggleCollapse(agent.parentId)]] : []), // a visible sub-agent means its lead is unfolded
     ...(stoppable(agent.id) ? [['Stop', () => post('/stop', { id: agent.id })]] : []),
     ['Delete agent…', () => deleteAgentUi(agent.id), true],
@@ -361,7 +414,7 @@ function addAgent(agent) {
   const p = savedPos()[agent.id];
   agents.set(agent.id, { agent, g, link, sub, act, badge, log: [], p, pinned: !!p });
   if (agent.parentId && agent.parentId !== ARBITER) link.classList.add('sublink');
-  setStatus(agent.id, agent.status);
+  setStatus(agent.id, agent.status, at);
   layout();
 }
 
@@ -375,15 +428,18 @@ function removeAgent(id) {
   layout();
 }
 
-function setStatus(id, status) {
+function setStatus(id, status, at = Date.now()) {
   const a = agents.get(id);
   if (!a) return;
   const was = active(a);
   a.agent.status = status;
+  if (was !== active(a) || a.since === undefined) a.since = at; // start of the current busy or idle stretch
   const lead = a.agent.parentId;
-  if (was !== active(a) && lead && lead !== ARBITER) {
-    if (override()[lead] === autoFold(lead)) { delete override()[lead]; saveOverride(); }
-    layout(); // may fold or unfold its lead
+  if (was !== active(a) && lead) {
+    if (lead !== ARBITER && override()[lead] === autoFold(lead)) { delete override()[lead]; saveOverride(); }
+    const top = lead === ARBITER ? id : lead;
+    if (active(a) && hiddenByHand()[top]) { delete hiddenByHand()[top]; saveJson(`jarvis.hidden.${WS}`, hiddenByHand()); }
+    layout(); // may fold or unfold its lead, or show it among Jarvis's busy agents
   }
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
   a.g.classList.add(status);
@@ -404,7 +460,7 @@ const ctxPct = (ag) => ag.context ? Math.round(100 * ag.context.tokens / ag.cont
 const kTok = (n) => `${Math.round(n / 1000)}k`;
 
 function pulse(from, to, cls = '') {
-  const shown = (id) => (agents.get(id)?.hidden ? agents.get(id).agent.parentId : id); // a folded sub-agent pulses from its lead
+  const shown = (id) => (agents.get(id)?.hidden ? shown(agents.get(id).agent.parentId ?? ARBITER) : id); // a folded agent pulses from the nearest shown ancestor
   const a = pos(shown(from)), b = pos(shown(to));
   const dot = el('circle', { class: `pulse ${cls}`, r: 5 }, $('pulses'));
   const t0 = performance.now(), dur = 900;
@@ -632,9 +688,9 @@ const handlers = {
       if (stick) box.scrollTop = box.scrollHeight;
     }
   },
-  spawned: (e) => addAgent(e.agent),
+  spawned: (e) => addAgent(e.agent, e.at ?? 0),
   removed: (e) => removeAgent(e.agentId),
-  status: (e) => setStatus(e.agentId, e.status),
+  status: (e) => setStatus(e.agentId, e.status, e.at ?? 0), // events from before `at` existed count as long ago
   text: (e) => { endLive(e.agentId); log(e.agentId, '', e.text); },
   tool: (e) => {
     endLive(e.agentId);
@@ -908,11 +964,14 @@ function deleteAgentUi(id) {
   if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
 }
 $('pdelete').onclick = () => selected && deleteAgentUi(selected);
-$('core').onclick = () => select(ARBITER);
+$('core').onclick = (ev) => { if (!ev.target.closest('#coreBadge')) select(ARBITER); };
+$('coreBadge').onclick = () => toggleJarvis();
 $('core').oncontextmenu = (ev) => menu(ev, [
   ['Open log', () => select(ARBITER)],
   ['Model…', () => pickModel(ARBITER)],
   ['Effort…', () => pickEffort(ARBITER)],
+  ...(idleShown().length ? [['Hide idle agents', hideIdle]] : []),
+  ...(anyHidden() ? [['Show all agents', showAll]] : []),
   ['Stop all agents', () => stopAllWs(WS)],
 ]);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
