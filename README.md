@@ -45,7 +45,7 @@ Each tab at the top is a separate **workspace**: its own Jarvis, team and histor
 
 ### The log and chat
 
-Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to Jarvis lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. Jarvis's chat is where you give new goals.
+Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to Jarvis lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. Only Jarvis's chat is open by default: every other agent takes orders from Jarvis or its lead, and a stray message derails it, so its input is locked; double-click the input to write to it anyway. Jarvis's chat is where you give new goals.
 
 ![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
 

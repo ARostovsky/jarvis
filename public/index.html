@@ -101,6 +101,7 @@
   .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; backdrop-filter: blur(8px); }
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
   input, #dinput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 16px Rajdhani, sans-serif; padding: 14px 16px; outline: none; }
+  #dinput[readonly] { cursor: default; } #dinput[readonly] + button { opacity: .4; pointer-events: none; }
   #dinput { resize: none; max-height: 40vh; line-height: 1.3; }
   #dinput::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--cyan); font: 600 14px Rajdhani, sans-serif; letter-spacing: .15em; padding: 0 16px; cursor: pointer; }
@@ -480,7 +481,10 @@ function select(id) {
   $('panel').classList.add('open'); // first: a hidden panel has scrollHeight 0
   $('log').scrollTop = $('log').scrollHeight;
   document.body.classList.add('panel-open');
-  $('dinput').placeholder = `Message ${id === ARBITER ? 'Jarvis' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
+  // Every agent takes orders from its parent (Jarvis or a lead); a stray message from the user derails it, so typing needs a double-click first.
+  const lead = id === ARBITER ? null : a.agent.parentId && a.agent.parentId !== ARBITER ? agents.get(a.agent.parentId)?.agent.name ?? a.agent.parentId : 'Jarvis';
+  $('dinput').readOnly = !!lead;
+  $('dinput').placeholder = lead ? `Works for ${lead} · double-click to write anyway` : `Message ${id === ARBITER ? 'Jarvis' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
   $('dinput').focus();
 }
 
@@ -819,10 +823,12 @@ async function post(path, data) {
 $('direct').onsubmit = (ev) => {
   ev.preventDefault();
   const text = $('dinput').value.trim();
+  if ($('dinput').readOnly) return;
   if (text && selected) post('/send', { id: selected, text });
   $('dinput').value = '';
   $('dinput').oninput();
 };
+$('dinput').ondblclick = () => { const t = $('dinput'); if (t.readOnly) { t.readOnly = false; t.placeholder = 'Message the agent directly…  (Enter to send, Shift+Enter for new line)'; } };
 $('dinput').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('direct').requestSubmit(); } };
 $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; }; // empty: skip, a wrapped placeholder would inflate scrollHeight
 $('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; markSelected(null); };
