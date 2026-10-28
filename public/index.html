@@ -697,6 +697,7 @@ const handlers = {
 let WS = (() => { try { return localStorage.getItem('jarvis.ws'); } catch { return null; } })();
 let es = null;
 
+let tabsSig = '';
 async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel } = await (await fetch('/workspaces')).json()); } catch { return; }
@@ -704,6 +705,10 @@ async function refreshTabs() {
   renderArchived(archived);
   if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
   if (!es) connect();
+  // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
+  const sig = JSON.stringify([WS, list, archived.length]);
+  if (sig === tabsSig) return;
+  tabsSig = sig;
   $('tabs').replaceChildren(...list.map((w) => {
     const b = document.createElement('button');
     b.className = w.id === WS ? 'active' : '';
