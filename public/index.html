@@ -162,12 +162,12 @@
   <g id="links"></g>
   <g id="pulses"></g>
   <g id="nodes"></g>
-  <g id="core" class="idle" role="button" tabindex="0" aria-label="Arbiter" style="cursor:pointer">
+  <g id="core" class="idle" role="button" tabindex="0" aria-label="Jarvis" style="cursor:pointer">
     <circle class="arc a2" r="96"/>
     <circle class="arc a1" r="80"/>
     <circle class="arc a3" r="64"/>
     <circle class="disc" r="44"/>
-    <text y="128">ARBITER</text>
+    <text y="150">JARVIS</text> <!-- below the selection reticle (r 118) -->
   </g>
   </g>
 </svg>
@@ -180,8 +180,8 @@
     <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
     <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off">
     <div style="display:flex;gap:12px">
-      <div style="flex:1"><label for="wsModel">ARBITER MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
-      <div style="flex:1"><label for="wsEffort">ARBITER EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
+      <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
+      <div style="flex:1"><label for="wsEffort">JARVIS EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
     </div>
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
   </form>
@@ -209,7 +209,8 @@
 
 
 <script>
-const ARBITER = 'arbiter', R = 300;
+const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
+const who = (id) => (id === ARBITER ? 'jarvis' : id);
 const $ = (id) => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
 const el = (tag, attrs = {}, parent) => {
@@ -259,7 +260,7 @@ const HOME = { x: -600, y: -400, w: 1200, h: 800 };
 function fit() {
   if (userView) return;
   // Fit the actual content (core with its label, nodes with theirs) plus a margin, not a fixed home box.
-  let x0 = -150, y0 = -140, x1 = 150, y1 = 160;
+  let x0 = -150, y0 = -140, x1 = 150, y1 = 170;
   agents.forEach((a) => {
     if (!a.p || a.agent.id === ARBITER) return;
     x0 = Math.min(x0, a.p.x - 110); x1 = Math.max(x1, a.p.x + 110);
@@ -386,7 +387,7 @@ const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + [...agents.va
 function renderTitle() {
   const a = agents.get(selected);
   if (!a) return;
-  const name = selected === ARBITER ? 'ARBITER' : `${a.agent.name.toUpperCase()} · ${selected}`;
+  const name = selected === ARBITER ? 'JARVIS' : `${a.agent.name.toUpperCase()} · ${selected}`;
   const cfg = [modelLabel(a.agent), a.agent.effort ?? 'medium'].filter(Boolean).join(' · ');
   const own = a.agent.costUsd ?? 0, total = subtreeCost(selected);
   $('ptitle').textContent = name;
@@ -479,7 +480,7 @@ function select(id) {
   $('panel').classList.add('open'); // first: a hidden panel has scrollHeight 0
   $('log').scrollTop = $('log').scrollHeight;
   document.body.classList.add('panel-open');
-  $('dinput').placeholder = `Message ${id === ARBITER ? 'the arbiter' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
+  $('dinput').placeholder = `Message ${id === ARBITER ? 'Jarvis' : a.agent.name}…  (Enter to send, Shift+Enter for new line)`;
   $('dinput').focus();
 }
 
@@ -597,14 +598,14 @@ const handlers = {
     if (!replaying) pulse(e.from, e.to);
     // Messages from the user or from the agent's own parent are its inputs; from anyone else, reports.
     const input = e.from === 'user' || e.from === parentOf(e.to);
-    log(e.to, input ? 'user' : 'report', `⇐ ${e.from}: ${e.text}`);
-    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${e.to}: ${short(e.text, 300)}`);
+    log(e.to, input ? 'user' : 'report', `⇐ ${who(e.from)}: ${e.text}`);
+    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${who(e.to)}: ${short(e.text, 300)}`);
   },
   board: (e) => {
     const to = e.to.includes('all') ? [...agents.keys()].filter((id) => id !== e.from) : e.to;
     if (!replaying) to.forEach((id) => pulse(e.from, id, 'note'));
-    log(e.from, 'note', `✎ board #${e.n} → ${e.to.join(', ')}: ${e.text}`);
-    to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${e.from}: ${e.text}`));
+    log(e.from, 'note', `✎ board #${e.n} → ${e.to.map(who).join(', ')}: ${e.text}`);
+    to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${who(e.from)}: ${e.text}`));
   },
   result: (e) => {
     const a = agents.get(e.agentId);
@@ -734,7 +735,7 @@ async function deleteArchivedUi(a) {
   if (!r.ok) return toast(`delete failed: ${await r.text()}`);
   const info = await r.json();
   const lines = [
-    `Deleted for good: the event log (graph, chats, board) of ${info.agents} agent(s) and the arbiter.`,
+    `Deleted for good: the event log (graph, chats, board) of ${info.agents} agent(s) and Jarvis.`,
     info.parked.length ? `Deleted for good: plain workdirs ${info.parked.join(', ')}.` : 'No plain workdirs to delete.',
     info.branches.length ? `Kept: agent branches in your repos:\n  ${info.branches.join('\n  ')}` : 'No agent branches.',
   ].join('\n\n');
@@ -847,14 +848,14 @@ async function askDirty(id, text) {
 }
 async function pickModel(id) {
   const a = agents.get(id)?.agent;
-  const v = await choose('MODEL', '', `Model for ${id === ARBITER ? 'the arbiter' : a?.name}. A running session switches right away.`,
+  const v = await choose('MODEL', '', `Model for ${id === ARBITER ? 'Jarvis' : a?.name}. A running session switches right away.`,
     ['haiku', 'sonnet', 'opus'].map((m) => ({ value: m, label: m === a?.model ? `${m.toUpperCase()} ✓` : m.toUpperCase() })));
   if (v) post('/config', { id, model: v });
 }
 async function pickEffort(id) {
   const a = agents.get(id)?.agent;
   const cur = a?.effort ?? 'medium';
-  const v = await choose('EFFORT', '', `Reasoning effort for ${id === ARBITER ? 'the arbiter' : a?.name}. Higher is slower and pricier.`,
+  const v = await choose('EFFORT', '', `Reasoning effort for ${id === ARBITER ? 'Jarvis' : a?.name}. Higher is slower and pricier.`,
     ['low', 'medium', 'high', 'xhigh', 'max'].map((e) => ({ value: e, label: e === cur ? `${e.toUpperCase()} ✓` : e.toUpperCase() })));
   if (v) post('/config', { id, effort: v });
 }
@@ -1038,7 +1039,7 @@ function renderViewMenu() {
     if (own[k] === undefined && id !== ARBITER) l.append(Object.assign(document.createElement('small'), { textContent: 'inherited', style: 'opacity:.5' }));
     return l;
   });
-  const head = Object.assign(document.createElement('div'), { textContent: id === ARBITER ? 'Arbiter (agents inherit this)' : `${agents.get(id)?.agent.name ?? id}`, style: 'font-size:12px;letter-spacing:.15em;color:var(--cyan-dim);padding-bottom:4px' });
+  const head = Object.assign(document.createElement('div'), { textContent: id === ARBITER ? 'Jarvis (agents inherit this)' : `${agents.get(id)?.agent.name ?? id}`, style: 'font-size:12px;letter-spacing:.15em;color:var(--cyan-dim);padding-bottom:4px' });
   const reset = Object.keys(own).length && id !== ARBITER
     ? [Object.assign(document.createElement('button'), { textContent: 'RESET TO INHERITED', style: 'border:1px solid var(--line);padding:4px 10px;margin-top:6px', onclick: () => { const v = viewAll(); delete v[id]; saveView(v); applyView(); renderViewMenu(); } })]
     : [];

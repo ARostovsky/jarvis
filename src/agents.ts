@@ -115,7 +115,7 @@ const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v 
 const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
-const ARBITER_PROMPT = `You are the arbiter. You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
+const ARBITER_PROMPT = `You are Jarvis, the coordinator (your agent id is arbiter). You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.
 For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.
@@ -557,7 +557,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   restore();
   if (agents.get(ARBITER)?.cwd !== ARBITER_HOME) {
     // SDK sessions are stored per folder, so a moved arbiter starts a fresh conversation.
-    const a: Agent = { id: ARBITER, name: 'Arbiter', task: '', cwd: ARBITER_HOME, status: 'idle', lastText: '', costUsd: 0 };
+    const a: Agent = { id: ARBITER, name: 'Jarvis', task: '', cwd: ARBITER_HOME, status: 'idle', lastText: '', costUsd: 0 };
     agents.set(a.id, a);
     emit('spawned', { agent: a });
   }

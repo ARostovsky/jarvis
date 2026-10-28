@@ -4,7 +4,7 @@
 
 You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK.
 
-![Jarvis: the arbiter in the center, agents around it, chat on the right](docs/screenshots/hero.png)
+![Jarvis: Jarvis in the center, agents around it, chat on the right](docs/screenshots/hero.png)
 
 ## Why
 
@@ -12,7 +12,7 @@ One AI coding assistant is great at one task at a time. Real work is usually sev
 
 Jarvis works like a small team with a lead:
 
-- **The arbiter** (the glowing core) is the team lead. It does not write code. It plans, hires agents, passes information between them, and reports back to you.
+- **Jarvis** (the glowing core) is the team lead. It does not write code. It plans, hires agents, passes information between them, and reports back to you.
 - **Agents** (the circles) do the actual work. Each one has its own copy of the code (a separate git branch), so they never overwrite each other.
 - **Lead agents** can hire their own helpers for big sub-tasks, like `backend` above with `migration` and `apple-pay`.
 - **You** watch, chat with anyone, and approve actions that the safety check is not sure about.
@@ -29,7 +29,7 @@ You do not need to read the code to use Jarvis. You need to be comfortable with 
 
 ### The map
 
-The arbiter sits in the center, agents sit around it, and helpers fan out from their lead.
+Jarvis sits in the center, agents sit around it, and helpers fan out from their lead.
 
 | Color | Meaning |
 |-------|---------|
@@ -41,11 +41,11 @@ The arbiter sits in the center, agents sit around it, and helpers fan out from t
 
 Under each circle: model, effort level, and the tool the agent is using right now (`Edit`, `Bash`, `Read`, ...) or the text it is writing. A light pulse runs along a line whenever two agents exchange a message. Violet pulses are notes on the shared board.
 
-Each tab at the top is a separate **workspace**: its own arbiter, team and history. Use one per project or per goal.
+Each tab at the top is a separate **workspace**: its own Jarvis, team and history. Use one per project or per goal.
 
 ### The log and chat
 
-Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to the arbiter lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. The arbiter's chat is where you give new goals.
+Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to Jarvis lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. Jarvis's chat is where you give new goals.
 
 ![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
 
@@ -78,7 +78,7 @@ Drag the background to pan, scroll to zoom, drag circles to rearrange them, doub
 Every agent is a separate Claude session, and every turn costs tokens. Jarvis helps you keep it under control:
 
 - Each agent's cost is shown in its panel, plus **Σ**: the total including all the helpers it hired. The tab tooltip shows the workspace total.
-- The arbiter is told to pick the cheapest model that can do each job well: `haiku` for mechanical work, `sonnet` for normal coding, `opus` only for hard problems. You can change any agent's model or effort at any time.
+- Jarvis is told to pick the cheapest model that can do each job well: `haiku` for mechanical work, `sonnet` for normal coding, `opus` only for hard problems. You can change any agent's model or effort at any time.
 - The panel shows how full each agent's context is (`ctx 92k/200k (46%)`, amber from 80%), and the node shows the percentage. A long conversation makes every turn more expensive: press **COMPACT** to have the agent summarize it and continue with a short context. Claude Code also compacts on its own when the context is nearly full.
 - Agents load only the minimum from your Claude Code settings (auth, proxy, model and commit attribution, so `"attribution": {"commit": ""}` keeps the Co-Authored-By line out of their commits). Loading all your plugins and hooks into every agent would make each turn cost about 5x more.
 
@@ -106,9 +106,9 @@ Other commands: `jarvis stop`, `jarvis restart`, `jarvis status`, `jarvis logs`.
 
 ### First goal
 
-1. Click **+** to create a workspace. Give it a name and, optionally, the path to your project (a git repo). Pick the arbiter's model and effort, or keep the defaults.
-2. In the arbiter chat on the right, describe what you want, for example: *"Add a /health endpoint with a test and a line in the README."*
-3. Watch the arbiter hire agents. Click any of them to follow along. Approve cards when they appear.
+1. Click **+** to create a workspace. Give it a name and, optionally, the path to your project (a git repo). Pick Jarvis's model and effort, or keep the defaults.
+2. In Jarvis chat on the right, describe what you want, for example: *"Add a /health endpoint with a test and a line in the README."*
+3. Watch Jarvis hire agents. Click any of them to follow along. Approve cards when they appear.
 4. When agents finish, their work is on `jarvis/<agent-id>` branches in your repo. Review with `git log` / `git diff`, merge what you like.
 
 ## Settings
@@ -120,8 +120,8 @@ All optional, set as environment variables before `jarvis` or `npm start`:
 | `PORT` | `7777` | Port of the web UI |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for new agents |
 | `JARVIS_AGENT_EFFORT` | `medium` | Default effort for new agents (`low` ... `max`) |
-| `JARVIS_ARBITER_MODEL` | your Claude Code model | Arbiter model when the workspace does not set one |
-| `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
+| `JARVIS_ARBITER_MODEL` | your Claude Code model | Jarvis model when the workspace does not set one |
+| `JARVIS_ARBITER_EFFORT` | `medium` | Jarvis effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | How agents ask for permission: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official` | Which of your Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
 | `JARVIS_PLAYWRIGHT` | `1` | Give every agent a headless browser (Playwright MCP, its own isolated profile); `headed` shows the browser windows on screen; `0` turns it off |
@@ -131,8 +131,8 @@ Data (workspaces, logs, agent workdirs, archive) lives in `~/.local/share/jarvis
 ## Glossary
 
 - **Agent**: one Claude Code session with its own task and its own folder.
-- **Arbiter**: the agent that plans and delegates; it never edits code itself.
-- **Workspace**: a tab with its own arbiter, team and history.
+- **Jarvis**: the agent that plans and delegates; it never edits code itself.
+- **Workspace**: a tab with its own Jarvis, team and history.
 - **Git branch / worktree**: a separate, named copy of the code. Jarvis gives each agent one, so their changes stay apart until you merge them.
 - **Model**: which Claude model an agent uses. `haiku` is fast and cheap, `sonnet` is the everyday choice, `opus` is the strongest and most expensive.
 - **Effort**: how long the model thinks before answering. Higher effort is slower and costs more, but helps on hard problems.
