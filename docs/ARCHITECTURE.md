@@ -235,7 +235,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `POST /delete` | `{ws, id, dirty?: 'commit' \| 'discard'}` | 409 if dirty and no choice |
 | `POST /board` | `{ws, to?, text}` | note from `user` |
 
-Every POST must have `Content-Type: application/json` and an `Origin` of the page itself (`http://127.0.0.1:<port>` or `http://localhost:<port>`), otherwise 403. Errors are 400 with the message as plain text. Example:
+Every request must have a `Host` of `127.0.0.1:<port>` or `localhost:<port>`, otherwise 403: this blocks DNS rebinding. Every POST must also have `Content-Type: application/json` and an `Origin` of the page itself (`http://127.0.0.1:<port>` or `http://localhost:<port>`), otherwise 403. Errors are 400 with the message as plain text. Example:
 
 ```bash
 curl -X POST http://127.0.0.1:7777/say \
@@ -276,7 +276,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 
 1. **Never lose user work.** Deleting or archiving never removes uncommitted changes silently and never deletes `jarvis/<id>` branches or the project folder. New destructive actions should follow the same pattern: refuse, show what would be lost, offer commit or an explicit confirmation.
 2. **The event log is the source of truth.** Any state that must survive a restart must be emitted as a persisted event and handled in `restore()`. Live-only state goes into `TRANSIENT`.
-3. **Loopback and origin check.** Agents run tools on your machine. Do not bind to `0.0.0.0` and do not relax the `Origin` check without adding real authentication.
+3. **Loopback and origin check.** Agents run tools on your machine. Do not bind to `0.0.0.0` and do not relax the `Host` or `Origin` check without adding real authentication.
 4. **Agents get minimal user config.** Adding more from `~/.claude` multiplies token cost for every turn.
 5. **No build step.** Server runs `.ts` directly, UI is one static HTML file. Keep it that way unless there is a strong reason.
 6. **Depth limit.** `MAX_DEPTH` stops agent trees from growing without bound.

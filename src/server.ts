@@ -48,6 +48,8 @@ const commands: Record<string, (b: any) => unknown> = {
 
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
+  // DNS rebinding: a foreign site resolved to 127.0.0.1 sends its own name as Host, and could otherwise read /workspaces and /events.
+  if (!ORIGINS.has(`http://${req.headers.host}`)) return void res.writeHead(403).end();
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(readFileSync(PAGE));
   } else if (req.method === 'GET' && url.pathname === '/workspaces') {
