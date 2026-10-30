@@ -52,6 +52,20 @@ const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
 let seq = 0;
 
 const readJson = (file: string) => JSON.parse(readFileSync(file, 'utf8'));
+
+// Parsed events of an events.jsonl. A line that does not parse (torn by a crash or a full disk mid-append) is skipped, not fatal.
+function readLog(file: string): { line: string; e: any }[] {
+  const out = [];
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    if (!line) continue;
+    try {
+      out.push({ line, e: JSON.parse(line) });
+    } catch {
+      console.warn(`skipping a damaged line in ${file}: ${line.slice(0, 80)}`);
+    }
+  }
+  return out;
+}
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
 
 // Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
@@ -198,10 +212,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function restore() {
     mkdirSync(ARBITER_HOME, { recursive: true });
     if (!existsSync(LOG)) return;
-    for (const line of readFileSync(LOG, 'utf8').split('\n')) {
-      if (!line) continue;
+    const log = readFileSync(LOG, 'utf8');
+    if (log && !log.endsWith('\n')) appendFileSync(LOG, '\n'); // end a torn tail so the next event starts on its own line
+    for (const { line, e } of readLog(LOG)) {
       history.push(line);
-      const e = JSON.parse(line);
       const a = agents.get(e.agentId);
       if (e.type === 'spawned') agents.set(e.agent.id, { ...e.agent });
       else if (e.type === 'removed') agents.delete(e.agentId);
@@ -592,7 +606,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
 export const workspaces = new Map<string, Workspace>();
 
 function saveRegistry() {
-  writeFileSync(REGISTRY, JSON.stringify([...workspaces.values()].map((w) => w.meta), null, 2));
+  // Temp file + rename: a crash mid-write never leaves a half-written registry.
+  writeFileSync(REGISTRY + '.tmp', JSON.stringify([...workspaces.values()].map((w) => w.meta), null, 2));
+  renameSync(REGISTRY + '.tmp', REGISTRY);
 }
 
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}): Workspace {
@@ -643,9 +659,7 @@ export function archivedInfo(id: string) {
   if (!existsSync(join(dir, 'meta.json'))) throw new Error(`no archived workspace ${id}`);
   const meta = readJson(join(dir, 'meta.json'));
   const agents = new Map<string, Agent>();
-  for (const line of readFileSync(join(dir, 'events.jsonl'), 'utf8').split('\n')) {
-    if (!line) continue;
-    const e = JSON.parse(line);
+  for (const { e } of readLog(join(dir, 'events.jsonl'))) {
     if (e.type === 'spawned') agents.set(e.agent.id, e.agent);
     else if (e.type === 'removed') agents.delete(e.agentId);
   }
