@@ -196,7 +196,7 @@ jarvis/
 - `repo` is a plain folder: used in place (no isolation).
 - no `repo`: an empty `worktrees/<id>`.
 
-Repo choice: the arbiter's agents default to the workspace project folder; sub-agents default to their parent's repo, each on its own branch.
+Repo choice: the arbiter's agents default to the workspace project folder; sub-agents default to their parent's repo, each on its own branch. A sub-agent in its parent's repo branches from `jarvis/<parent>`, so it sees the parent's commits (not its uncommitted changes).
 
 **Delete agent** (`deleteAgent`): refused if it has children. If the worktree has uncommitted changes, it throws `DirtyWorktree` (HTTP 409) and the UI asks: `commit` (to `jarvis/<id>`) or `discard`. The branch is always kept.
 
