@@ -66,7 +66,7 @@ Inside `src/agents.ts`, top to bottom:
 npm install
 npm start          # server in the foreground on http://127.0.0.1:7777
 npm run check      # tsc type check
-npm test           # node:test, today only the notes folder's git safety
+npm test           # node:test, today only the git safety of the notes folder and agent worktrees
 ```
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
@@ -203,6 +203,8 @@ jarvis/
 - `repo` is a plain folder: used in place (no isolation).
 - no `repo`: an empty `worktrees/<id>`.
 
+Server-side git in a worktree never reads the worktree's own `.git` file: it is inside the agent's cwd, and an agent can replace it with a repo of its own, whose hooks, `core.fsmonitor`, filter drivers and other config would then run in the server process. `wtGit(a)` returns `--git-dir <common git dir of a.repo>/worktrees/<basename of a.cwd> --work-tree <a.cwd>`; the common git dir comes from `git -C <a.repo> rev-parse --git-common-dir`, and `git worktree add` names the admin dir after the worktree folder, which is the unique agent id. Every git call on a worktree (`workCommit`, `wtChanges` for the dirty checks, `commitWork` for the delete and archive commits) passes these. A replaced `.git` is then simply ignored, and `git worktree remove` refuses that worktree (`validation failed`), so the delete or archive stops after its commit, with nothing removed. `git worktree add` and `remove` run with `-C <a.repo>`. Tracked nested repos (submodules, or any gitlink an agent committed) would make `git status` and `git add -A` run git inside them, with their own config: `wtChanges` passes `--ignore-submodules=dirty` (a moved gitlink still shows) and `addAll` excludes gitlinks from `git add -A` (`:(exclude,literal)` pathspecs from the trusted index). `git worktree remove` without `--force` refuses a worktree with populated submodules, so a gitlink left out of a save commit is never lost.
+
 Repo choice: the arbiter's agents default to the workspace project folder; sub-agents default to their parent's repo, each on its own branch. A sub-agent in its parent's repo starts from `workCommit(parent.cwd)`: the parent's HEAD, plus one extra commit with its uncommitted work if there is any. That commit is built in a temporary index, so the parent's checkout and index stay untouched.
 
 **Delete agent** (`deleteAgent`): refused if it has children. If the worktree has uncommitted changes, it throws `DirtyWorktree` (HTTP 409) and the UI asks: `commit` (to `jarvis/<id>`) or `discard`. The branch is always kept.
@@ -288,7 +290,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 4. **Agents get minimal user config.** Adding more from `~/.claude` multiplies token cost for every turn.
 5. **No build step.** Server runs `.ts` directly, UI is one static HTML file. Keep it that way unless there is a strong reason.
 6. **Depth limit.** `MAX_DEPTH` stops agent trees from growing without bound.
-7. **The server never runs git on config agents can write.** Server-side git takes no hooks or config from a folder agents can write to: in the notes folder it passes an explicit `--git-dir` that lies outside it (see Notes folder). Anything there would run in the server process with no permission check. Agent worktrees do not meet this yet (see Known shortcuts).
+7. **The server never runs git on config agents can write.** Server-side git takes no hooks or config from a folder agents can write to: it passes an explicit `--git-dir` that lies outside it, derived from trusted state (the Jarvis notes git dir or the enclosing repo for notes, `a.repo` plus the worktree name for agent worktrees), and never looks into repos nested inside it (see Notes folder and Workdirs). Anything there would run in the server process with no permission check.
 
 ## Recipes: common changes
 
@@ -340,7 +342,7 @@ Search the code for `shortcut:` for the current list. At the time of writing:
 
 - Notes folder: two arbiters sharing one folder can still make conflicting meaning-level edits to a shared file (see Notes folder). Git history makes that recoverable; a merge step would prevent it. When turns of two workspaces overlap, one commit can carry the other's edits, so the commit label is not reliable attribution. Agents' read-only access is only a prompt rule.
 - A non-git repo is used in place, without isolation.
+- `a.repo` is trusted as the repo the server chose, but `spawn_agent` takes any `repo` path, so an agent can name a folder whose `.git` it controls (its own worktree, say, or a sub-agent of a plain-dir agent defaults to that dir); `git worktree add` and `wtGit()` would then read that repo. Restricting `repo` to the project and the parents' repos would close it.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
-- Automated tests cover only the notes folder's git (`npm test`); the rest relies on the type check.
-- Agent worktrees: the server's own git calls there (`workCommit`, `dirty()`, the delete and archive commits) run `git -C <worktree>`, and the worktree's `.git` file is inside the agent's cwd. An agent that replaces it with its own repo gets its hooks and `core.fsmonitor` run in the server process. Fix: pass `--git-dir <repo>/.git/worktrees/<name> --work-tree <cwd>` explicitly, as for notes.
+- Automated tests cover only the git safety of the notes folder and agent worktrees (`npm test`); the rest relies on the type check.
 - The launcher opens the browser with `xdg-open` (Linux) or `open` (macOS); on other systems open the URL by hand.

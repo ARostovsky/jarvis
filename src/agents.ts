@@ -4,7 +4,7 @@ import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 export type Status = 'running' | 'idle' | 'waiting' | 'error' | 'stopped';
@@ -68,7 +68,6 @@ function readLog(file: string): { line: string; e: any }[] {
   }
   return out;
 }
-// shortcut: in an agent worktree, -C follows the worktree's .git file, which the agent can replace with its own repo whose hooks and core.fsmonitor then run here; pass --git-dir explicitly, as notesGit() does.
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
 
 // Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
@@ -115,15 +114,36 @@ function inbox() {
   };
 }
 
-// The checkout's HEAD plus its uncommitted work (untracked files too) as a commit, built in a throwaway index so the checkout itself is untouched.
-function workCommit(cwd: string): string {
-  const head = git(cwd, 'rev-parse', 'HEAD').trim();
-  if (!git(cwd, 'status', '--porcelain').trim()) return head;
+// Git options for an agent's worktree. The agent can replace the .git file in its cwd with its own repo, whose hooks and config would then run here,
+// so the git dir comes from the repo the server chose: <its common git dir>/worktrees/<name>, named by git worktree add after the worktree folder.
+function wtGit(a: Agent): string[] {
+  const common = git(a.repo!, 'rev-parse', '--path-format=absolute', '--git-common-dir').trim();
+  return ['--git-dir', join(common, 'worktrees', basename(a.cwd)), '--work-tree', a.cwd];
+}
+
+// git status and git add -A run git inside a tracked nested repo (a submodule) with that repo's own config, which the agent can write too.
+// So status skips submodule work trees and add leaves gitlinks out; git worktree remove then refuses a worktree with submodules, so nothing is lost.
+const wtChanges = (a: Agent, at = wtGit(a)) => git(a.cwd, ...at, 'status', '--porcelain', '--ignore-submodules=dirty').trim();
+const addAll = (g: (...args: string[]) => string) =>
+  g('add', '-A', '--', '.', ...g('ls-files', '-s', '-z').split('\0').filter((l) => l.startsWith('160000 ')).map((l) => `:(exclude,literal)${l.split('\t')[1]}`));
+
+function commitWork(a: Agent, message: string) {
+  const at = wtGit(a);
+  const g = (...args: string[]) => git(a.cwd, ...at, ...args);
+  addAll(g);
+  g('commit', '-m', message);
+}
+
+// The worktree's HEAD plus its uncommitted work (untracked files too) as a commit, built in a throwaway index so the checkout itself is untouched.
+export function workCommit(a: Agent): string {
+  const at = wtGit(a);
+  const head = git(a.cwd, ...at, 'rev-parse', 'HEAD').trim();
+  if (!wtChanges(a, at)) return head;
   const env = { ...process.env, GIT_INDEX_FILE: join(tmpdir(), `jarvis-index-${process.pid}-${++seq}`) };
-  const g = (...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe', env }).trim();
+  const g = (...args: string[]) => execFileSync('git', ['-C', a.cwd, ...at, ...args], { encoding: 'utf8', stdio: 'pipe', env }).trim();
   try {
     g('read-tree', head);
-    g('add', '-A');
+    addAll(g);
     return g('commit-tree', g('write-tree'), '-p', head, '-m', 'jarvis: uncommitted work of the parent at spawn');
   } finally {
     rmSync(env.GIT_INDEX_FILE, { force: true });
@@ -190,6 +210,7 @@ export function commitNotes(notes: string, workspace: string) {
 function makeWorkdir(id: string, repo?: string, from?: string): { cwd: string; repo?: string } {
   mkdirSync(WORKTREES, { recursive: true });
   const dir = join(WORKTREES, id);
+  // shortcut: repo is trusted, but spawn_agent lets an agent name any path, its own worktree included, whose .git it controls; restrict repo to the project and its parents' repos if agents start doing that.
   if (repo && existsSync(join(repo, '.git'))) {
     git(repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir, ...(from ? [from] : []));
     return { cwd: dir, repo: resolve(repo) };
@@ -467,7 +488,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     // Arbiter's agents default to the workspace project; sub-agents to their parent's checkout so they see its work.
     const base = repo ?? (parentId === ARBITER ? meta.project : parent.repo ?? parent.cwd);
     // In the parent's repo, start from what the parent has now, uncommitted work included, not from the project's HEAD.
-    const wd = makeWorkdir(id, base, parent.repo && resolve(base!) === parent.repo ? workCommit(parent.cwd) : undefined);
+    const wd = makeWorkdir(id, base, parent.repo && resolve(base!) === parent.repo ? workCommit(parent) : undefined);
     const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort };
     agents.set(id, a);
     emit('spawned', { agent: a });
@@ -482,14 +503,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const a = agents.get(id);
     if (!a || id === ARBITER) throw new Error(`cannot delete ${id}`);
     if (children(id).length) throw new Error(`${id} has sub-agents, delete them first`);
-    const changes = a.repo ? git(a.cwd, 'status', '--porcelain').trim() : '';
+    const changes = a.repo ? wtChanges(a) : '';
     if (changes && !dirty) throw new DirtyWorktree(`${id} has uncommitted changes:\n${changes.split('\n').slice(0, 10).join('\n')}`);
     stopAgent(id);
     if (a.repo) {
-      if (changes && dirty === 'commit') {
-        git(a.cwd, 'add', '-A');
-        git(a.cwd, 'commit', '-m', `jarvis: save uncommitted work of ${id} before delete`);
-      }
+      if (changes && dirty === 'commit') commitWork(a, `jarvis: save uncommitted work of ${id} before delete`);
       git(a.repo, 'worktree', 'remove', ...(dirty === 'discard' ? ['--force'] : []), a.cwd);
     } else if (ownPlainDir(a)) {
       // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
@@ -610,7 +628,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const dirty = () =>
     workers()
       .filter((a) => a.repo && existsSync(a.cwd))
-      .map((a) => ({ id: a.id, changes: git(a.cwd, 'status', '--porcelain').trim() }))
+      .map((a) => ({ id: a.id, changes: wtChanges(a) }))
       .filter((d) => d.changes);
 
   // Leaves nothing behind that isn't recoverable: dirty worktrees are committed to their own branch first,
@@ -618,11 +636,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function detach(commit: boolean) {
     const d = dirty();
     if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${x.changes.split('\n').slice(0, 5).join('\n')}`).join('\n\n'));
-    for (const x of d) {
-      const cwd = agents.get(x.id)!.cwd;
-      git(cwd, 'add', '-A');
-      git(cwd, 'commit', '-m', `jarvis: save uncommitted work of ${x.id} before archiving workspace`);
-    }
+    for (const x of d) commitWork(agents.get(x.id)!, `jarvis: save uncommitted work of ${x.id} before archiving workspace`);
     closed = true;
     for (const s of sessions.values()) s.abort.abort();
     try {
