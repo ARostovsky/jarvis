@@ -2,119 +2,13 @@
 
 **One AI manager that runs a team of AI coding agents, and a live map where you watch them work.**
 
-You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK.
+You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK. Jarvis never edits code. Each agent works on its own git branch.
 
 ![Jarvis splits a goal into tasks, hires agents and a lead with its own helpers, and asks for approval when needed](docs/screenshots/demo.webp)
 
-## Why
-
-One AI coding assistant is great at one task at a time. Real work is usually several tasks at once: backend, frontend, tests, docs. Doing them one after another in one chat is slow, and the context gets mixed up.
-
-Jarvis works like a small team with a lead:
-
-- **Jarvis** (the glowing core) is the team lead. It does not write code. It plans, hires agents, passes information between them, and reports back to you.
-- **Agents** (the circles) do the actual work. Each one has its own copy of the code (a separate git branch), so they never overwrite each other.
-- **Lead agents** can hire their own helpers for big sub-tasks, like `deploy` above with `ci` and `preview`.
-- **You** watch, chat with anyone, and approve actions that the safety check is not sure about.
-
-## Who it is for
-
-- **Developers** who want to run several coding tasks in parallel and review the results as git branches.
-- **Team leads and architects** who want to try "AI team" workflows: split work, compare approaches, see what it costs.
-- **QA, DevOps, analysts** and other IT folks who want to see what AI agents actually do step by step, with full logs and a clear approval point before anything risky runs.
-
-You do not need to read the code to use Jarvis. You need to be comfortable with a terminal and git.
-
-## What you see
-
-### The map
-
-Jarvis sits in the center with its agents on a ring around it; each lead gets its own slice of the circle, and its helpers sit on an outer ring inside that slice, so groups never overlap. The rings grow as the team grows.
-
-![Jarvis in the center, agents around it, Jarvis's chat on the right](docs/screenshots/hero.png)
-
-| Color | Meaning |
-|-------|---------|
-| Cyan, bright | Working right now |
-| Dim | Idle: finished its turn, waiting for the next message |
-| Amber | Waiting for your approval |
-| Red | Something went wrong |
-| Gray | Stopped; its line to the parent turns gray and stops flowing |
-
-Under each circle: model, effort level, and the tool the agent is using right now (`Edit`, `Bash`, `Read`, ...) or the text it is writing. A light pulse runs along a line whenever two agents exchange a message. Violet pulses are notes on the shared board.
-
-Each tab at the top is a separate **workspace**: its own Jarvis, team and history. Use one per project or per goal.
-
-### Notes folder
-
-A workspace can point at a **notes folder**: a persistent folder of markdown files (a `README.md` index, `status.md`, ...) that outlives the workspace and can be shared by several workspaces on the same project. Jarvis reads it at the start of a goal and keeps it up to date. Other agents are told only to read it; they can still write there, since read-only is a prompt rule and not enforced. Set it in the **+** dialog (*Notes folder*, created if missing) or later with right-click on the tab, **Notes folder…** (empty clears it). The change applies when a session next starts or resumes.
-
-Two workspaces can use one folder at the same time. Each Jarvis writes its running log to its own file, `journal/<date>-<workspace id>.md`, and edits shared files such as `status.md` in small steps after re-reading them. Jarvis puts the folder under git and commits it after every Jarvis turn, only the notes path, so you can always see and undo what changed. If the folder is not inside a repo already, its git history lives in Jarvis's data dir (`~/.local/share/jarvis/notes-git/`), and the folder holds only a `.git` file pointing there, so `git log` in the folder works as usual. This is a security measure: agents can write to the notes folder, and a hook or config they put in its own `.git` would otherwise run when Jarvis commits. For the same reason Jarvis does not commit a folder whose own `.git` is inside it (for example one you made a repo yourself, or one set up before this change); the server log then shows the one command that moves the history out. A folder inside a bigger repo, such as your project, is committed to that repo, with its hooks. Repos nested inside the notes folder are left out of commits. Your home folder, or a folder above it, is refused as notes folder. Jarvis writes the folder's `CLAUDE.md` with the `claude-md-management` plugin's rules (concise, one line per concept) and, when a goal is done, adds the session's learnings to it without asking. It keeps its own mechanics (journal files, commits, edit rules) out of that `CLAUDE.md`, so the file stays useful for a plain Claude Code session in the folder. Limit: two workspaces can still make conflicting edits to the same shared file; the git history lets you recover.
-
-### The log and chat
-
-Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to Jarvis lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. Only Jarvis's chat is open by default: every other agent takes orders from Jarvis or its lead, and a stray message derails it, so its input is locked; double-click the input to write to it anyway. Jarvis's chat is where you give new goals.
-
-![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
-
-The **VIEW** button picks what the log shows (your messages, reports, tool calls, board notes, costs), per agent.
-
-### Approvals
-
-Agents run in Claude Code's `auto` permission mode: a built-in classifier approves safe actions on its own. Only what it cannot decide shows up as a card in the bottom-left corner. You read the exact command and press ALLOW or DENY. The agent waits (amber) until you answer. When an agent asks you a question, the card shows its options instead: pick one (or several), or type your own answer under "Other", add notes for the agent if you want, then press ANSWER. SKIP tells the agent you did not answer.
-
-![An approval card: the tests agent wants to run a shell command](docs/screenshots/approve.png)
-
-### Controls
-
-Right-click opens a menu. What it offers depends on what you clicked:
-
-- **An agent:** open its log, change its model or effort, hide it (if it works for Jarvis), fold or unfold its helpers (if it is a lead) or its whole group (if it is a helper), stop it while it works, delete it.
-- **Jarvis:** open its chat, change its model or effort, hide idle agents or show them all, stop every agent.
-- **A workspace tab:** rename it, stop all its agents, or archive it. Archived workspaces sit behind the `ARCHIVE n` button next to the tabs.
-
-![Right-click menu on the frontend agent: Open log, Model, Effort, Hide, Stop, Delete agent](docs/screenshots/menu.png)
-
-Drag the background to pan, scroll to zoom, drag circles to rearrange them, double-click the background to reset the view. Drag any edge of the agent panel to resize it and its header to move it; double-click either to reset.
-
-### Big teams
-
-A team of 30 agents does not fit on one screen, so Jarvis keeps the map to the agents that matter right now:
-
-- **Leads fold their helpers.** While none of a lead's helpers is working, they fold into a `+N` badge on the lead's circle, and unfold as soon as one gets a task. Click the badge, or use the right-click menu on the lead or any helper, to fold or unfold by hand. Your choice holds until the automatic one agrees with it again.
-- **Jarvis hides idle agents.** Once Jarvis has more than 8 agents, it hides the ones that have been idle for over 10 minutes (with their helpers) behind its own `+N`. Each comes back as soon as it gets work.
-- **You can hide by hand.** Right-click one of Jarvis's agents and pick **Hide**, or right-click Jarvis and pick **Hide idle agents** to put away everyone who is not working right now. **Show all agents**, or a click on Jarvis's `+N`, brings everything back.
-
-![A big team: two leads with their helpers out, one folded into +5, and Jarvis hiding 9 idle agents](docs/screenshots/fold.png)
-
-## Safety: what Jarvis will and will not do
-
-- **Your project folder is never edited directly** when it is a git repo. Every agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge those branches yourself, like any other branch.
-- **Nothing is lost silently.** Deleting an agent with unsaved changes asks you to commit them to its branch or discard them. Archiving a workspace refuses while agents are working, and commits any unsaved work first. Agent branches are never deleted by Jarvis.
-- **Agents cannot run code through Jarvis's own git.** When Jarvis checks or commits an agent's worktree, it takes the git dir from your repo, not from the worktree's `.git` file, which the agent could replace with a repo of its own. Repos nested inside a worktree are not looked into, and Jarvis's save commits leave their pointers out; git then refuses to remove that worktree, so nothing is lost.
-- **Archive, not delete.** Closing a workspace moves it to the archive (button `ARCHIVE n`). You can restore it later with all conversations. Permanent delete is only available in the archive, and asks you to type the workspace name.
-- **Local only.** The web UI listens on `127.0.0.1` and rejects requests from other websites. Nothing is exposed to your network.
-- **Restarts are safe.** Every event is written to disk. After a restart the map, logs and costs come back, and agents continue their conversations on the next message.
-
-## Costs
-
-Every agent is a separate Claude session, and every turn costs tokens. Jarvis helps you keep it under control:
-
-- Each agent's cost is shown in its panel, plus **Σ**: the total including all the helpers it hired. The tab tooltip shows the workspace total.
-- Jarvis is told to pick the cheapest model that can do each job well: `haiku` for mechanical work, `sonnet` for normal coding, `opus` only for hard problems. You can change any agent's model or effort at any time.
-- The panel shows how full each agent's context is (`ctx 92k/200k (46%)`, amber from 80%), and the node shows the percentage. A long conversation makes every turn more expensive: press **COMPACT** to have the agent summarize it and continue with a short context. Claude Code also compacts on its own when the context is nearly full.
-- Agents load only the minimum from your Claude Code settings (auth, proxy, model and commit attribution, so `"attribution": {"commit": ""}` keeps the Co-Authored-By line out of their commits). Loading all your plugins and hooks into every agent would make each turn cost about 5x more.
-
 ## Quick start
 
-### You need
-
-- **Node.js 24 or newer** (`node --version`)
-- **git**
-- **Claude Code** set up on this machine, so that `claude` works in your terminal. Agents use the same login, API key or proxy settings.
-- Linux or macOS
-
-### Install and run
+You need Linux or macOS, **Node.js 24+**, **git**, and **Claude Code** set up so that `claude` works in your terminal. Agents use the same login, API key or proxy settings.
 
 ```bash
 git clone https://github.com/ARostovsky/jarvis.git
@@ -125,50 +19,99 @@ ln -s "$PWD/bin/jarvis.mjs" ~/.local/bin/jarvis   # once; any folder in your PAT
 jarvis            # starts the server in the background and opens http://127.0.0.1:7777
 ```
 
-Other commands: `jarvis stop`, `jarvis restart`, `jarvis status`, `jarvis logs`. To run in the foreground instead: `npm start`.
+Also: `jarvis stop|restart|status|logs`. Foreground: `npm start`.
 
-### First goal
+First goal:
 
-1. Click **+** to create a workspace. Give it a name and, optionally, the path to your project (a git repo). Pick Jarvis's model and effort, or keep the defaults.
-2. In Jarvis chat on the right, describe what you want, for example: *"Add a /health endpoint with a test and a line in the README."*
-3. Watch Jarvis hire agents. Click any of them to follow along. Approve cards when they appear.
-4. When agents finish, their work is on `jarvis/<agent-id>` branches in your repo. Review with `git log` / `git diff`, merge what you like.
+1. Click **+**. Name the workspace and, optionally, give the path to your git project.
+2. In the Jarvis chat, describe a goal, for example: *"Add a /health endpoint with a test."*
+3. Watch Jarvis hire agents. Answer approval cards.
+4. Work lands on `jarvis/<agent-id>` branches in your repo. Review and merge.
+
+## What you see
+
+### The map
+
+Jarvis is in the center, agents around it. Each tab is a separate workspace: its own Jarvis, team and history.
+
+![Jarvis in the center, agents around it, Jarvis's chat on the right](docs/screenshots/hero.png)
+
+| Color | Meaning |
+|-------|---------|
+| Cyan, bright | Working right now |
+| Dim | Idle, waiting for the next message |
+| Amber | Waiting for your approval |
+| Red | Something went wrong |
+| Gray | Stopped |
+
+### Log and chat
+
+- Click a circle to open its log: task, messages, tool calls, cost per step.
+- Give goals in Jarvis's chat. Other agents' inputs are locked; double-click one to write anyway.
+
+![An agent's log: the task, messages to its helpers, a board note, the cost](docs/screenshots/agent.png)
+
+### Approvals
+
+- Agents run in Claude Code's `auto` mode. Only actions its classifier cannot decide show up as a card.
+- Read the command, press ALLOW or DENY. The agent waits.
+
+![An approval card: the tests agent wants to run a shell command](docs/screenshots/approve.png)
+
+### Controls
+
+- Right-click an agent, Jarvis or a tab: model, effort, stop, delete, hide, rename, archive.
+
+![Right-click menu on the frontend agent: Open log, Model, Effort, Hide, Stop, Delete agent](docs/screenshots/menu.png)
+
+### Big teams
+
+- A lead folds its helpers into a `+N` badge while none of them works.
+- Jarvis hides agents that were idle over 10 minutes once it has more than 8. Right-click Jarvis for **Hide idle agents** or **Show all agents**.
+
+![A big team: two leads with their helpers out, one folded into +5, and Jarvis hiding 9 idle agents](docs/screenshots/fold.png)
+
+### Notes folder
+
+- A workspace can point at a persistent markdown folder, shareable between workspaces. Set it in the **+** dialog or the tab's right-click menu.
+- Jarvis reads it at the start of a goal and keeps it up to date. Other agents are only *told* to read it. This is a prompt rule, not enforced, so they can still write there.
+- Jarvis commits the folder to git after each turn. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Safety
+
+- **Your project folder is never edited directly** when it is a git repo. Each agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge.
+- **Nothing is lost silently.** Deleting an agent with unsaved changes asks you to commit or discard them. Archiving refuses while agents work, and commits unsaved work first. Jarvis never deletes agent branches.
+- **Agents cannot run code through Jarvis's own git.** Jarvis takes the git dir from your repo, not from the worktree's `.git` file, which an agent could replace. Repos nested in a worktree are not looked into.
+- **Archive, not delete.** Closing a workspace archives it, and you can restore it with all conversations. Permanent delete works only in the archive and asks you to type the workspace name.
+- **Local only.** The web UI listens on `127.0.0.1` and rejects requests from other websites.
+- **Restarts are safe.** Every event is written to disk. After a restart the map, logs and costs return, and agents continue on the next message.
+
+## Costs
+
+- Every agent is a separate Claude session. Each panel shows its cost and **Σ**, the total with its helpers.
+- Jarvis picks the cheapest fitting model (`haiku`, `sonnet`, `opus`). You can change it.
+- Long context costs more. Press **COMPACT** to summarize.
 
 ## Settings
 
-All optional, set as environment variables before `jarvis` or `npm start`:
+All optional. Set as environment variables before `jarvis` or `npm start`:
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `PORT` | `7777` | Port of the web UI |
+| `PORT` | `7777` | Web UI port |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for new agents |
-| `JARVIS_AGENT_EFFORT` | `medium` | Default effort for new agents (`low` ... `max`) |
-| `JARVIS_ARBITER_MODEL` | your Claude Code model | Jarvis model when the workspace does not set one |
+| `JARVIS_AGENT_EFFORT` | `medium` | Default agent effort (`low` ... `max`) |
+| `JARVIS_ARBITER_MODEL` | your Claude Code model | Jarvis model |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Jarvis effort |
-| `JARVIS_PERMISSION_MODE` | `auto` | How agents ask for permission: `auto`, `acceptEdits`, `default`, ... |
-| `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Which of your Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
-| `JARVIS_PLAYWRIGHT` | `1` | Give every agent a headless browser (Playwright MCP, its own isolated profile); `headed` shows the browser windows on screen; `0` turns it off |
+| `JARVIS_PERMISSION_MODE` | `auto` | `auto`, `acceptEdits`, `default`, ... |
+| `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
+| `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
 
-Data (workspaces, logs, agent workdirs, archive) lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never inside this repo.
-
-## Glossary
-
-- **Agent**: one Claude Code session with its own task and its own folder.
-- **Jarvis**: the agent that plans and delegates; it never edits code itself.
-- **Workspace**: a tab with its own Jarvis, team and history.
-- **Git branch / worktree**: a separate, named copy of the code. Jarvis gives each agent one, so their changes stay apart until you merge them.
-- **Model**: which Claude model an agent uses. `haiku` is fast and cheap, `sonnet` is the everyday choice, `opus` is the strongest and most expensive.
-- **Effort**: how long the model thinks before answering. Higher effort is slower and costs more, but helps on hard problems.
-- **Board**: shared notes between agents, for facts several of them need (an API shape, a decision).
-- **Token**: the unit Claude usage is billed in. More text read and written means more tokens.
+Data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never in this repo.
 
 ## Customize it
 
-Jarvis is small on purpose: about 750 lines of TypeScript, one HTML file, no build step, two runtime dependencies. It is easy to change, by hand or with your own coding agent.
-
-Start with **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: how it works inside, the event model, the HTTP API, the rules it must keep (never lose work, local only), and step-by-step recipes for common changes such as adding a tool for agents, a new UI action, or another model. The repo's `CLAUDE.md` points Claude Code there automatically.
-
-Built on the [Claude Agent SDK](https://docs.claude.com/en/docs/agent-sdk/overview).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the internals, the HTTP API and recipes for common changes.
 
 ## License
 
