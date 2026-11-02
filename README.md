@@ -47,7 +47,9 @@ Each tab at the top is a separate **workspace**: its own Jarvis, team and histor
 
 ### Notes folder
 
-A workspace can point at a **notes folder**: a persistent folder of markdown files (a `README.md` index, `status.md`, ...) that outlives the workspace and can be shared by several workspaces on the same project. Jarvis reads it at the start of a goal and keeps it up to date; other agents may only read it. Set it in the **+** dialog (*Notes folder*, created if missing) or later with right-click on the tab, **Notes folder…** (empty clears it). The change applies when a session next starts or resumes. If two workspaces use the same folder at the same time, the last write wins.
+A workspace can point at a **notes folder**: a persistent folder of markdown files (a `README.md` index, `status.md`, ...) that outlives the workspace and can be shared by several workspaces on the same project. Jarvis reads it at the start of a goal and keeps it up to date; other agents may only read it. Set it in the **+** dialog (*Notes folder*, created if missing) or later with right-click on the tab, **Notes folder…** (empty clears it). The change applies when a session next starts or resumes.
+
+Two workspaces can use one folder at the same time. Each Jarvis writes its running log to its own file, `journal/<date>-<workspace id>.md`, and edits shared files such as `status.md` in small steps after re-reading them. Jarvis puts the folder under git (`git init` if it is not inside a repo already) and commits it after every Jarvis turn, only the notes path, so you can always see and undo what changed. Limit: two workspaces can still make conflicting edits to the same shared file; the git history lets you recover.
 
 ### The log and chat
 

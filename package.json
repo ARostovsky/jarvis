@@ -4,6 +4,7 @@
   "description": "One AI arbiter that spawns, steers and watches a team of Claude Code agents, with a live web map.",
   "scripts": {
     "check": "tsc",
+    "test": "node --test test/*.test.ts",
     "start": "node src/server.ts"
   },
   "keywords": [

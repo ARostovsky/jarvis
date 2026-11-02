@@ -65,7 +65,8 @@ Inside `src/agents.ts`, top to bottom:
 ```bash
 npm install
 npm start          # server in the foreground on http://127.0.0.1:7777
-npm run check      # tsc type check; the only automated check today
+npm run check      # tsc type check
+npm test           # node:test, today only the notes folder's git safety
 ```
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
@@ -136,6 +137,8 @@ When an agent finishes a turn, its result goes to its parent as `[agent <id> fin
 ### Notes folder
 
 `WorkspaceMeta.notes` (optional absolute path, persisted in `workspaces.json` and `meta.json` like `project`) points at a persistent markdown folder, shared by workspaces on the same project. `agentOptions()` passes it as `additionalDirectories` to every agent and appends a prompt: the arbiter is told to read and maintain it, all other agents only that it is read-only for them (a prompt rule, not enforced). `agentOptions()` runs when a session starts, so a change through `setWorkspaceNotes` / `POST /workspaces/notes` applies when a session next starts or resumes (after a restart or `stop`, then a message); there is no live reload.
+
+Sharing one folder between workspaces is made safe in two ways. Git: agents can write anything under the notes folder, `.git` included, so the server's own git never takes hooks or config from inside it (hooks, `core.fsmonitor`, filter drivers, `gpg.program` and `include.path` there would all run in the server process, past the permission classifier). `notesGit()` picks the repo: Jarvis's own git dir `$DATA/notes-git/<sha256 of the path, 16 hex>` if it exists, else an enclosing repo looked up from the folder's parent (so a planted `<notes>/.git` is never used; an existing repo, possibly the project's, is used as is, with its hooks), else none. Every call passes `--git-dir` and `--work-tree` explicitly. A folder whose own `<notes>/.git` exists without a Jarvis git dir (made a repo by the user) is not committed; `commitNotes()` logs a warning with the `git init --separate-git-dir` command that moves the history out. `prepareNotes()` refuses home and folders above it (every agent would get write access to all of home), and otherwise runs `git init --separate-git-dir <Jarvis git dir>` when no repo applies, which leaves only a `.git` file in the folder for the user's own git. After each arbiter `result`, `commitNotes()` runs `git add -A -- <notes>` and a pathspec commit `notes: <workspace>, <date>`, so other staged files in a shared repo are not committed. Embedded repos under the folder are excluded from both (`:(exclude)` pathspecs from `embeddedRepos()`, a hand walk that does not follow symlinks): git checks an embedded repo by running `git status` inside it with that repo's own config. It uses the synchronous `execFileSync`, so commits of all workspaces in this one process never overlap (no locks), supplies a `Jarvis` identity when git has none, and never throws: a failure logs a warning and the files go in the next commit. Prompt: each arbiter writes its log only to `journal/<date>-<workspace id>.md`, and edits shared files by re-reading and using small `Edit` changes, never a whole-file `Write`.
 
 ### Board
 
@@ -285,6 +288,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 4. **Agents get minimal user config.** Adding more from `~/.claude` multiplies token cost for every turn.
 5. **No build step.** Server runs `.ts` directly, UI is one static HTML file. Keep it that way unless there is a strong reason.
 6. **Depth limit.** `MAX_DEPTH` stops agent trees from growing without bound.
+7. **The server never runs git on config agents can write.** Server-side git takes no hooks or config from a folder agents can write to: in the notes folder it passes an explicit `--git-dir` that lies outside it (see Notes folder). Anything there would run in the server process with no permission check. Agent worktrees do not meet this yet (see Known shortcuts).
 
 ## Recipes: common changes
 
@@ -328,14 +332,15 @@ Find the agent node `contextmenu` handler that calls `menu(ev, items)` in `publi
 - Comments explain why, not what.
 - Known limits are marked in code as `// shortcut: <limit>, <when to upgrade>`.
 - Commits follow Conventional Commits (`feat:`, `fix:`, ...).
-- After a change, run `npm run check` and try it in the UI with a throwaway data dir (see [Running and checking](#running-and-checking)).
+- After a change, run `npm run check` and `npm test`, and try it in the UI with a throwaway data dir (see [Running and checking](#running-and-checking)).
 
 ## Known shortcuts
 
 Search the code for `shortcut:` for the current list. At the time of writing:
 
-- Notes folder: two workspaces sharing one folder at the same time have no locking; last write wins. Agents' read-only access is only a prompt rule.
+- Notes folder: two arbiters sharing one folder can still make conflicting meaning-level edits to a shared file (see Notes folder). Git history makes that recoverable; a merge step would prevent it. When turns of two workspaces overlap, one commit can carry the other's edits, so the commit label is not reliable attribution. Agents' read-only access is only a prompt rule.
 - A non-git repo is used in place, without isolation.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
-- No automated tests beyond the type check.
+- Automated tests cover only the notes folder's git (`npm test`); the rest relies on the type check.
+- Agent worktrees: the server's own git calls there (`workCommit`, `dirty()`, the delete and archive commits) run `git -C <worktree>`, and the worktree's `.git` file is inside the agent's cwd. An agent that replaces it with its own repo gets its hooks and `core.fsmonitor` run in the server process. Fix: pass `--git-dir <repo>/.git/worktrees/<name> --work-tree <cwd>` explicitly, as for notes.
 - The launcher opens the browser with `xdg-open` (Linux) or `open` (macOS); on other systems open the URL by hand.

@@ -3,7 +3,8 @@ import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { dirname, join, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 export type Status = 'running' | 'idle' | 'waiting' | 'error' | 'stopped';
@@ -35,6 +36,7 @@ const DATA = join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'
 const WORKTREES = join(DATA, 'worktrees');
 const REGISTRY = join(DATA, 'workspaces.json');
 const ARCHIVE = join(DATA, 'archive');
+const NOTES_GIT = join(DATA, 'notes-git');
 // Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
@@ -66,6 +68,7 @@ function readLog(file: string): { line: string; e: any }[] {
   }
   return out;
 }
+// shortcut: in an agent worktree, -C follows the worktree's .git file, which the agent can replace with its own repo whose hooks and core.fsmonitor then run here; pass --git-dir explicitly, as notesGit() does.
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
 
 // Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
@@ -124,6 +127,63 @@ function workCommit(cwd: string): string {
     return g('commit-tree', g('write-tree'), '-p', head, '-m', 'jarvis: uncommitted work of the parent at spawn');
   } finally {
     rmSync(env.GIT_INDEX_FILE, { force: true });
+  }
+}
+
+// Agents can write anything under notes, .git included, so the server's own git must never take hooks or config from there.
+// A folder Jarvis puts under git gets its git dir here instead (a .git file in the folder points to it, for the user's own git).
+const notesGitDir = (notes: string) => join(NOTES_GIT, createHash('sha256').update(notes).digest('hex').slice(0, 16));
+
+// Git options for notes, or undefined when the only repo is one rooted in the folder itself (agents could have written it).
+function notesGit(notes: string): string[] | undefined {
+  const own = notesGitDir(notes);
+  if (existsSync(own)) return ['--git-dir', own, '--work-tree', notes];
+  if (existsSync(join(notes, '.git'))) return undefined;
+  // An enclosing repo, looked up from the parent so a .git planted in notes later is never used.
+  const up = (x: string) => git(dirname(notes), 'rev-parse', x).trim();
+  try {
+    return ['--git-dir', up('--absolute-git-dir'), '--work-tree', up('--show-toplevel')];
+  } catch {
+    return undefined;
+  }
+}
+
+// git checks an embedded repo by running git status inside it, with that repo's own (agent-written) config, so commits leave them out.
+// A hand walk: readdirSync's recursive mode follows symlinks, and a link to / would stall the server.
+const embeddedRepos = (dir: string): string[] =>
+  readdirSync(dir, { withFileTypes: true }).flatMap((e) => (!e.isDirectory() || e.name === '.git' ? [] : existsSync(join(dir, e.name, '.git')) ? [join(dir, e.name)] : embeddedRepos(join(dir, e.name))));
+
+// Creates the notes folder and gives it git history unless it already sits inside some repo (then that repo is used as it is).
+// Home or a folder above it would give every agent write access to all of home and commit it: refused.
+export function prepareNotes(notes: string) {
+  if (!relative(notes, homedir()).startsWith('..')) throw new Error(`notes folder must not be your home folder or contain it: ${notes}`);
+  mkdirSync(notes, { recursive: true });
+  // init --separate-git-dir would move an existing .git, so a folder that has one is left alone.
+  if (existsSync(join(notes, '.git')) || notesGit(notes)) return;
+  try {
+    mkdirSync(NOTES_GIT, { recursive: true });
+    git(notes, 'init', '--separate-git-dir', notesGitDir(notes));
+  } catch (e) {
+    console.warn(`notes: git init failed in ${notes}: ${(e as Error).message}`);
+  }
+}
+
+// Commits only the notes path, so whatever else is staged in a shared repo stays out. Never throws: files stay and go in the next commit.
+// Commits of all workspaces run in this one process through the synchronous execFileSync, so they never overlap: no locks needed.
+// shortcut: two arbiters can still make conflicting edits to one shared file; the history makes that recoverable, a merge step would be needed to prevent it. When turns of two workspaces overlap, one commit can carry the other's edits, so the commit label is not reliable attribution.
+export function commitNotes(notes: string, workspace: string) {
+  try {
+    const at = notesGit(notes);
+    if (!at) return void console.warn(`notes: not committing ${notes}: its git dir is inside the folder, where agents can plant hooks. To let Jarvis commit it, move the git dir out: mkdir -p ${NOTES_GIT} && git -C ${notes} init --separate-git-dir ${notesGitDir(notes)}`);
+    const paths = ['--', notes, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
+    if (!git(notes, ...at, 'status', '--porcelain', ...paths).trim()) return;
+    const has = (k: string) => { try { return !!git(notes, ...at, 'config', k).trim(); } catch { return false; } };
+    const env = has('user.name') && has('user.email') ? process.env : { ...process.env, GIT_AUTHOR_NAME: 'Jarvis', GIT_AUTHOR_EMAIL: 'jarvis@localhost', GIT_COMMITTER_NAME: 'Jarvis', GIT_COMMITTER_EMAIL: 'jarvis@localhost' };
+    const g = (...args: string[]) => execFileSync('git', ['-C', notes, ...at, ...args], { encoding: 'utf8', stdio: 'pipe', env });
+    g('add', '-A', ...paths);
+    g('commit', '-m', `notes: ${workspace}, ${new Date().toISOString().slice(0, 10)}`, ...paths);
+  } catch (e) {
+    console.warn(`notes: commit failed in ${notes}: ${(e as Error).message}`);
   }
 }
 
@@ -335,6 +395,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
           setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
+          if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.name);
           // Cap what lands in the parent's context; the full text stays available via read_agent.
           const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
           const compacted = compacting.delete(a.id);
@@ -524,7 +585,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const team = a.id === ARBITER || depth(a) < MAX_DEPTH;
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
-      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context.`
+      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${meta.id}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. Jarvis commits the folder to git after each of your turns; do not run git there.`
       : `\nProject notes (read-only for you, Jarvis maintains them): ${meta.notes}.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
@@ -634,7 +695,7 @@ function saveRegistry() {
 
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
-  if (notes) mkdirSync(notes, { recursive: true });
+  if (notes) prepareNotes(resolve(notes));
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ws';
   const meta: WorkspaceMeta = { id: `${slug}-${Date.now().toString(36).slice(-4)}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}) };
   const w = createWorkspace(meta);
@@ -657,7 +718,7 @@ export function setWorkspaceNotes(id: string, notes?: string) {
   const w = workspaces.get(id);
   if (!w) throw new Error(`no workspace ${id}`);
   if (notes?.trim()) {
-    mkdirSync(notes.trim(), { recursive: true });
+    prepareNotes(resolve(notes.trim())); // first: a refused folder must not stay in meta
     w.meta.notes = resolve(notes.trim());
   } else delete w.meta.notes;
   saveRegistry();
