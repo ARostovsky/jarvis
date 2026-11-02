@@ -26,7 +26,7 @@ export type Agent = {
 };
 
 // One tab in the UI: its own arbiter, agents, board and event log.
-export type WorkspaceMeta = { id: string; name: string; project?: string };
+export type WorkspaceMeta = { id: string; name: string; project?: string; notes?: string };
 // The user's reply to AskUserQuestion, merged into its input.
 export type AskReply = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> };
 
@@ -523,8 +523,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function agentOptions(a: Agent): Options {
     const team = a.id === ARBITER || depth(a) < MAX_DEPTH;
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
-    const prompt = a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT;
+    const notes = !meta.notes ? '' : a.id === ARBITER
+      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context.`
+      : `\nProject notes (read-only for you, Jarvis maintains them): ${meta.notes}.`;
+    const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
+      ...(meta.notes ? { additionalDirectories: [meta.notes] } : {}),
       // Each agent gets its own browser: isolated, so parallel agents don't fight over one profile dir.
       // Screenshots go outside the worktree, so they don't get committed or block deletion.
       mcpServers: { jarvis: jarvisTools(a.id, team), ...(PLAYWRIGHT !== '0' ? { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--isolated', ...(PLAYWRIGHT === 'headed' ? [] : ['--headless']), '--output-dir', join(dir, 'playwright', a.id)] } } : {}) },
@@ -628,10 +632,11 @@ function saveRegistry() {
   renameSync(REGISTRY + '.tmp', REGISTRY);
 }
 
-export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}): Workspace {
+export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
+  if (notes) mkdirSync(notes, { recursive: true });
   const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ws';
-  const meta: WorkspaceMeta = { id: `${slug}-${Date.now().toString(36).slice(-4)}`, name, ...(project ? { project: resolve(project) } : {}) };
+  const meta: WorkspaceMeta = { id: `${slug}-${Date.now().toString(36).slice(-4)}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}) };
   const w = createWorkspace(meta);
   if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
@@ -644,6 +649,17 @@ export function renameWorkspace(id: string, name: string) {
   if (!w) throw new Error(`no workspace ${id}`);
   if (!name.trim()) throw new Error('name is empty');
   w.meta.name = name.trim();
+  saveRegistry();
+}
+
+// Takes effect when a session next starts or resumes: agentOptions() is read then. Empty clears.
+export function setWorkspaceNotes(id: string, notes?: string) {
+  const w = workspaces.get(id);
+  if (!w) throw new Error(`no workspace ${id}`);
+  if (notes?.trim()) {
+    mkdirSync(notes.trim(), { recursive: true });
+    w.meta.notes = resolve(notes.trim());
+  } else delete w.meta.notes;
   saveRegistry();
 }
 

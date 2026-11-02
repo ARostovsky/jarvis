@@ -58,7 +58,7 @@ Inside `src/agents.ts`, top to bottom:
 5. `makeWorkdir()`: creates a git worktree or a plain dir.
 6. System prompts: `ARBITER_PROMPT`, `LEAD_PROMPT`, `BOARD_PROMPT`.
 7. `createWorkspace(meta)`: a closure with all per-workspace state and functions (`emit`, `restore`, `session`, `pump`, `deliver`, `spawnAgent`, `deleteAgent`, `configure`, `stopAgent`, MCP tools, archive support).
-8. Workspace registry: `addWorkspace`, `renameWorkspace`, `archiveWorkspace`, `restoreWorkspace`, `listArchived`, `archivedInfo`, `deleteArchived`, `loadWorkspaces`.
+8. Workspace registry: `addWorkspace`, `renameWorkspace`, `setWorkspaceNotes`, `archiveWorkspace`, `restoreWorkspace`, `listArchived`, `archivedInfo`, `deleteArchived`, `loadWorkspaces`.
 
 ## Running and checking
 
@@ -123,15 +123,19 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 
 | Role | Depth | Tools | System prompt append |
 |------|-------|-------|----------------------|
-| Arbiter | 0 | board + team, over all agents | `ARBITER_PROMPT` (+ project hint) |
-| Lead agent | 1 | board + team, only over its own children | `LEAD_PROMPT` + `BOARD_PROMPT` |
-| Sub-agent | 2 | board only | `BOARD_PROMPT` |
+| Arbiter | 0 | board + team, over all agents | `ARBITER_PROMPT` (+ project hint, + notes paragraph) |
+| Lead agent | 1 | board + team, only over its own children | `LEAD_PROMPT` + `BOARD_PROMPT` (+ read-only notes line) |
+| Sub-agent | 2 | board only | `BOARD_PROMPT` (+ read-only notes line) |
 
 Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`.
 
 Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
 
 When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (1000) characters, so reports do not fill the parent's context. The parent can call `read_agent` for the full text.
+
+### Notes folder
+
+`WorkspaceMeta.notes` (optional absolute path, persisted in `workspaces.json` and `meta.json` like `project`) points at a persistent markdown folder, shared by workspaces on the same project. `agentOptions()` passes it as `additionalDirectories` to every agent and appends a prompt: the arbiter is told to read and maintain it, all other agents only that it is read-only for them (a prompt rule, not enforced). `agentOptions()` runs when a session starts, so a change through `setWorkspaceNotes` / `POST /workspaces/notes` applies when a session next starts or resumes (after a restart or `stop`, then a message); there is no live reload.
 
 ### Board
 
@@ -217,10 +221,11 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | Method and path | Body | Returns |
 |-----------------|------|---------|
 | `GET /` | | the UI |
-| `GET /workspaces` | | `{workspaces: [{id, name, project?, running, waiting, costUsd}], archived, settingsModel}` |
+| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel}` |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
-| `POST /workspaces` | `{name, project?, model?, effort?}` | new workspace meta |
+| `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |
+| `POST /workspaces/notes` | `{ws, notes?}` sets the notes folder (created if missing); empty clears it | 204 |
 | `POST /workspaces/archive` | `{ws, commit?}` | 204, 409 if dirty |
 | `POST /workspaces/restore` | `{id}` | meta |
 | `POST /workspaces/archived/info` | `{id}` | `{name, agents, parked, branches, ...}` |
@@ -329,6 +334,7 @@ Find the agent node `contextmenu` handler that calls `menu(ev, items)` in `publi
 
 Search the code for `shortcut:` for the current list. At the time of writing:
 
+- Notes folder: two workspaces sharing one folder at the same time have no locking; last write wins. Agents' read-only access is only a prompt rule.
 - A non-git repo is used in place, without isolation.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
 - No automated tests beyond the type check.

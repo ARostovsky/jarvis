@@ -182,6 +182,7 @@
   <form method="dialog" id="newwsForm">
     <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
     <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off">
+    <label for="wsNotes">NOTES FOLDER (OPTIONAL)</label><input id="wsNotes" placeholder="/home/you/notes/something" autocomplete="off">
     <div style="display:flex;gap:12px">
       <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
       <div style="flex:1"><label for="wsEffort">JARVIS EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
@@ -768,7 +769,7 @@ async function refreshTabs() {
   $('tabs').replaceChildren(...list.map((w) => {
     const b = document.createElement('button');
     b.className = w.id === WS ? 'active' : '';
-    b.title = `${w.project ?? 'no project folder'} · spent $${(w.costUsd ?? 0).toFixed(2)} · right-click for actions`;
+    b.title = `${w.project ?? 'no project folder'}${w.notes ? ` · notes ${w.notes}` : ''} · spent $${(w.costUsd ?? 0).toFixed(2)} · right-click for actions`;
     b.append(w.name);
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
@@ -776,6 +777,7 @@ async function refreshTabs() {
     b.ondblclick = () => renameWs(w);
     b.oncontextmenu = (ev) => menu(ev, [
       ['Rename', () => renameWs(w)],
+      ['Notes folder…', () => notesWs(w)],
       ['Stop all agents', () => stopAllWs(w.id)],
       ['Archive workspace', () => archiveWs(w), true],
     ]);
@@ -789,6 +791,15 @@ async function renameWs(w) {
   if (name && name !== w.name) {
     const r = await wsPost('/workspaces/rename', { ws: w.id, name });
     if (!r.ok) toast(`rename failed: ${r.text}`);
+  }
+  refreshTabs();
+}
+
+async function notesWs(w) {
+  const notes = prompt('Notes folder (empty clears)', w.notes ?? '');
+  if (notes !== null && notes.trim() !== (w.notes ?? '')) {
+    const r = await wsPost('/workspaces/notes', { ws: w.id, notes: notes.trim() });
+    if (!r.ok) toast(`notes failed: ${r.text}`);
   }
   refreshTabs();
 }
@@ -886,9 +897,9 @@ function switchTo(id) {
 
 $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
-  const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
+  const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), notes: $('wsNotes').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
   if (!r.ok) return toast(`create failed: ${await r.text()}`);
-  $('wsName').value = $('wsProject').value = '';
+  $('wsName').value = $('wsProject').value = $('wsNotes').value = '';
   switchTo((await r.json()).id);
 };
 

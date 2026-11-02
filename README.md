@@ -45,6 +45,10 @@ Under each circle: model, effort level, and the tool the agent is using right no
 
 Each tab at the top is a separate **workspace**: its own Jarvis, team and history. Use one per project or per goal.
 
+### Notes folder
+
+A workspace can point at a **notes folder**: a persistent folder of markdown files (a `README.md` index, `status.md`, ...) that outlives the workspace and can be shared by several workspaces on the same project. Jarvis reads it at the start of a goal and keeps it up to date; other agents may only read it. Set it in the **+** dialog (*Notes folder*, created if missing) or later with right-click on the tab, **Notes folder…** (empty clears it). The change applies when a session next starts or resumes. If two workspaces use the same folder at the same time, the last write wins.
+
 ### The log and chat
 
 Click any circle to open its log on the right. The selected agent gets a lock-on ring, its path to Jarvis lights up, and unrelated agents fade. The log shows the task it got, what it said, which tools it used, notes from other agents, and the cost of each finished step. Tables, code blocks, `code` and **bold** in agent messages are rendered. Type at the bottom to message that agent directly: Enter sends, Shift+Enter starts a new line. Only Jarvis's chat is open by default: every other agent takes orders from Jarvis or its lead, and a stray message derails it, so its input is locked; double-click the input to write to it anyway. Jarvis's chat is where you give new goals.
