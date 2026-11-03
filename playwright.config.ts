@@ -9,7 +9,7 @@ export default defineConfig({
   testDir: 'e2e',
   workers: 1,
   reporter: 'list',
-  use: { baseURL: `http://127.0.0.1:${PORT}`, browserName: 'chromium' },
+  use: { actionTimeout: 10_000, baseURL: `http://127.0.0.1:${PORT}`, browserName: 'chromium' },
   webServer: {
     // The data dir is wiped on every run; never the real ~/.local/share/jarvis.
     command: `node -e "fs.rmSync(process.env.XDG_DATA_HOME,{recursive:true,force:true})" && node src/server.ts`,
