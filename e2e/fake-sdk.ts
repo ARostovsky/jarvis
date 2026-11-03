@@ -4,13 +4,15 @@
 //   sleep <ms>              keeps the turn running
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
-//   tool <name> <json>      calls the real handler of an in-process MCP tool, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
 // Messages come in the real SDK's order: system init, then per tool an assistant tool_use, the tool runs, a user tool_result; then the result.
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
 type Block = Record<string, unknown>;
 
@@ -30,13 +32,19 @@ export function query({ prompt, options }: { prompt: AsyncIterable<any>; options
   const result = (tool_use_id: string, text: string, is_error = false) =>
     ({ ...base, uuid: randomUUID(), type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id, content: text, is_error }] } });
 
-  async function mcp(name: string, args: unknown) {
+  // One MCP client per in-process server, connected on first use: callTool runs the server's own input validation, as in the real SDK.
+  const clients = new Map<string, Promise<Client>>();
+  async function mcp(name: string, args: Record<string, unknown>) {
     const [, server, toolName] = /^mcp__(.+?)__(.+)$/.exec(name) ?? [];
-    // createSdkMcpServer returns {type: 'sdk', name, instance: McpServer}; registerTool keeps each tool, handler included, in _registeredTools.
-    const t = options.mcpServers?.[server]?.instance?._registeredTools?.[toolName];
-    if (!t) throw new Error(`fake sdk: no MCP tool ${name}`);
-    const out = await t.handler(args, {});
-    return { text: out.content.map((c: { text?: string }) => c.text ?? '').join('\n'), is_error: !!out.isError };
+    const cfg = options.mcpServers?.[server];
+    if (cfg?.type !== 'sdk') throw new Error(`fake sdk: no in-process MCP server for ${name}`);
+    if (!clients.has(server)) {
+      const [ours, theirs] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: 'fake-sdk', version: '0' });
+      clients.set(server, cfg.instance.connect(theirs).then(() => client.connect(ours)).then(() => client));
+    }
+    const out = await (await clients.get(server)!).callTool({ name: toolName, arguments: args });
+    return { text: (out.content as { text?: string }[]).map((c) => c.text ?? '').join('\n'), is_error: !!out.isError };
   }
 
   async function* turn(script: string) {

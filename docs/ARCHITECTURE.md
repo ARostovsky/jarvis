@@ -70,7 +70,7 @@ npm test           # node:test, today only the git safety of the notes folder an
 npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 with a throwaway data dir
 ```
 
-The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line (`say <text>`, `sleep <ms>`, `write <path> <content>`, `bash <command>`, `tool <mcp tool> <json>`), really writes files and runs commands, calls the real handlers of the in-process `jarvis` MCP server it gets in `options.mcpServers`, and emits SDK messages in the real order (tool_use, then the tool runs, then tool_result).
+The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line (`say <text>`, `sleep <ms>`, `write <path> <content>`, `bash <command>`, `tool <mcp tool> <json>`), really writes files and runs commands, calls the in-process `jarvis` MCP server it gets in `options.mcpServers` through an `@modelcontextprotocol/sdk` client over an in-memory transport (so the tools' input validation runs as in the real SDK), and emits SDK messages in the real order (tool_use, then the tool runs, then tool_result).
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
 
