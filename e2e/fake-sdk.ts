@@ -8,6 +8,9 @@
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
 //                           then says "allow <updated input as JSON>" or "deny <message>"; runs nothing
+// The message /compact (what the server sends for COMPACT) compacts instead: a compact_boundary, then an empty success result.
+// Context: each other turn adds 30k tokens. getContextUsage 'full' counts what the session holds now; 'summary' reports the last
+// response's usage, which after a compact is still the pre-compact size, as in the real SDK.
 // Messages come in the real SDK's order: system init, then per tool an assistant tool_use, the tool runs, a user tool_result; then the result.
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -35,6 +38,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   });
   aborted.catch(() => {});
   let n = 0;
+  let tokens = 0, lastUsage = 0;
   const base = { session_id, parent_tool_use_id: null };
   const assistant = (content: Assistant['content']): SDKAssistantMessage =>
     ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: {} as Usage } });
@@ -56,6 +60,16 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     return { text: (out.content as { text?: string }[]).map((c) => c.text ?? '').join('\n'), is_error: !!out.isError };
   }
 
+  const end = (text: string): SDKResultMessage =>
+    ({ ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] });
+
+  async function* compact(): AsyncGenerator<SDKMessage> {
+    const pre = tokens;
+    tokens = 3_000;
+    yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'compact_boundary', compact_metadata: { trigger: 'manual', pre_tokens: pre, post_tokens: tokens } };
+    yield end('');
+  }
+
   async function* turn(script: string): AsyncGenerator<SDKMessage> {
     const texts: string[] = [];
     function* say(text: string) {
@@ -63,6 +77,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
       yield assistant([{ type: 'text', text, citations: null }]);
     }
     yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
+    if (script.trim() === '/compact') return yield* compact();
     for (const line of script.split('\n')) {
       const [, cmd, rest = ''] = /^(\w+)\s*(.*)$/.exec(line.trim()) ?? [];
       const id = `toolu_fake_${++n}`;
@@ -107,7 +122,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         }
       }
     }
-    yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: texts.join('\n'), stop_reason: 'end_turn', total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
+    lastUsage = tokens += 30_000;
+    yield end(texts.join('\n'));
   }
 
   async function* run(): AsyncGenerator<SDKMessage, void> {
@@ -122,7 +138,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
 
   // Only what the server calls; the cast stands in for the many other control methods of a real Query.
   const q: Pick<Query, 'getContextUsage' | 'setModel' | 'applyFlagSettings'> & AsyncGenerator<SDKMessage, void> = Object.assign(run(), {
-    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 200_000 }) as Awaited<ReturnType<Query['getContextUsage']>>,
+    getContextUsage: async (o?: { detail?: 'summary' | 'full' }) => ({ totalTokens: o?.detail === 'full' ? tokens : lastUsage, maxTokens: 200_000 }) as Awaited<ReturnType<Query['getContextUsage']>>,
     setModel: async () => {},
     applyFlagSettings: async () => {},
   });
