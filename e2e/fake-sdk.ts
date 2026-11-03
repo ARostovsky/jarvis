@@ -5,6 +5,7 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
 //                           then says "allow <updated input as JSON>" or "deny <message>"; runs nothing
 // Messages come in the real SDK's order: system init, then per tool an assistant tool_use, the tool runs, a user tool_result; then the result.
@@ -67,6 +68,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
       const id = `toolu_fake_${++n}`;
       if (cmd === 'say') {
         yield* say(rest);
+      } else if (cmd === 'option') {
+        yield* say(`${rest}=${JSON.stringify(options[rest as keyof typeof options])}`);
       } else if (cmd === 'sleep') {
         await Promise.race([new Promise((r) => setTimeout(r, Number(rest))), aborted]);
       } else if (cmd === 'write') {
