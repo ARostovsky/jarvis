@@ -23,7 +23,7 @@ Also: `jarvis stop|restart|status|logs`. Foreground: `npm start`.
 
 First goal:
 
-1. Click **+**. Name the workspace and, optionally, give the path to your git project.
+1. Click **+**. Name the workspace and, optionally, give the path to your git project. Project and notes folders you used before are offered in a list, most recent first.
 2. In the Jarvis chat, describe a goal, for example: *"Add a /health endpoint with a test."*
 3. Watch Jarvis hire agents. Answer approval cards.
 4. Work lands on `jarvis/<agent-id>` branches in your repo. Review and merge.

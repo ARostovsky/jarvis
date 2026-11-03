@@ -182,6 +182,7 @@ All runtime data lives outside the repo in `$XDG_DATA_HOME/jarvis` (default `~/.
 ```
 jarvis/
   workspaces.json              # list of active workspaces (WorkspaceMeta[])
+  recent.json                  # recently used project and notes folders: {project: {path: ms}, notes: {...}}
   server.pid, server.log       # written by bin/jarvis.mjs
   workspaces/<ws-id>/
     events.jsonl               # the event log, the single source of truth
@@ -227,6 +228,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 |-----------------|------|---------|
 | `GET /` | | the UI |
 | `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel}` |
+| `GET /recent` | | `{project: [path], notes: [path]}`: folders used before, newest first, existing only; read when the New workspace dialog opens; seeded once from existing workspaces |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |

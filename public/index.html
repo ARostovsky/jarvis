@@ -181,8 +181,8 @@
   <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
   <form method="dialog" id="newwsForm">
     <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
-    <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off">
-    <label for="wsNotes">NOTES FOLDER (OPTIONAL)</label><input id="wsNotes" placeholder="/home/you/notes/something" autocomplete="off">
+    <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" list="recentProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off"><datalist id="recentProject"></datalist>
+    <label for="wsNotes">NOTES FOLDER (OPTIONAL)</label><input id="wsNotes" list="recentNotes" placeholder="/home/you/notes/something" autocomplete="off"><datalist id="recentNotes"></datalist>
     <div style="display:flex;gap:12px">
       <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
       <div style="flex:1"><label for="wsEffort">JARVIS EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
@@ -790,7 +790,7 @@ async function refreshTabs() {
       ['Archive workspace', () => archiveWs(w), true],
     ]);
     return b;
-  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: () => $('newws').showModal() }),
+  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
   ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: `ARCHIVE ${archived.length}`, title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
 }
 
@@ -905,6 +905,15 @@ function switchTo(id) {
   userView = false;
   connect();
   refreshTabs();
+}
+
+// Recent folders, newest first. No prefill: the browser filters a datalist by the typed text, so a filled input would hide the rest.
+async function openNewWs() {
+  try {
+    const recent = await (await fetch('/recent')).json();
+    for (const [id, k] of [['recentProject', 'project'], ['recentNotes', 'notes']]) $(id).replaceChildren(...recent[k].map((p) => Object.assign(document.createElement('option'), { value: p })));
+  } catch {}
+  $('newws').showModal();
 }
 
 $('newwsForm').onsubmit = async (ev) => {

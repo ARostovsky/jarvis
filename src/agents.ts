@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -37,6 +37,7 @@ const WORKTREES = join(DATA, 'worktrees');
 const REGISTRY = join(DATA, 'workspaces.json');
 const ARCHIVE = join(DATA, 'archive');
 const NOTES_GIT = join(DATA, 'notes-git');
+const RECENT = join(DATA, 'recent.json');
 // Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
@@ -785,6 +786,45 @@ function saveRegistry() {
   renameSync(REGISTRY + '.tmp', REGISTRY);
 }
 
+// ---- recently used project and notes folders, for the New workspace dialog: recent.json, path -> last use (ms) ----
+
+type Recent = { project: Record<string, number>; notes: Record<string, number> };
+
+function readRecent(): Recent {
+  try {
+    const r = readJson(RECENT);
+    if (r.project && r.notes && typeof r.project === 'object' && typeof r.notes === 'object') return r;
+  } catch {} // missing or damaged: seed again
+  // First run or damaged file: seed from the workspaces we already have, dated by their folder.
+  const r: Recent = { project: {}, notes: {} };
+  const seed = (m: WorkspaceMeta, dir: string) => {
+    const at = existsSync(dir) ? statSync(dir).mtimeMs : 0;
+    for (const k of ['project', 'notes'] as const) if (m[k]) r[k][m[k]] = Math.max(r[k][m[k]] ?? 0, at);
+  };
+  for (const w of workspaces.values()) seed(w.meta, w.dir);
+  for (const m of listArchived()) seed(m, join(ARCHIVE, m.id));
+  return r;
+}
+
+export function touchRecent(meta: Pick<WorkspaceMeta, 'project' | 'notes'>, at = Date.now()) {
+  try { // non-critical: never fail the caller
+    const r = readRecent();
+    for (const k of ['project', 'notes'] as const) if (meta[k]) r[k][meta[k]] = at;
+    mkdirSync(DATA, { recursive: true });
+    writeFileSync(RECENT + '.tmp', JSON.stringify(r, null, 2));
+    renameSync(RECENT + '.tmp', RECENT);
+  } catch (e) {
+    console.warn(`recent folders: cannot update ${RECENT}: ${(e as Error).message}`);
+  }
+}
+
+// Most recent first; folders that are gone are left out (kept in the file, they may come back).
+export function recentFolders() {
+  const r = readRecent();
+  const list = (o: Record<string, number>) => Object.keys(o).filter((p) => existsSync(p)).sort((a, b) => o[b] - o[a]);
+  return { project: list(r.project), notes: list(r.notes) };
+}
+
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   if (notes) prepareNotes(resolve(notes));
@@ -794,6 +834,7 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
   saveRegistry();
+  touchRecent(meta);
   return w;
 }
 
@@ -812,6 +853,7 @@ export function setWorkspaceNotes(id: string, notes?: string) {
   if (notes?.trim()) {
     prepareNotes(resolve(notes.trim())); // first: a refused folder must not stay in meta
     w.meta.notes = resolve(notes.trim());
+    touchRecent({ notes: w.meta.notes });
   } else delete w.meta.notes;
   saveRegistry();
 }
@@ -873,6 +915,7 @@ export function restoreWorkspace(id: string) {
   w.reattach();
   workspaces.set(id, w);
   saveRegistry();
+  touchRecent(meta);
   return meta as WorkspaceMeta;
 }
 

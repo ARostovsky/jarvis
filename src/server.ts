@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, archivedInfo, deleteArchived, DirtyWorktree, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -56,6 +56,8 @@ createServer(async (req, res) => {
   } else if (req.method === 'GET' && url.pathname === '/workspaces') {
     const body = { workspaces: [...workspaces.values()].map((w) => w.summary()), archived: listArchived(), settingsModel: SETTINGS_MODEL };
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+  } else if (req.method === 'GET' && url.pathname === '/recent') {
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
   } else if (req.method === 'GET' && url.pathname === '/events') {
     const w = workspaces.get(url.searchParams.get('ws') ?? '');
     if (!w) return void res.writeHead(404).end();
