@@ -1,0 +1,42 @@
+name: Wiki
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - README.md
+      - docs/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Sync wiki
+        env:
+          WIKI_URL: https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/${{ github.repository }}.wiki.git
+        run: |
+          wiki=$(mktemp -d)
+          if ! git clone --quiet "$WIKI_URL" "$wiki" 2>/dev/null; then
+            echo "::error::Wiki repo not found. Create the first wiki page once in the GitHub UI."
+            exit 1
+          fi
+          .github/scripts/wiki-sync.sh "$wiki" "${{ github.repository }}"
+          cd "$wiki"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki is up to date."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898729+github-actions[bot]@users.noreply.github.com"
+          git commit --quiet -m "Sync from $(git -C "$GITHUB_WORKSPACE" rev-parse --short HEAD)"
+          git push --quiet

@@ -47,7 +47,7 @@ flowchart LR
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
 | `e2e/` | Playwright specs, `helpers.ts` and `fake-sdk.ts`, the scripted stand-in for the SDK (see [Running and checking](#running-and-checking)). |
-| `docs/` | This file and the README screenshots. |
+| `docs/` | This file and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
 | `tsconfig.json` | Type check only (`noEmit`). Node runs `.ts` directly. |
 
 Inside `src/agents.ts`, top to bottom:
