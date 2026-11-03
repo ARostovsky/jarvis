@@ -22,7 +22,8 @@ const options = async (page: Page) => {
   await page.goto('/');
   await page.locator('#tabs button[title="New workspace"]').click();
   await expect(page.locator('#newws')).toBeVisible();
-  const values = (id: string) => page.locator(`#${id} option`).evaluateAll((o) => o.map((e) => (e as HTMLOptionElement).value));
+  // Other specs add folders of their own to the same server: only this file's folders, in the order shown, are checked.
+  const values = async (id: string) => (await page.locator(`#${id} option`).evaluateAll((o) => o.map((e) => (e as HTMLOptionElement).value))).filter((p) => p.startsWith(root));
   return { project: await values('recentProject'), notes: await values('recentNotes') };
 };
 
