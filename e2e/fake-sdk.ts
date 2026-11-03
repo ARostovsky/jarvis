@@ -1,6 +1,7 @@
 // Scripted stand-in for the SDK's query(), loaded by the server when JARVIS_FAKE_SDK points here. No API, no network, no cost.
 // Each incoming user message is a script, one command per line; other lines (board notes, reports) are ignored:
-//   say <text>              assistant text
+//   say <text>              assistant text; with includePartialMessages first streamed word by word as text deltas
+//   pace <ms>               pause after each text delta of the later say lines, so the stream can be watched
 //   sleep <ms>              keeps the turn running
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
@@ -17,7 +18,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
-import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKPartialAssistantMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -72,8 +73,19 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
 
   async function* turn(script: string): AsyncGenerator<SDKMessage> {
     const texts: string[] = [];
-    function* say(text: string) {
+    let pace = 0;
+    const sleep = (ms: number) => Promise.race([new Promise((r) => setTimeout(r, ms)), aborted]);
+    async function* say(text: string): AsyncGenerator<SDKMessage> {
       texts.push(text);
+      if (options.includePartialMessages) {
+        const stream = (event: SDKPartialAssistantMessage['event']): SDKPartialAssistantMessage => ({ ...base, uuid: randomUUID(), type: 'stream_event', event });
+        yield stream({ type: 'content_block_start', index: 0, content_block: { type: 'text', text: '', citations: null } });
+        for (const chunk of text.split(/(?=\s)/).filter(Boolean)) {
+          yield stream({ type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: chunk } });
+          if (pace) await sleep(pace);
+        }
+        yield stream({ type: 'content_block_stop', index: 0 });
+      }
       yield assistant([{ type: 'text', text, citations: null }]);
     }
     yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
@@ -85,8 +97,10 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         yield* say(rest);
       } else if (cmd === 'option') {
         yield* say(`${rest}=${JSON.stringify(options[rest as keyof typeof options])}`);
+      } else if (cmd === 'pace') {
+        pace = Number(rest);
       } else if (cmd === 'sleep') {
-        await Promise.race([new Promise((r) => setTimeout(r, Number(rest))), aborted]);
+        await sleep(Number(rest));
       } else if (cmd === 'write') {
         const [, path, content = ''] = /^(\S+)\s?(.*)$/.exec(rest) ?? [];
         const file_path = resolve(cwd, path);

@@ -70,7 +70,21 @@ npm test           # node:test, today only the git safety of the notes folder an
 npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 with a throwaway data dir
 ```
 
-The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line (`say <text>`, `sleep <ms>`, `write <path> <content>`, `bash <command>`, `tool <mcp tool> <json>`, `option <name>`: says `<name>=<that query option as JSON>`, e.g. `option resume`; `perm <tool> <json>`: calls `options.canUseTool` like the real SDK does for a call it cannot decide, waits for the UI's answer and says `allow <updated input>` or `deny <message>`), handles the message `/compact` as the SDK does (a `compact_boundary`, then an empty result; each other turn adds 30k tokens of context, and `getContextUsage` reports the pre-compact size for `summary` and the real one for `full`), really writes files and runs commands, calls the in-process `jarvis` MCP server it gets in `options.mcpServers` through an `@modelcontextprotocol/sdk` client over an in-memory transport (so the tools' input validation runs as in the real SDK), and emits SDK messages in the real order (tool_use, then the tool runs, then tool_result). Its messages are typed as the SDK's `SDKMessage` and its `query` as `typeof query`, and `npm run check` covers `e2e/`, so a change in the SDK's message shapes fails the type check of the fake. A spec that restarts the server (`e2e/resume.spec.ts`) starts its own on port 7796 with its own data dir and kills it after the test, so the shared server is never touched.
+The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line; other lines (board notes, reports) are ignored:
+
+| Command | What the fake does |
+|---------|--------------------|
+| `say <text>` | assistant text; when the server sets `includePartialMessages` (it does), first streamed word by word as `stream_event` text deltas |
+| `pace <ms>` | pause after each text delta of the later `say` lines, so a spec can watch the stream |
+| `sleep <ms>` | keeps the turn running |
+| `write <path> <content>` | `Write` tool: really writes the file, relative to the session cwd |
+| `bash <command>` | `Bash` tool: really runs the command in the session cwd |
+| `tool <mcp tool> <json>` | calls an in-process MCP tool, e.g. `tool mcp__jarvis__spawn_agent {...}` |
+| `perm <tool> <json>` | calls `options.canUseTool` as the real SDK does for a call it cannot decide (in any permission mode), waits for the UI's answer, then says `allow <updated input as JSON>` or `deny <message>`; runs nothing |
+| `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
+| `/compact` (the whole message) | a `compact_boundary`, then an empty success result. Every other turn adds 30k tokens of context; `getContextUsage` reports the pre-compact size for `summary` (as the real SDK, which reads the last response's usage) and the compacted size for `full` |
+
+Messages come in the real order (system init, per tool an assistant tool_use, the tool runs, a user tool_result, then the result). MCP tools are called on the `jarvis` server from `options.mcpServers` through an `@modelcontextprotocol/sdk` client over an in-memory transport, so their input validation runs as in the real SDK. The fake is typed against the SDK (`typeof query`, `SDKMessage`) and `npm run check` covers `e2e/`, so a change in the SDK's message shapes fails the type check. The fake keeps no conversation: a resumed session only gets `resume` set. A spec that restarts the server (`e2e/resume.spec.ts`) starts its own on port 7796 with its own data dir and kills it after the test, so the shared server is never touched.
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
 
