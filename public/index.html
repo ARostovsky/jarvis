@@ -93,6 +93,7 @@
   #log pre { margin: 4px 0; padding: 6px 10px; background: rgba(0, 0, 0, .3); border-left: 2px solid var(--line); overflow-x: auto; white-space: pre; }
   #log code { color: #e8d2a8; } #log strong { color: var(--text); }
   #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
+  #log:not(.hide-ts) [data-ts]::before { content: attr(data-ts); font-size: 11px; color: var(--cyan-dim); margin-right: 8px; }
   #log.hide-user .user, #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-cost .cost { display: none; }
   #viewMenu { position: absolute; top: 52px; right: 12px; z-index: 3; background: var(--panel); border: 1px solid var(--cyan); padding: 8px 12px; display: none; font-size: 14px; }
   #viewMenu.open { display: block; }
@@ -475,11 +476,11 @@ function pulse(from, to, cls = '') {
 }
 
 // `cost` is shown as a separate part of the line so the cost filter can hide just that.
-function log(id, cls, text, cost) {
+function log(id, cls, text, cost, at) {
   const a = agents.get(id);
   if (!a) return;
-  a.log.push({ cls, text, cost });
-  if (selected === id) appendLog(cls, text, cost);
+  a.log.push({ cls, text, cost, at });
+  if (selected === id) appendLog(cls, text, cost, at);
 }
 // What model an agent really runs: what its session reported, else what was asked for, else the settings default.
 let settingsModel = null;
@@ -533,9 +534,15 @@ function renderMd(text) {
   flush();
   return out;
 }
-function appendLog(cls, text, cost) {
+// HH:MM local time, with the date when `at` is not from today. Shown by CSS from data-ts (View > Timestamps), so the text content stays as is.
+function fmtTs(at, now = Date.now()) {
+  const d = new Date(at), t = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+  return d.toDateString() === new Date(now).toDateString() ? t : `${d.toLocaleDateString([], { month: 'short', day: 'numeric' })} ${t}`;
+}
+function appendLog(cls, text, cost, at) {
   const d = document.createElement('div');
   d.className = cls;
+  if (Number.isFinite(at) && at > 0) d.dataset.ts = fmtTs(at); // events from before `at` existed (or with junk) show nothing
   if (cls === 'tool' || cls === 'meta') d.textContent = text; else d.append(...renderMd(text));
   if (cost) d.append(Object.assign(document.createElement('span'), { className: 'cost', textContent: cost }));
   const box = $('log');
@@ -586,7 +593,7 @@ function select(id) {
   $('log').replaceChildren();
   if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
   if (a.agent.cwd) appendLog('meta', `cwd: ${a.agent.cwd}`);
-  a.log.forEach((l) => appendLog(l.cls, l.text, l.cost));
+  a.log.forEach((l) => appendLog(l.cls, l.text, l.cost, l.at));
   $('panel').classList.add('open'); // first: a hidden panel has scrollHeight 0
   $('log').scrollTop = $('log').scrollHeight;
   document.body.classList.add('panel-open');
@@ -700,10 +707,10 @@ const handlers = {
   spawned: (e) => addAgent(e.agent, e.at ?? 0),
   removed: (e) => removeAgent(e.agentId),
   status: (e) => setStatus(e.agentId, e.status, e.at ?? 0), // events from before `at` existed count as long ago
-  text: (e) => { endLive(e.agentId); log(e.agentId, '', e.text); },
+  text: (e) => { endLive(e.agentId); log(e.agentId, '', e.text, undefined, e.at); },
   tool: (e) => {
     endLive(e.agentId);
-    log(e.agentId, 'tool', `→ ${e.name} ${short(JSON.stringify(e.input), 400)}`);
+    log(e.agentId, 'tool', `→ ${e.name} ${short(JSON.stringify(e.input), 400)}`, undefined, e.at);
     const a = agents.get(e.agentId);
     if (a?.act) a.act.textContent = short(e.name.replace(/^mcp__\w+?__/, ''), 18);
   },
@@ -711,20 +718,20 @@ const handlers = {
     if (!replaying) pulse(e.from, e.to);
     // Messages from the user or from the agent's own parent are its inputs; from anyone else, reports.
     const input = e.from === 'user' || e.from === parentOf(e.to);
-    log(e.to, input ? 'user' : 'report', `⇐ ${who(e.from)}: ${e.text}`);
-    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${who(e.to)}: ${short(e.text, 300)}`);
+    log(e.to, input ? 'user' : 'report', `⇐ ${who(e.from)}: ${e.text}`, undefined, e.at);
+    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${who(e.to)}: ${short(e.text, 300)}`, undefined, e.at);
   },
   board: (e) => {
     const to = e.to.includes('all') ? [...agents.keys()].filter((id) => id !== e.from) : e.to;
     if (!replaying) to.forEach((id) => pulse(e.from, id, 'note'));
-    log(e.from, 'note', `✎ board #${e.n} → ${e.to.map(who).join(', ')}: ${e.text}`);
-    to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${who(e.from)}: ${e.text}`));
+    log(e.from, 'note', `✎ board #${e.n} → ${e.to.map(who).join(', ')}: ${e.text}`, undefined, e.at);
+    to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${who(e.from)}: ${e.text}`, undefined, e.at));
   },
   result: (e) => {
     const a = agents.get(e.agentId);
     if (a) a.agent.costUsd = e.costUsd;
     // The server sets status error just before an error result, whose text says why (error: <subtype>).
-    log(e.agentId, 'result', a?.agent.status === 'error' ? `■ ${e.text}` : '■ done', ` · $${e.costUsd.toFixed(3)}`);
+    log(e.agentId, 'result', a?.agent.status === 'error' ? `■ ${e.text}` : '■ done', ` · $${e.costUsd.toFixed(3)}`, e.at);
     renderTitle();
   },
   runtime: (e) => {
@@ -754,7 +761,7 @@ const handlers = {
     setStatus(e.agentId, a.agent.status);
     renderTitle();
   },
-  compacted: (e) => log(e.agentId, 'result', `⇣ ${e.trigger === 'auto' ? 'auto-' : ''}compacted ${kTok(e.pre)}${e.post ? ` → ${kTok(e.post)}` : ''}`),
+  compacted: (e) => log(e.agentId, 'result', `⇣ ${e.trigger === 'auto' ? 'auto-' : ''}compacted ${kTok(e.pre)}${e.post ? ` → ${kTok(e.post)}` : ''}`, undefined, e.at),
   ask: showAsk,
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };
@@ -1147,6 +1154,7 @@ const VIEW = [
   ['tool', 'Tool calls', false],
   ['note', 'Board notes', true],
   ['cost', 'Cost', true],
+  ['ts', 'Timestamps', false],
 ];
 const viewKey = () => `jarvis.view.${WS}`;
 const viewAll = () => loadJson(viewKey());
