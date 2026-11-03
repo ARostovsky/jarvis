@@ -75,7 +75,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 - A workspace can point at a persistent markdown folder, shareable between workspaces. Set it in the **+** dialog or the tab's right-click menu.
 - Jarvis reads it at the start of a goal and keeps it up to date. Other agents are only *told* to read it. This is a prompt rule, not enforced, so they can still write there.
-- Jarvis commits the folder to git after each turn. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Jarvis commits the folder to git after each turn. Each workspace commits only the files its own Jarvis changed; your own edits there stay uncommitted. Each commit has a short description of the change written by Jarvis, and ends with `Workspace: <name>`. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Safety
 

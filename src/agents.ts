@@ -2,7 +2,7 @@ import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -188,20 +188,79 @@ export function prepareNotes(notes: string) {
   }
 }
 
-// Commits only the notes path, so whatever else is staged in a shared repo stays out. Never throws: files stay and go in the next commit.
-// Commits of all workspaces run in this one process through the synchronous execFileSync, so they never overlap: no locks needed.
-// shortcut: two arbiters can still make conflicting edits to one shared file; the history makes that recoverable, a merge step would be needed to prevent it. When turns of two workspaces overlap, one commit can carry the other's edits, so the commit label is not reliable attribution.
-export function commitNotes(notes: string, workspace: string) {
+// Who changed each notes file last (absolute path -> workspace id), so a workspace commits only what its own arbiter changed in a shared folder.
+// Write/Edit/NotebookEdit name their file; a Bash call is diffed against a snapshot taken when it starts, so a mv lands in one commit, as a move.
+const notesOwner = new Map<string, { ws: string; n: number }>();
+// The arbiter's one-line summary of this turn's notes changes (workspace id -> subject), set by notes_message and used then cleared by commitNotes.
+const notesMessages = new Map<string, string>();
+// One line, at most 100 chars, no leading or trailing blanks: it goes straight into git commit -m.
+const oneLine = (s: string, max = 100) => (s.trim().split(/\r?\n/)[0] ?? '').trim().slice(0, max).trim();
+
+// Subject when the arbiter wrote no message: the changed files, journal files folded into "journal", a count when there are many.
+function fallbackSubject(paths: string[]) {
+  const names = [...new Set(paths.map((p) => (p.startsWith('journal/') ? 'journal' : p)))];
+  return names.length > 3 ? `Update ${names.length} notes files` : `Update ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}`;
+}
+let notesSeq = 0;
+
+// after: a Bash diff leaves a file to another workspace that named it in a Write or Edit during the call. A journal belongs to the workspace it is named after.
+function claim(notes: string, ws: string, file: string, after = Infinity) {
+  const rel = relative(notes, file);
+  if (!rel || rel.startsWith('..')) return;
+  const o = notesOwner.get(file);
+  if (o && o.ws !== ws && o.n > after) return;
+  notesOwner.set(file, { ws: /^journal\/\d{4}-\d{2}-\d{2}-(.+)\.md$/.exec(rel)?.[1] ?? ws, n: ++notesSeq });
+}
+
+export const notesWritten = (notes: string, ws: string, file: string) => claim(notes, ws, resolve(file));
+
+// mtime and size of every file under dir; does not follow symlinks or enter .git and embedded repos.
+function stamps(dir: string, out = new Map<string, string>()) {
+  try {
+    for (const e of readdirSync(dir, { withFileTypes: true })) {
+      const p = join(dir, e.name);
+      if (e.name === '.git') continue;
+      if (e.isDirectory()) existsSync(join(p, '.git')) || stamps(p, out);
+      else {
+        const s = lstatSync(p, { throwIfNoEntry: false });
+        if (s) out.set(p, `${s.mtimeMs}:${s.size}`);
+      }
+    }
+  } catch {} // a folder removed during the walk: the rest is still a fair snapshot
+  return out;
+}
+
+// Call when a Bash call starts; the returned function, called when it ends, claims every notes file the call changed.
+// shortcut: two workspaces' Bash calls that change notes at the same moment can claim each other's files, and run_in_background changes are missed; snapshot per process if that bites.
+export function notesBash(notes: string, ws: string) {
+  const before = stamps(notes), start = notesSeq;
+  return () => {
+    const now = stamps(notes);
+    for (const f of new Set([...before.keys(), ...now.keys()])) if (before.get(f) !== now.get(f)) claim(notes, ws, f, start);
+  };
+}
+
+// Commits only the files this workspace's arbiter changed, so other workspaces' changes and whatever else is staged in a shared repo stay out.
+// Never throws: files stay attributed and go in the next commit. Commits of all workspaces run in this one process through the synchronous execFileSync, so they never overlap: no locks needed.
+// shortcut: attribution is per file and in memory: two workspaces editing one shared file before either commits put both edits in the last writer's commit, and changes left uncommitted at a restart (or made by the user) are not committed except the workspace's own journal; persist notesOwner if that bites.
+export function commitNotes(notes: string, id: string, name: string) {
   try {
     const at = notesGit(notes);
     if (!at) return void console.warn(`notes: not committing ${notes}: its git dir is inside the folder, where agents can plant hooks. To let Jarvis commit it, move the git dir out: mkdir -p ${NOTES_GIT} && git -C ${notes} init --separate-git-dir ${notesGitDir(notes)}`);
-    const paths = ['--', notes, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
-    if (!git(notes, ...at, 'status', '--porcelain', ...paths).trim()) return;
-    const has = (k: string) => { try { return !!git(notes, ...at, 'config', k).trim(); } catch { return false; } };
-    const env = has('user.name') && has('user.email') ? process.env : { ...process.env, GIT_AUTHOR_NAME: 'Jarvis', GIT_AUTHOR_EMAIL: 'jarvis@localhost', GIT_COMMITTER_NAME: 'Jarvis', GIT_COMMITTER_EMAIL: 'jarvis@localhost' };
-    const g = (...args: string[]) => execFileSync('git', ['-C', notes, ...at, ...args], { encoding: 'utf8', stdio: 'pipe', env });
-    g('add', '-A', ...paths);
-    g('commit', '-m', `notes: ${workspace}, ${new Date().toISOString().slice(0, 10)}`, ...paths);
+    const mine = [...notesOwner].filter(([f, o]) => o.ws === id && !relative(notes, f).startsWith('..')).map(([f]) => f);
+    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-${id}.md`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
+    // Porcelain paths are relative to the repo root, hence top; -uall lists files, never an untracked folder that may hold other workspaces' files.
+    const paths = git(notes, ...at, 'status', '--porcelain', '-z', '--no-renames', '--untracked-files=all', ...spec).split('\0').filter(Boolean).map((l) => l.slice(3));
+    const changed = paths.map((p) => `:(top,literal)${p}`);
+    if (changed.length) {
+      const has = (k: string) => { try { return !!git(notes, ...at, 'config', k).trim(); } catch { return false; } };
+      const env = has('user.name') && has('user.email') ? process.env : { ...process.env, GIT_AUTHOR_NAME: 'Jarvis', GIT_AUTHOR_EMAIL: 'jarvis@localhost', GIT_COMMITTER_NAME: 'Jarvis', GIT_COMMITTER_EMAIL: 'jarvis@localhost' };
+      const g = (...args: string[]) => execFileSync('git', ['-C', notes, ...at, ...args], { encoding: 'utf8', stdio: 'pipe', env });
+      g('add', '-A', '--', ...changed);
+      g('commit', '-m', notesMessages.get(id) || fallbackSubject(paths), '-m', `Workspace: ${oneLine(name) || id}`, '--', ...changed);
+    }
+    notesMessages.delete(id); // also when nothing was committed: a stale message must not name a later turn
+    for (const f of mine) notesOwner.delete(f);
   } catch (e) {
     console.warn(`notes: commit failed in ${notes}: ${(e as Error).message}`);
   }
@@ -226,6 +285,7 @@ export class DirtyWorktree extends Error {}
 const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
 
 const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`);
+const NOTES_TOOLS = ['notes_message'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
 const ARBITER_PROMPT = `You are Jarvis, the coordinator (your agent id is arbiter). You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
@@ -384,6 +444,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   async function pump(a: Agent, q: Query) {
     // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
     const base = a.costUsd;
+    const bash = new Map<string, () => void>(); // the arbiter's Bash calls in flight: tool_use id -> claims the notes files the call changed
     try {
       for await (const m of q) {
         if (m.type === 'stream_event') {
@@ -409,14 +470,23 @@ export function createWorkspace(meta: WorkspaceMeta) {
               emit('text', { agentId: a.id, text: block.text });
             } else if (block.type === 'tool_use') {
               emit('tool', { agentId: a.id, name: block.name, input: block.input });
+              if (a.id !== ARBITER || !meta.notes) continue;
+              const input = block.input as { file_path?: unknown; notebook_path?: unknown };
+              const file = block.name === 'NotebookEdit' ? input.notebook_path : input.file_path;
+              if (block.name === 'Bash') bash.set(block.id, notesBash(meta.notes, meta.id));
+              else if (['Write', 'Edit', 'NotebookEdit'].includes(block.name) && typeof file === 'string') notesWritten(meta.notes, meta.id, file);
             }
           }
+        } else if (m.type === 'user' && Array.isArray(m.message.content)) {
+          for (const b of m.message.content) if (b.type === 'tool_result') bash.get(b.tool_use_id)?.(), bash.delete(b.tool_use_id);
         } else if (m.type === 'result') {
           a.costUsd = base + m.total_cost_usd;
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
           setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
-          if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.name);
+          for (const done of bash.values()) done();
+          bash.clear();
+          if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.id, meta.name);
           // Cap what lands in the parent's context; the full text stays available via read_agent.
           const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
           const compacted = compacting.delete(a.id);
@@ -556,6 +626,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
   // Stops everything that is working, waiting or holding a session. Each resumes on its next message.
   const stopAll = () => [...agents.values()].filter((a) => working(a) || sessions.has(a.id)).forEach((a) => stopAgent(a.id));
 
+  // Keyed by the workspace id, which is what commitNotes is called with, not by the agent id.
+  const notesMessage = (message: string) => void notesMessages.set(meta.id, oneLine(message));
+
   const boardTools = (owner: string) => [
     tool('board_post', 'Post a note to the shared board for specific agents or "all": decisions, interfaces, findings others need. Recipients get it with their next message.', {
       to: z.array(z.string()).describe('agent ids or names, or ["all"]'),
@@ -576,7 +649,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
     };
     return createSdkMcpServer({
       name: 'jarvis',
-      tools: [...boardTools(owner), ...(team ? [
+      tools: [...boardTools(owner), ...(owner === ARBITER && meta.notes ? [
+        tool('notes_message', 'Set the git commit message for this turn\'s changes to the notes folder: one line in imperative mood saying what you changed and why, e.g. "Record PR #2 approval, fix verification and review gotchas". Call once per turn in which you changed the notes; a later call replaces the earlier one.', {
+          message: z.string(),
+        }, async ({ message }) => (notesMessage(message), ok('noted'))),
+      ] : []), ...(team ? [
         tool('spawn_agent', 'Start a new coding agent session. It runs in its own git worktree when repo is a git repo. You are notified automatically when it finishes a turn.', {
           name: z.string().describe('short role name, e.g. "tests" or "backend"'),
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
@@ -603,7 +680,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const team = a.id === ARBITER || depth(a) < MAX_DEPTH;
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
-      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${meta.id}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there.`
+      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${meta.id}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
       : `\nProject notes (read-only for you, Jarvis maintains them): ${meta.notes}.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
@@ -611,7 +688,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       // Each agent gets its own browser: isolated, so parallel agents don't fight over one profile dir.
       // Screenshots go outside the worktree, so they don't get committed or block deletion.
       mcpServers: { jarvis: jarvisTools(a.id, team), ...(PLAYWRIGHT !== '0' ? { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--isolated', ...(PLAYWRIGHT === 'headed' ? [] : ['--headless']), '--output-dir', join(dir, 'playwright', a.id)] } } : {}) },
-      allowedTools: [...(team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS), ...(PLAYWRIGHT !== '0' ? ['mcp__playwright'] : [])],
+      allowedTools: [...(team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS), ...(a.id === ARBITER && meta.notes ? NOTES_TOOLS : []), ...(PLAYWRIGHT !== '0' ? ['mcp__playwright'] : [])],
       // Built-in subagents are invisible in the graph; whoever has spawn_agent must use it instead.
       ...(team ? { disallowedTools: ['Agent', 'Task'] } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },
@@ -693,6 +770,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     stopAll,
     configure,
     postNote,
+    notesMessage,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
   };
 }
