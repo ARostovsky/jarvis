@@ -11,14 +11,19 @@ import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
+import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
-type Block = Record<string, unknown>;
+// Typed against the real SDK: a change in its message shapes breaks npm run check here, not only in production.
+type Assistant = SDKAssistantMessage['message'];
+type Usage = Assistant['usage'];
 
-export function query({ prompt, options }: { prompt: AsyncIterable<any>; options: any }) {
-  const session_id: string = options.resume ?? randomUUID();
-  const cwd: string = options.cwd;
+export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
+  if (typeof prompt === 'string') throw new Error('fake sdk: only streaming input, as the server uses');
+  const inbox = prompt;
+  const session_id = options.resume ?? randomUUID();
+  const cwd = options.cwd ?? process.cwd();
   // The real SDK rejects with this when its abortController fires (stop, archive).
   const aborted = new Promise<never>((_, reject) => {
     const fail = () => reject(new Error('Claude Code process aborted by user'));
@@ -27,9 +32,10 @@ export function query({ prompt, options }: { prompt: AsyncIterable<any>; options
   });
   aborted.catch(() => {});
   let n = 0;
-  const base = { session_id, uuid: '', parent_tool_use_id: null };
-  const assistant = (content: Block[]) => ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, usage: {} } });
-  const result = (tool_use_id: string, text: string, is_error = false) =>
+  const base = { session_id, parent_tool_use_id: null };
+  const assistant = (content: Assistant['content']): SDKAssistantMessage =>
+    ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: {} as Usage } });
+  const result = (tool_use_id: string, text: string, is_error = false): SDKUserMessage =>
     ({ ...base, uuid: randomUUID(), type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id, content: text, is_error }] } });
 
   // One MCP client per in-process server, connected on first use: callTool runs the server's own input validation, as in the real SDK.
@@ -47,15 +53,15 @@ export function query({ prompt, options }: { prompt: AsyncIterable<any>; options
     return { text: (out.content as { text?: string }[]).map((c) => c.text ?? '').join('\n'), is_error: !!out.isError };
   }
 
-  async function* turn(script: string) {
+  async function* turn(script: string): AsyncGenerator<SDKMessage> {
     const texts: string[] = [];
-    yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode, apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
+    yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
     for (const line of script.split('\n')) {
       const [, cmd, rest = ''] = /^(\w+)\s*(.*)$/.exec(line.trim()) ?? [];
       const id = `toolu_fake_${++n}`;
       if (cmd === 'say') {
         texts.push(rest);
-        yield assistant([{ type: 'text', text: rest }]);
+        yield assistant([{ type: 'text', text: rest, citations: null }]);
       } else if (cmd === 'sleep') {
         await Promise.race([new Promise((r) => setTimeout(r, Number(rest))), aborted]);
       } else if (cmd === 'write') {
@@ -79,24 +85,24 @@ export function query({ prompt, options }: { prompt: AsyncIterable<any>; options
         yield result(id, r.text, r.is_error);
       }
     }
-    yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: texts.join('\n'), total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {}, modelUsage: {}, permission_denials: [] };
+    yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: texts.join('\n'), stop_reason: 'end_turn', total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
   }
 
-  async function* run() {
-    const input = prompt[Symbol.asyncIterator]();
+  async function* run(): AsyncGenerator<SDKMessage, void> {
+    const input = inbox[Symbol.asyncIterator]();
     for (;;) {
       const next = await Promise.race([input.next(), aborted]);
       if (next.done) return;
       const c = next.value.message.content;
-      yield* turn(typeof c === 'string' ? c : c.map((b: Block) => b.text ?? '').join('\n'));
+      yield* turn(typeof c === 'string' ? c : c.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
     }
   }
 
-  return Object.assign(run(), {
-    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 200_000 }),
+  // Only what the server calls; the cast stands in for the many other control methods of a real Query.
+  const q: Pick<Query, 'getContextUsage' | 'setModel' | 'applyFlagSettings'> & AsyncGenerator<SDKMessage, void> = Object.assign(run(), {
+    getContextUsage: async () => ({ totalTokens: 0, maxTokens: 200_000 }) as Awaited<ReturnType<Query['getContextUsage']>>,
     setModel: async () => {},
     applyFlagSettings: async () => {},
-    interrupt: async () => {},
-    close: () => {},
   });
-}
+  return q as Query;
+};
