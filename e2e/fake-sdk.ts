@@ -5,6 +5,8 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
+//                           then says "allow <updated input as JSON>" or "deny <message>"; runs nothing
 // Messages come in the real SDK's order: system init, then per tool an assistant tool_use, the tool runs, a user tool_result; then the result.
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
@@ -55,13 +57,16 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
 
   async function* turn(script: string): AsyncGenerator<SDKMessage> {
     const texts: string[] = [];
+    function* say(text: string) {
+      texts.push(text);
+      yield assistant([{ type: 'text', text, citations: null }]);
+    }
     yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
     for (const line of script.split('\n')) {
       const [, cmd, rest = ''] = /^(\w+)\s*(.*)$/.exec(line.trim()) ?? [];
       const id = `toolu_fake_${++n}`;
       if (cmd === 'say') {
-        texts.push(rest);
-        yield assistant([{ type: 'text', text: rest, citations: null }]);
+        yield* say(rest);
       } else if (cmd === 'sleep') {
         await Promise.race([new Promise((r) => setTimeout(r, Number(rest))), aborted]);
       } else if (cmd === 'write') {
@@ -83,6 +88,20 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         yield assistant([{ type: 'tool_use', id, name, input }]);
         const r = await mcp(name, input).catch((e: Error) => ({ text: e.message, is_error: true }));
         yield result(id, r.text, r.is_error);
+      } else if (cmd === 'perm') {
+        const [, name, json = '{}'] = /^(\S+)\s?(.*)$/.exec(rest) ?? [];
+        const input = JSON.parse(json);
+        yield assistant([{ type: 'tool_use', id, name, input }]);
+        if (!options.canUseTool) throw new Error('fake sdk: perm needs options.canUseTool');
+        const signal = options.abortController?.signal ?? new AbortController().signal;
+        const r = await Promise.race([options.canUseTool(name, input, { signal, toolUseID: id, requestId: randomUUID() }), aborted]);
+        if (r?.behavior === 'allow') {
+          yield result(id, 'allowed');
+          yield* say(`allow ${JSON.stringify(r.updatedInput ?? input)}`);
+        } else {
+          yield result(id, r?.message ?? 'no decision', true);
+          yield* say(`deny ${r?.message}`);
+        }
       }
     }
     yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: texts.join('\n'), stop_reason: 'end_turn', total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
