@@ -1,4 +1,4 @@
-import { query, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options, type EffortLevel } from '@anthropic-ai/claude-agent-sdk';
+import { query as sdkQuery, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options, type EffortLevel } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
@@ -6,6 +6,9 @@ import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileS
 import { createHash } from 'node:crypto';
 import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+
+// Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
+const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
 
 export type Status = 'running' | 'idle' | 'waiting' | 'error' | 'stopped';
 

@@ -14,7 +14,8 @@ export default defineConfig({
     // The data dir is wiped on every run; never the real ~/.local/share/jarvis.
     command: `node -e "fs.rmSync(process.env.XDG_DATA_HOME,{recursive:true,force:true})" && node src/server.ts`,
     url: `http://127.0.0.1:${PORT}/workspaces`,
-    env: { PORT: String(PORT), XDG_DATA_HOME: DATA_HOME },
+    // Agent sessions run on a scripted fake of the SDK: no API calls, no cost.
+    env: { PORT: String(PORT), XDG_DATA_HOME: DATA_HOME, JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts') },
     reuseExistingServer: false,
   },
 });

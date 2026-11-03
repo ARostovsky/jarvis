@@ -67,7 +67,10 @@ npm install
 npm start          # server in the foreground on http://127.0.0.1:7777
 npm run check      # tsc type check
 npm test           # node:test, today only the git safety of the notes folder and agent worktrees
+npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 with a throwaway data dir
 ```
+
+The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line (`say <text>`, `sleep <ms>`, `write <path> <content>`, `bash <command>`, `tool <mcp tool> <json>`), really writes files and runs commands, calls the real handlers of the in-process `jarvis` MCP server it gets in `options.mcpServers`, and emits SDK messages in the real order (tool_use, then the tool runs, then tool_result).
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
 
@@ -283,6 +286,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
 | `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |
+| `JARVIS_FAKE_SDK` | unset | Tests only: path of a module whose `query()` replaces the SDK's (`e2e/fake-sdk.ts`) |
 
 ## Invariants you must keep
 
@@ -346,5 +350,5 @@ Search the code for `shortcut:` for the current list. At the time of writing:
 - A non-git repo is used in place, without isolation.
 - `a.repo` is trusted as the repo the server chose, but `spawn_agent` takes any `repo` path, so an agent can name a folder whose `.git` it controls (its own worktree, say, or a sub-agent of a plain-dir agent defaults to that dir); `git worktree add` and `wtGit()` would then read that repo. Restricting `repo` to the project and the parents' repos would close it.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
-- Automated tests cover only the git safety of the notes folder and agent worktrees (`npm test`); the rest relies on the type check.
+- Unit tests cover only the git safety of the notes folder and agent worktrees (`npm test`); the e2e tests drive the UI and agent sessions on the fake SDK, so the real SDK integration (message shapes, permission prompts, resume) is checked only by the type check.
 - The launcher opens the browser with `xdg-open` (Linux) or `open` (macOS); on other systems open the URL by hand.

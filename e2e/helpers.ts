@@ -1,5 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
-import { appendFileSync, mkdtempSync } from 'node:fs';
+import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { DATA_HOME } from '../playwright.config.ts';
@@ -26,6 +26,12 @@ export const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), `jarvis-e2e-${
 // Origin and content-type are required by the server on POST.
 export const post = (page: Page, path: string, data: object) =>
   page.request.post(path, { headers: { origin: 'http://127.0.0.1:7798' }, data });
+
+// Persisted events of a workspace, oldest first.
+export const events = (ws: string): any[] => readFileSync(join(DATA, 'workspaces', ws, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+
+// Lines of a script for the fake SDK (e2e/fake-sdk.ts), sent to the arbiter.
+export const say = (page: Page, ws: string, ...lines: string[]) => post(page, '/say', { ws, text: lines.join('\n') });
 
 export async function createWs(page: Page, name: string, extra: object = {}): Promise<string> {
   const r = await post(page, '/workspaces', { name, ...extra });
