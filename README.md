@@ -1,3 +1,5 @@
+[![CI](https://github.com/ARostovsky/jarvis/actions/workflows/ci.yml/badge.svg)](https://github.com/ARostovsky/jarvis/actions/workflows/ci.yml)
+
 # Jarvis
 
 **One AI manager that runs a team of AI coding agents, and a live map where you watch them work.**
