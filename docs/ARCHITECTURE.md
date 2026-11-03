@@ -81,6 +81,7 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `bash <command>` | `Bash` tool: really runs the command in the session cwd |
 | `tool <mcp tool> <json>` | calls an in-process MCP tool, e.g. `tool mcp__jarvis__spawn_agent {...}` |
 | `perm <tool> <json>` | calls `options.canUseTool` as the real SDK does for a call it cannot decide (in any permission mode), waits for the UI's answer, then says `allow <updated input as JSON>` or `deny <message>`; runs nothing |
+| `fail <subtype>` | ends the turn with an error result, e.g. `fail error_during_execution`; the session lives on |
 | `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
 | `/compact` (the whole message) | a `compact_boundary`, then an empty success result. Every other turn adds 30k tokens of context; `getContextUsage` reports the pre-compact size for `summary` (as the real SDK, which reads the last response's usage) and the compacted size for `full` |
 

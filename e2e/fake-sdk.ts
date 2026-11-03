@@ -6,6 +6,7 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
 //                           then says "allow <updated input as JSON>" or "deny <message>"; runs nothing
@@ -18,7 +19,7 @@ import { promisify } from 'node:util';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { dirname, resolve } from 'node:path';
-import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKPartialAssistantMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKPartialAssistantMessage, SDKResultError, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 
@@ -97,6 +98,10 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         yield* say(rest);
       } else if (cmd === 'option') {
         yield* say(`${rest}=${JSON.stringify(options[rest as keyof typeof options])}`);
+      } else if (cmd === 'fail') {
+        lastUsage = tokens += 30_000;
+        const subtype = rest as SDKResultError['subtype'];
+        return yield { ...base, uuid: randomUUID(), type: 'result', subtype, errors: [`fake ${rest}`], stop_reason: null, total_cost_usd: 0, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
       } else if (cmd === 'pace') {
         pace = Number(rest);
       } else if (cmd === 'sleep') {
