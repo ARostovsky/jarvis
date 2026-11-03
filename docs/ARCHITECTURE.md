@@ -46,6 +46,7 @@ flowchart LR
 | `src/server.ts` | HTTP server: serves the page, SSE stream, JSON command table. About 80 lines. |
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
+| `e2e/` | Playwright specs, `helpers.ts` and `fake-sdk.ts`, the scripted stand-in for the SDK (see [Running and checking](#running-and-checking)). |
 | `docs/` | This file and the README screenshots. |
 | `tsconfig.json` | Type check only (`noEmit`). Node runs `.ts` directly. |
 
@@ -365,5 +366,5 @@ Search the code for `shortcut:` for the current list. At the time of writing:
 - A non-git repo is used in place, without isolation.
 - `a.repo` is trusted as the repo the server chose, but `spawn_agent` takes any `repo` path, so an agent can name a folder whose `.git` it controls (its own worktree, say, or a sub-agent of a plain-dir agent defaults to that dir); `git worktree add` and `wtGit()` would then read that repo. Restricting `repo` to the project and the parents' repos would close it.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
-- Unit tests cover only the git safety of the notes folder and agent worktrees (`npm test`); the e2e tests drive the UI and agent sessions on the fake SDK, so the real SDK integration (message shapes, permission prompts, resume) is checked only by the type check.
+- Unit tests cover only the git safety of the notes folder and agent worktrees (`npm test`). The e2e tests drive the UI and agent sessions on the fake SDK, permission prompts, resume after a restart, `/compact`, streaming and error results included, but the fake follows the SDK's types and documented behavior, not recorded traffic: when the real SDK calls `canUseTool` in `auto` mode, the exact messages around a compaction, the timing of deltas and what a resumed session remembers are not checked. Recording a real session and replaying it in the fake would close that.
 - The launcher opens the browser with `xdg-open` (Linux) or `open` (macOS); on other systems open the URL by hand.
