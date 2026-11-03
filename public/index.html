@@ -566,8 +566,16 @@ function markSelected(id) {
   }
 }
 
+const drafts = loadJson('jarvis.drafts'); // unsent #dinput text per `${workspace}/${agent}`
+const draftKey = () => WS && selected && `${WS}/${selected}`;
+function setDraft(text = $('dinput').value) { const k = draftKey(); if (!k) return; if (text) drafts[k] = text; else delete drafts[k]; saveJson('jarvis.drafts', drafts); }
+function dropDrafts(ws) { for (const k in drafts) if (k.startsWith(`${ws}/`)) delete drafts[k]; saveJson('jarvis.drafts', drafts); }
+
 function select(id) {
+  setDraft();
   selected = id;
+  $('dinput').value = drafts[draftKey()] ?? '';
+  $('dinput').oninput();
   const a = agents.get(id);
   markSelected(id);
   renderTitle();
@@ -846,6 +854,7 @@ async function archiveWs(w) {
     r = await wsPost('/workspaces/archive', { ws: w.id, commit: true });
   }
   if (!r.ok) return toast(`archive failed: ${r.text}`);
+  dropDrafts(w.id);
   WS = null;
   refreshTabs();
 }
@@ -866,6 +875,7 @@ async function deleteArchivedUi(a) {
   if (name === null) return;
   const d = await wsPost('/workspaces/archived/delete', { id: a.id, name });
   if (!d.ok) return toast(`delete failed: ${d.text}`);
+  dropDrafts(a.id);
   refreshTabs();
 }
 
@@ -887,9 +897,11 @@ function renderArchived(archived) {
 }
 
 function switchTo(id) {
+  $('pclose').onclick(); // saves the open draft under the old workspace
   WS = id;
+  $('dinput').value = '';
+  $('dinput').oninput();
   try { localStorage.setItem('jarvis.ws', id); } catch {}
-  $('pclose').onclick();
   userView = false;
   connect();
   refreshTabs();
@@ -939,11 +951,12 @@ $('direct').onsubmit = (ev) => {
   if (text && selected) post('/send', { id: selected, text });
   $('dinput').value = '';
   $('dinput').oninput();
+  setDraft('');
 };
 $('dinput').ondblclick = () => { const t = $('dinput'); if (t.readOnly) { t.readOnly = false; t.placeholder = 'Message the agent directly…  (Enter to send, Shift+Enter for new line)'; } };
 $('dinput').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('direct').requestSubmit(); } };
 $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; }; // empty: skip, a wrapped placeholder would inflate scrollHeight
-$('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); selected = null; markSelected(null); };
+$('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); setDraft(); selected = null; markSelected(null); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
 $('pcompact').onclick = () => selected && post('/compact', { id: selected });
 // Modal with a list of choices; resolves to the chosen value, or '' on cancel.
@@ -1165,6 +1178,7 @@ addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pv
 
 // Vertical wheel scrolls the tab strip sideways.
 $('tabs').addEventListener('wheel', (ev) => { if (!ev.deltaY) return; ev.preventDefault(); $('tabs').scrollLeft += ev.deltaY; }, { passive: false });
+addEventListener('pagehide', () => setDraft());
 refreshTabs();
 setInterval(refreshTabs, 2000);
 </script>
