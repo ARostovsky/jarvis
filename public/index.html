@@ -723,7 +723,8 @@ const handlers = {
   result: (e) => {
     const a = agents.get(e.agentId);
     if (a) a.agent.costUsd = e.costUsd;
-    log(e.agentId, 'result', '■ done', ` · $${e.costUsd.toFixed(3)}`);
+    // The server sets status error just before an error result, whose text says why (error: <subtype>).
+    log(e.agentId, 'result', a?.agent.status === 'error' ? `■ ${e.text}` : '■ done', ` · $${e.costUsd.toFixed(3)}`);
     renderTitle();
   },
   runtime: (e) => {
