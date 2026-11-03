@@ -21,6 +21,8 @@ jarvis            # starts the server in the background and opens http://127.0.0
 
 Also: `jarvis stop|restart|status|logs`. Foreground: `npm start`.
 
+Browser tests: `npm run e2e` (Playwright, starts its own server on port 7798 with a throwaway data dir; needs chromium, `npx playwright install chromium`).
+
 First goal:
 
 1. Click **+**. Name the workspace and, optionally, give the path to your git project. Project and notes folders you used before are offered in a list, most recent first.
