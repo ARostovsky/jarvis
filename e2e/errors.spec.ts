@@ -32,3 +32,17 @@ test('an agent that ends with an error reports it to Jarvis', async ({ page }) =
   const agentId = events(id).find((e) => e.type === 'spawned' && e.agent.name === 'breaks').agent.id;
   await expect.poll(() => events(id).find((e) => e.type === 'routed' && e.from === agentId)?.text).toBe(`[agent ${agentId} finished, status error]\nerror: error_max_turns`);
 });
+
+test('Enter on the focused × hides the toast and does not open the chat', async ({ page }) => {
+  const name = uniq('enter');
+  await createWs(page, name);
+  await open(page, name);
+  await page.keyboard.press('Escape'); // close the panel
+  await expect(page.locator('#panel')).not.toHaveClass(/\bopen\b/);
+  await page.evaluate(() => (window as any).toast('boom'));
+  await expect(page.locator('#toast')).toBeVisible();
+  await page.locator('#toastClose').focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('#toast')).toBeHidden();
+  await expect(page.locator('#panel')).not.toHaveClass(/\bopen\b/);
+});

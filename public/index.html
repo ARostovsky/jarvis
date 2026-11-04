@@ -125,8 +125,10 @@
   dialog h3 { margin: 0 0 8px; letter-spacing: .15em; color: var(--amber); }
   dialog pre { font-size: 12px; color: #e8d2a8; max-height: 200px; overflow: auto; }
   dialog button { border: 1px solid var(--line); padding: 8px 14px; margin-right: 6px; }
-  #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; }
-  #toast.show { display: block; }
+  #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; user-select: text; z-index: 5; }
+  #toast.show { display: flex; gap: 12px; align-items: flex-start; }
+  #toast span { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
+  #toast button { border: 1px solid var(--line); padding: 0 8px; }
   #hint { position: fixed; top: 36px; right: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
   #tabs { position: fixed; top: 8px; left: 16px; right: 400px; /* clears LINK and the DRAG hint */ display: flex; gap: 6px; overflow-x: auto; scrollbar-width: thin; padding: 4px 0; z-index: 2; }
   body.panel-open #tabs { right: max(400px, calc(min(var(--panel-w), 100vw - 32px) + var(--panel-x) + 16px)); }
@@ -177,7 +179,7 @@
 </svg>
 
 <div id="asks"></div>
-<div id="toast" role="alert"></div>
+<div id="toast" role="alert"><span id="toastText"></span><button id="toastClose" aria-label="Dismiss error">×</button></div>
 <dialog id="newws">
   <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
   <form method="dialog" id="newwsForm">
@@ -948,11 +950,11 @@ function connect() {
 }
 
 function toast(text) {
-  $('toast').textContent = text;
+  $('toastText').textContent = text;
   $('toast').classList.add('show');
-  clearTimeout(toast.t);
-  toast.t = setTimeout(() => $('toast').classList.remove('show'), 6000);
 }
+// Errors stay until dismissed, so the text can be read and copied.
+$('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
 
 async function post(path, data) {
   const r = await postJson(path, { ...data, ws: WS });
@@ -1019,7 +1021,7 @@ $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => {
   if (e.key === 'Escape') $('pclose').onclick();
   // With the panel closed, Enter or / brings back the arbiter chat.
-  else if ((e.key === 'Enter' || e.key === '/') && !selected && !e.target.closest('input, textarea, dialog')) { e.preventDefault(); select(ARBITER); }
+  else if ((e.key === 'Enter' || e.key === '/') && !selected && !e.target.closest('input, textarea, dialog') && !(e.key === 'Enter' && e.target.closest('button'))) { e.preventDefault(); select(ARBITER); }
 };
 
 // ---- pan, zoom, drag ----

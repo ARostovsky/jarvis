@@ -53,6 +53,7 @@ test('restore brings it back and opens it', async ({ page }) => {
 });
 
 test('delete from the archive needs the right name', async ({ page }) => {
+  await page.clock.install();
   await page.goto('/');
   await tab(page, renamed).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Archive workspace' }).click();
@@ -69,6 +70,10 @@ test('delete from the archive needs the right name', async ({ page }) => {
   await del('wrong name');
   await expect(page.locator('#toast')).toContainText('delete failed');
   await expect(page.locator('#toast')).toContainText('nothing deleted');
+  await page.clock.fastForward(7000); // an error toast outlives the old 6 s timeout
+  await expect(page.locator('#toast')).toBeVisible();
+  await page.getByRole('button', { name: 'Dismiss error' }).click();
+  await expect(page.locator('#toast')).toBeHidden();
   await expect(archivedRow(page, renamed)).toHaveCount(1);
 
   await del(renamed);
