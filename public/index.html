@@ -957,17 +957,26 @@ function toast(text) {
 $('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
 
 async function post(path, data) {
-  const r = await postJson(path, { ...data, ws: WS });
-  if (r.ok) return;
-  if (r.status === 409 && path === '/delete') return askDirty(data.id, await r.text());
-  toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
+  const r = await postJson(path, { ...data, ws: WS }).catch((e) => e);
+  if (r instanceof Error) return toast(`${path.slice(1)} failed: ${r.message}`), false;
+  if (r.ok) return true;
+  if (r.status === 409 && path === '/delete') askDirty(data.id, await r.text());
+  else toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
+  return false;
 }
 
-$('direct').onsubmit = (ev) => {
+let sending = false; // a second Enter while /send is in flight would send the text twice
+$('direct').onsubmit = async (ev) => {
   ev.preventDefault();
   const text = $('dinput').value.trim();
-  if ($('dinput').readOnly) return;
-  if (text && selected) post('/send', { id: selected, text });
+  if ($('dinput').readOnly || sending) return;
+  const id = selected, key = `${WS}/${id}`;
+  if (text && id) {
+    sending = true;
+    try { if (!await post('/send', { id, text })) return; } finally { sending = false; }
+    if (key !== draftKey()) { if (drafts[key]?.trim() === text) { delete drafts[key]; saveJson('jarvis.drafts', drafts); } return; } // moved on: the sent text must not come back as a draft
+    if ($('dinput').value.trim() !== text) return; // the user kept typing: that text is theirs
+  }
   $('dinput').value = '';
   $('dinput').oninput();
   setDraft('');
