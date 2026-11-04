@@ -73,6 +73,15 @@ function readLog(file: string): { line: string; e: any }[] {
   return out;
 }
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
+// False also when the repo itself is gone.
+const hasBranch = (repo: string, branch: string) => {
+  try {
+    git(repo, 'rev-parse', '--verify', '--quiet', `refs/heads/${branch}`);
+    return true;
+  } catch {
+    return false;
+  }
+};
 
 // Only what agents need from ~/.claude/settings.json: auth (apiKeyHelper, env such as a proxy URL), model and commit attribution.
 // Loading full user settings drags in all plugins and hooks: ~5x the tokens per turn.
@@ -513,10 +522,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   function report(a: Agent, text: string) {
-    const parent = agents.get(a.parentId!);
-    if (!parent || parent.status === 'stopped') return;
-    emit('routed', { from: a.id, to: parent.id, text });
-    deliver(parent, text);
+    let to = agents.get(a.parentId!);
+    // A parent without a workdir (its branch is gone) cannot run: the nearest ancestor that can gets the report.
+    while (to && !existsSync(to.cwd)) to = agents.get(to.parentId!);
+    if (!to) return void console.warn(`report of ${a.id} dropped: no ancestor has a workdir`);
+    if (to.status === 'stopped') return;
+    emit('routed', { from: a.id, to: to.id, text });
+    deliver(to, text);
   }
 
   const unread = (a: Agent) =>
@@ -577,12 +589,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const a = agents.get(id);
     if (!a || id === ARBITER) throw new Error(`cannot delete ${id}`);
     if (children(id).length) throw new Error(`${id} has sub-agents, delete them first`);
-    const changes = a.repo ? wtChanges(a) : '';
+    const changes = a.repo && existsSync(a.cwd) ? wtChanges(a) : '';
     if (changes && !dirty) throw new DirtyWorktree(`${id} has uncommitted changes:\n${changes.split('\n').slice(0, 10).join('\n')}`);
     stopAgent(id);
-    if (a.repo) {
+    if (a.repo && existsSync(a.cwd)) {
       if (changes && dirty === 'commit') commitWork(a, `jarvis: save uncommitted work of ${id} before delete`);
       git(a.repo, 'worktree', 'remove', ...(dirty === 'discard' ? ['--force'] : []), a.cwd);
+    } else if (a.repo) {
+      try {
+        git(a.repo, 'worktree', 'remove', a.cwd); // the folder is gone: drop only its own stale registration
+      } catch {} // not registered, or the repo is gone too
     } else if (ownPlainDir(a)) {
       // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
       rmSync(a.cwd, { recursive: true, force: true });
@@ -591,8 +607,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
     emit('removed', { agentId: id });
   }
 
+  // In the callers, not in deliver(): report() delivers from inside a child's pump, which a throw would end.
+  function needWorkdir(a: Agent) {
+    if (!existsSync(a.cwd)) throw new Error(`${a.id} has no workdir (its branch or folder is gone); delete it`);
+  }
+
   function sendToAgent(id: string, text: string, from = ARBITER) {
     const a = agent(id);
+    needWorkdir(a);
     emit('routed', { from, to: id, text });
     deliver(a, text);
   }
@@ -614,6 +636,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function compactAgent(id: string) {
     const a = agent(id);
     if (working(a)) throw new Error(`${id} is busy, compact it when it is idle`);
+    needWorkdir(a);
     compacting.add(id);
     emit('routed', { from: 'user', to: id, text: '/compact' });
     session(a).push('/compact');
@@ -731,22 +754,55 @@ export function createWorkspace(meta: WorkspaceMeta) {
     } catch (e) {
       // Half-detached: put back what was already moved so the workspace stays usable, then report.
       closed = false;
-      reattach();
+      try {
+        reattach();
+      } catch (r) {
+        throw new Error(`archive aborted (${(e as Error).message.trim()}), and ${(r as Error).message}`);
+      }
       throw new Error(`archive aborted, workspace left as it was: ${(e as Error).message}`);
     }
   }
 
   // Puts workdirs back after a restore: worktrees from their branches, plain dirs from the archive.
-  function reattach() {
+  // Tries every agent before it throws, so a rollback puts back as much as it can.
+  // undo (a failing restore): before throwing, takes back only what this call put back; workdirs that were already there stay as they are.
+  function reattach(undo = false) {
+    const failed: string[] = [];
+    const put: Agent[] = [];
     for (const a of workers()) {
       if (existsSync(a.cwd)) continue;
-      if (a.repo) git(a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`);
-      else if (ownPlainDir(a) && existsSync(join(PARKED, a.id))) {
-        mkdirSync(WORKTREES, { recursive: true });
-        renameSync(join(PARKED, a.id), a.cwd);
+      try {
+        if (a.repo) {
+          try {
+            git(a.repo, 'worktree', 'remove', a.cwd); // a folder deleted by hand leaves its registration, which blocks add; drop only this one
+          } catch {} // not registered
+          git(a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`);
+          put.push(a);
+        } else if (ownPlainDir(a) && existsSync(join(PARKED, a.id))) {
+          mkdirSync(WORKTREES, { recursive: true });
+          renameSync(join(PARKED, a.id), a.cwd);
+          put.push(a);
+        }
+      } catch (e) {
+        const msg = (e as Error).message.trim();
+        // Branch merged and deleted, or repo gone: the agent stays, without a workdir.
+        if (a.repo && !hasBranch(a.repo, `jarvis/${a.id}`)) console.warn(`no workdir for ${a.id}: ${msg}`);
+        // Anything the user can fix (branch checked out elsewhere, a locked stale worktree, a permission error under worktrees/) fails loudly; the callers roll back.
+        else failed.push(`${a.id}: ${msg}`);
+      }
+    }
+    if (failed.length && undo) {
+      for (const a of put) {
+        try {
+          if (a.repo) git(a.repo, 'worktree', 'remove', a.cwd); // just checked out, so no --force
+          else renameSync(a.cwd, join(PARKED, a.id));
+        } catch (e) {
+          console.warn(`cannot take back the workdir of ${a.id}: ${(e as Error).message.trim()}`);
+        }
       }
     }
     if (existsSync(PARKED) && !readdirSync(PARKED).length) rmSync(PARKED, { recursive: true });
+    if (failed.length) throw new Error(`workdirs could not be put back:\n${failed.join('\n')}`);
   }
 
   restore();
@@ -911,13 +967,20 @@ export function restoreWorkspace(id: string) {
   const from = join(ARCHIVE, id);
   if (!existsSync(join(from, 'meta.json')) || workspaces.has(id)) throw new Error(`cannot restore ${id}`);
   const { archivedAt, ...meta } = readJson(join(from, 'meta.json'));
+  const to = join(DATA, 'workspaces', id);
   mkdirSync(join(DATA, 'workspaces'), { recursive: true });
-  renameSync(from, join(DATA, 'workspaces', id));
-  rmSync(join(DATA, 'workspaces', id, 'meta.json'));
-  const w = createWorkspace(meta);
-  w.reattach();
+  renameSync(from, to);
+  let w: Workspace;
+  try {
+    w = createWorkspace(meta);
+    w.reattach(true);
+  } catch (e) {
+    renameSync(to, from); // a failed restore must stay in the archive, not vanish from both lists
+    throw e;
+  }
   workspaces.set(id, w);
   saveRegistry();
+  rmSync(join(to, 'meta.json')); // only now: after a crash before saveRegistry() its name and folders are still on disk
   touchRecent(meta);
   return meta as WorkspaceMeta;
 }

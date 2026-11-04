@@ -86,7 +86,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 - **Your project folder is never edited directly** when it is a git repo. Each agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge.
 - **Nothing is lost silently.** Deleting an agent with unsaved changes asks you to commit or discard them. Archiving refuses while agents work, and commits unsaved work first. Jarvis never deletes agent branches.
 - **Agents cannot run code through Jarvis's own git.** Jarvis takes the git dir from your repo, not from the worktree's `.git` file, which an agent could replace. Repos nested in a worktree are not looked into.
-- **Archive, not delete.** Closing a workspace archives it, and you can restore it with all conversations. Permanent delete works only in the archive and asks you to type the workspace name.
+- **Archive, not delete.** Closing a workspace archives it, and you can restore it with all conversations. Agents whose branch you have since merged and deleted come back without a workdir; delete them. If a branch is checked out somewhere else, the restore fails with that error and the workspace stays in the archive. Permanent delete works only in the archive and asks you to type the workspace name.
 - **Local only.** The web UI listens on `127.0.0.1` and rejects requests from other websites.
 - **Restarts are safe.** Every event is written to disk. After a restart the map, logs and costs return, and agents continue on the next message.
 

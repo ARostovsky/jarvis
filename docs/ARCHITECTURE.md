@@ -234,10 +234,10 @@ Repo choice: the arbiter's agents default to the workspace project folder; sub-a
 1. Refused while any agent is `running` or `waiting`.
 2. Dirty worktrees: refused unless `commit: true`, then each is committed to its own branch.
 3. Clean worktrees are removed (branches stay). Plain workdirs move into `parked-workdirs/`.
-4. If git fails midway, `reattach()` puts back what was removed and the workspace stays active.
+4. If git fails midway, `reattach()` puts back what was removed and the workspace stays active. `reattach()` tries every agent before it throws, and if a workdir cannot be put back the error names it; the branches still hold the work.
 5. The folder moves to `archive/<id>/` with `meta.json`.
 
-**Restore** moves it back and re-creates worktrees from their branches. **Permanent delete** works only on archived workspaces, needs the exact workspace name, and never touches branches in your repos.
+**Restore** moves it back and re-creates worktrees from their branches (`reattach()`; a stale registration of the agent's own worktree path, left by a folder deleted by hand, is removed first with `git worktree remove <path>`; other worktrees of the repo are never pruned, since one on an unplugged drive would lose its admin dir). An agent whose branch is gone (merged and deleted) or whose repo is gone stays in the graph without a workdir, with a warning in the server log: messages and `/compact` to it are refused with "has no workdir", a child's report goes to the nearest ancestor that has a workdir (the arbiter always has one), and it can be deleted. Any other error (the branch checked out elsewhere, a locked stale worktree, a permission error under `worktrees/`) fails the restore: `reattach(true)` takes back only the workdirs this attempt put back (worktrees removed without `--force`, plain dirs moved back into `parked-workdirs/`), workdirs that were already there before the restore are left alone, and the folder moves back into the archive with its `meta.json`, so it can be retried after the fix. **Permanent delete** works only on archived workspaces, needs the exact workspace name, and never touches branches in your repos.
 
 ## HTTP API
 
