@@ -72,6 +72,14 @@ function readLog(file: string): { line: string; e: any }[] {
   }
   return out;
 }
+// The agent of a spawned event. Older logs can name another agent's worktree as repo; that agent's repo outlives the worktree, so it is used instead.
+// repoAt maps the worktrees of the agents spawned so far, deleted ones included, to their repo.
+// shortcut: exact path match, so symlinked paths and agent worktrees of other workspaces are not resolved; compare realpaths or ask git if that bites.
+function spawned(e: any, repoAt: Map<string, string>): Agent {
+  const a: Agent = { ...e.agent, repo: repoAt.get(e.agent.repo) ?? e.agent.repo };
+  if (a.repo) repoAt.set(a.cwd, a.repo);
+  return a;
+}
 const git = (cwd: string, ...args: string[]) => execFileSync('git', ['-C', cwd, ...args], { encoding: 'utf8', stdio: 'pipe' });
 // False also when the repo itself is gone.
 const hasBranch = (repo: string, branch: string) => {
@@ -279,13 +287,14 @@ export function commitNotes(notes: string, id: string, name: string) {
   }
 }
 
-function makeWorkdir(id: string, repo?: string, from?: string): { cwd: string; repo?: string } {
+// owner: the repo to record instead of repo, when repo is another agent's worktree.
+function makeWorkdir(id: string, repo?: string, from?: string, owner?: string): { cwd: string; repo?: string } {
   mkdirSync(WORKTREES, { recursive: true });
   const dir = join(WORKTREES, id);
   // shortcut: repo is trusted, but spawn_agent lets an agent name any path, its own worktree included, whose .git it controls; restrict repo to the project and its parents' repos if agents start doing that.
   if (repo && existsSync(join(repo, '.git'))) {
     git(repo, 'worktree', 'add', '-b', `jarvis/${id}`, dir, ...(from ? [from] : []));
-    return { cwd: dir, repo: resolve(repo) };
+    return { cwd: dir, repo: owner ?? resolve(repo) };
   }
   // shortcut: non-git repo is used in place (no isolation), add copy/sandbox if this bites
   if (repo) return { cwd: resolve(repo) };
@@ -381,12 +390,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function restore() {
     mkdirSync(ARBITER_HOME, { recursive: true });
     if (!existsSync(LOG)) return;
+    const repoAt = new Map<string, string>();
     const log = readFileSync(LOG, 'utf8');
     if (log && !log.endsWith('\n')) appendFileSync(LOG, '\n'); // end a torn tail so the next event starts on its own line
     for (const { line, e } of readLog(LOG)) {
       history.push(line);
       const a = agents.get(e.agentId);
-      if (e.type === 'spawned') agents.set(e.agent.id, { ...e.agent });
+      if (e.type === 'spawned') agents.set(e.agent.id, spawned(e, repoAt));
       else if (e.type === 'removed') agents.delete(e.agentId);
       else if (e.type === 'board') board.push(e);
       else if (e.type === 'board_seen') boardSeen.set(e.agentId, e.n);
@@ -573,8 +583,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const id = `${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${Date.now().toString(36).slice(-4)}${++seq}`;
     // Arbiter's agents default to the workspace project; sub-agents to their parent's checkout so they see its work.
     const base = repo ?? (parentId === ARBITER ? meta.project : parent.repo ?? parent.cwd);
-    // In the parent's repo, start from what the parent has now, uncommitted work included, not from the project's HEAD.
-    const wd = makeWorkdir(id, base, parent.repo && resolve(base!) === parent.repo ? workCommit(parent) : undefined);
+    const at = base && resolve(base);
+    // Another agent's worktree as repo: record that agent's repo, since archive or delete may remove the worktree first.
+    const owner = [...agents.values()].find((x) => x.repo && x.cwd === at);
+    // In the parent's repo or its worktree, start from what the parent has now, uncommitted work included, not from a HEAD.
+    const from = parent.repo && (at === parent.repo || at === parent.cwd) ? workCommit(parent) : undefined;
+    const wd = makeWorkdir(id, base, from, owner?.repo);
     const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort };
     agents.set(id, a);
     emit('spawned', { agent: a });
@@ -946,8 +960,9 @@ export function archivedInfo(id: string) {
   if (!existsSync(join(dir, 'meta.json'))) throw new Error(`no archived workspace ${id}`);
   const meta = readJson(join(dir, 'meta.json'));
   const agents = new Map<string, Agent>();
+  const repoAt = new Map<string, string>();
   for (const { e } of readLog(join(dir, 'events.jsonl'))) {
-    if (e.type === 'spawned') agents.set(e.agent.id, e.agent);
+    if (e.type === 'spawned') agents.set(e.agent.id, spawned(e, repoAt));
     else if (e.type === 'removed') agents.delete(e.agentId);
   }
   const parkedDir = join(dir, 'parked-workdirs');
