@@ -2,9 +2,9 @@ import { query as sdkQuery, tool, createSdkMcpServer, type SDKUserMessage, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { basename, dirname, join, relative, resolve } from 'node:path';
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
@@ -144,7 +144,21 @@ function wtGit(a: Agent): string[] {
 
 // git status and git add -A run git inside a tracked nested repo (a submodule) with that repo's own config, which the agent can write too.
 // So status skips submodule work trees and add leaves gitlinks out; git worktree remove then refuses a worktree with submodules, so nothing is lost.
-const wtChanges = (a: Agent, at = wtGit(a)) => git(a.cwd, ...at, 'status', '--porcelain', '--ignore-submodules=dirty').trim();
+// --untracked-files=normal: status.showUntrackedFiles=no in a config would hide untracked files, which git worktree remove deletes too.
+const wtChanges = (a: Agent, at = wtGit(a)) => git(a.cwd, ...at, 'status', '--porcelain', '--untracked-files=normal', '--ignore-submodules=dirty').trim();
+// What git ignores (.env, node_modules): status leaves it out, a commit too, and git worktree remove deletes it without asking. An ignored dir is one entry.
+function wtIgnored(a: Agent) {
+  const fields = git(a.cwd, ...wtGit(a), 'status', '--porcelain', '-z', '--untracked-files=normal', '--ignored=matching', '--ignore-submodules=dirty').split('\0');
+  const paths: string[] = [];
+  for (let i = 0; i < fields.length; i++) {
+    const l = fields[i];
+    if ('RC'.includes(l[0] || ' ') || 'RC'.includes(l[1] || ' ')) i++; // a rename or copy is followed by its from path
+    else if (l.startsWith('!! ')) paths.push(l.slice(3).replace(/\/$/, ''));
+  }
+  return paths;
+}
+// The first n lines of a list for a dialog, with a mark when some are cut.
+const head = (lines: string[], n = 10) => lines.slice(0, n).join('\n') + (lines.length > n ? '\n…' : '');
 const addAll = (g: (...args: string[]) => string) =>
   g('add', '-A', '--', '.', ...g('ls-files', '-s', '-z').split('\0').filter((l) => l.startsWith('160000 ')).map((l) => `:(exclude,literal)${l.split('\t')[1]}`));
 
@@ -302,7 +316,14 @@ function makeWorkdir(id: string, repo?: string, from?: string, owner?: string): 
   return { cwd: dir };
 }
 
-export class DirtyWorktree extends Error {}
+// canCommit: whether committing would keep anything, so the UI knows whether to offer it.
+export class DirtyWorktree extends Error {
+  canCommit: boolean;
+  constructor(message: string, canCommit = true) {
+    super(message);
+    this.canCommit = canCommit;
+  }
+}
 
 const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v === 'string' ? v : JSON.stringify(v, null, 2) }] });
 
@@ -599,20 +620,37 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Stops the agent and deletes its workdir. Its jarvis/<id> branch is kept, so committed work survives.
   // A worktree with uncommitted changes needs an explicit choice: commit them to the branch, or discard them.
+  // Files that would go without a commit (ignored by git, parked ignored files, a plain workdir) need that choice too.
   function deleteAgent(id: string, dirty?: 'commit' | 'discard') {
     const a = agents.get(id);
     if (!a || id === ARBITER) throw new Error(`cannot delete ${id}`);
     if (children(id).length) throw new Error(`${id} has sub-agents, delete them first`);
-    const changes = a.repo && existsSync(a.cwd) ? wtChanges(a) : '';
-    if (changes && !dirty) throw new DirtyWorktree(`${id} has uncommitted changes:\n${changes.split('\n').slice(0, 10).join('\n')}`);
+    const there = existsSync(a.cwd);
+    const changes = a.repo && there ? wtChanges(a) : '';
+    const ignored = a.repo && there ? wtIgnored(a) : [];
+    const parked = a.repo ? parkedIgnored(a.id) : []; // the agent has no workdir, or a restore could not put them back
+    const plain = ownPlainDir(a) && there ? readdirSync(a.cwd) : [];
+    if (plain.length && dirty === 'commit') throw new Error(`${id}'s workdir is not in git, there is no branch to commit it to`);
+    const why = [
+      changes && `${id} has uncommitted changes:\n${head(changes.split('\n'))}`,
+      ignored.length && `${id} has files ignored by git, they cannot be committed and are deleted with the workdir:\n${head(ignored)}`,
+      parked.length && `${id} has files ignored by git parked by an archive that could not be put back, they are deleted with the agent:\n${head(parked)}`,
+      plain.length && `${id}'s workdir is not in git, its files are deleted with it:\n${head(plain)}`,
+    ].filter(Boolean);
+    if (why.length && !dirty) throw new DirtyWorktree(why.join('\n\n'), !!changes);
     stopAgent(id);
-    if (a.repo && existsSync(a.cwd)) {
+    if (a.repo && there) {
       if (changes && dirty === 'commit') commitWork(a, `jarvis: save uncommitted work of ${id} before delete`);
-      git(a.repo, 'worktree', 'remove', ...(dirty === 'discard' ? ['--force'] : []), a.cwd);
+      // --force only for changes the user chose to discard: without changes it would also delete populated submodules.
+      git(a.repo, 'worktree', 'remove', ...(changes && dirty === 'discard' ? ['--force'] : []), a.cwd);
     } else if (a.repo) {
       try {
         git(a.repo, 'worktree', 'remove', a.cwd); // the folder is gone: drop only its own stale registration
       } catch {} // not registered, or the repo is gone too
+    }
+    if (a.repo) {
+      rmSync(join(IGNORED, a.id), { recursive: true, force: true });
+      rmSync(join(IGNORED, `${a.id}.json`), { force: true });
     } else if (ownPlainDir(a)) {
       // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
       rmSync(a.cwd, { recursive: true, force: true });
@@ -740,6 +778,71 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const PARKED = join(dir, 'parked-workdirs'); // plain (non-git) agent workdirs travel with the archive
   const ownPlainDir = (a: Agent) => !a.repo && resolve(a.cwd) === join(WORKTREES, a.id);
   const workers = () => [...agents.values()].filter((a) => a.id !== ARBITER);
+  // Files git ignores travel with the archive too: parked-ignored/<id>/<path>, listed in parked-ignored/<id>.json.
+  const IGNORED = join(dir, 'parked-ignored');
+  const parkedIgnored = (id: string): string[] => (existsSync(join(IGNORED, `${id}.json`)) ? readJson(join(IGNORED, `${id}.json`)) : []);
+  // Temp file + rename, as saveRegistry: a crash mid-write never leaves a half-written list.
+  function listParked(id: string, paths: string[]) {
+    writeFileSync(join(IGNORED, `${id}.json.tmp`), JSON.stringify(paths));
+    renameSync(join(IGNORED, `${id}.json.tmp`), join(IGNORED, `${id}.json`));
+  }
+  // ENOTDIR: a parent of p is a file now, so p is taken as well.
+  const found = (p: string) => {
+    try {
+      return !!lstatSync(p, { throwIfNoEntry: false });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === 'ENOTDIR') return true;
+      throw e;
+    }
+  };
+  // A listed path must land inside the workdir: not absolute, no .., and no parent that the checkout made a symlink to elsewhere.
+  function inside(cwd: string, p: string) {
+    if (isAbsolute(p) || p.split('/').includes('..')) return false;
+    let d = dirname(join(cwd, p));
+    while (!found(d)) d = dirname(d);
+    try {
+      const root = realpathSync(cwd), real = realpathSync(d);
+      return real === root || real.startsWith(root + sep);
+    } catch {
+      return false; // a dangling symlink
+    }
+  }
+
+  // Moves what git ignores out of a worktree before git worktree remove would delete it.
+  // The list is written before the first move, so a crash midway loses nothing.
+  function park(a: Agent) {
+    const paths = wtIgnored(a);
+    if (!paths.length) return;
+    mkdirSync(join(IGNORED, a.id), { recursive: true });
+    listParked(a.id, [...new Set([...parkedIgnored(a.id), ...paths])]);
+    for (const p of paths) {
+      const to = join(IGNORED, a.id, p);
+      if (found(to)) throw new Error(`${a.id}: ${p} is already parked, from an earlier archive`); // a rename would replace it
+      mkdirSync(dirname(to), { recursive: true });
+      renameSync(join(a.cwd, p), to);
+    }
+  }
+
+  // Puts parked ignored files back. One whose path the checkout now has, or that would land outside the workdir, stays parked, with a warning.
+  function unpark(a: Agent) {
+    const paths = parkedIgnored(a.id);
+    if (!paths.length) return;
+    const left = paths.filter((p) => {
+      const from = join(IGNORED, a.id, p);
+      const to = join(a.cwd, p);
+      if (!found(from)) return false; // put back before a crash
+      if (!inside(a.cwd, p)) return (console.warn(`${a.id}: ${p} stays in ${IGNORED}, it would land outside the workdir`), true);
+      if (found(to)) return (console.warn(`${a.id}: ${p} stays in ${IGNORED}, the workdir has it now`), true);
+      mkdirSync(dirname(to), { recursive: true });
+      renameSync(from, to);
+      return false;
+    });
+    if (left.length) listParked(a.id, left);
+    else {
+      rmSync(join(IGNORED, a.id), { recursive: true, force: true }); // only the emptied parent dirs are left
+      rmSync(join(IGNORED, `${a.id}.json`));
+    }
+  }
 
   const busy = () => [...agents.values()].filter(working).map((a) => a.id);
 
@@ -750,17 +853,19 @@ export function createWorkspace(meta: WorkspaceMeta) {
       .filter((d) => d.changes);
 
   // Leaves nothing behind that isn't recoverable: dirty worktrees are committed to their own branch first,
-  // clean ones are removed (the jarvis/<id> branch keeps everything), plain workdirs move into the archive.
+  // clean ones are removed (the jarvis/<id> branch keeps everything), plain workdirs and files git ignores move into the archive.
   function detach(commit: boolean) {
     const d = dirty();
-    if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${x.changes.split('\n').slice(0, 5).join('\n')}`).join('\n\n'));
+    if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${head(x.changes.split('\n'), 5)}`).join('\n\n'));
     for (const x of d) commitWork(agents.get(x.id)!, `jarvis: save uncommitted work of ${x.id} before archiving workspace`);
     closed = true;
     for (const s of sessions.values()) s.abort.abort();
     try {
       for (const a of workers()) {
-        if (a.repo && existsSync(a.cwd)) git(a.repo, 'worktree', 'remove', a.cwd);
-        else if (ownPlainDir(a) && existsSync(a.cwd)) {
+        if (a.repo && existsSync(a.cwd)) {
+          park(a); // if it or the remove fails, reattach() below puts the files back into the folder that is still there
+          git(a.repo, 'worktree', 'remove', a.cwd);
+        } else if (ownPlainDir(a) && existsSync(a.cwd)) {
           mkdirSync(PARKED, { recursive: true });
           renameSync(a.cwd, join(PARKED, a.id));
         }
@@ -777,21 +882,23 @@ export function createWorkspace(meta: WorkspaceMeta) {
     }
   }
 
-  // Puts workdirs back after a restore: worktrees from their branches, plain dirs from the archive.
+  // Puts workdirs back after a restore: worktrees from their branches plus their parked ignored files, plain dirs from the archive.
   // Tries every agent before it throws, so a rollback puts back as much as it can.
   // undo (a failing restore): before throwing, takes back only what this call put back; workdirs that were already there stay as they are.
   function reattach(undo = false) {
     const failed: string[] = [];
     const put: Agent[] = [];
     for (const a of workers()) {
-      if (existsSync(a.cwd)) continue;
       try {
-        if (a.repo) {
+        if (existsSync(a.cwd)) {
+          if (a.repo) unpark(a); // an archive that failed after parking: the files go back into the worktree that is still there
+        } else if (a.repo) {
           try {
             git(a.repo, 'worktree', 'remove', a.cwd); // a folder deleted by hand leaves its registration, which blocks add; drop only this one
           } catch {} // not registered
           git(a.repo, 'worktree', 'add', a.cwd, `jarvis/${a.id}`);
           put.push(a);
+          unpark(a);
         } else if (ownPlainDir(a) && existsSync(join(PARKED, a.id))) {
           mkdirSync(WORKTREES, { recursive: true });
           renameSync(join(PARKED, a.id), a.cwd);
@@ -808,14 +915,17 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (failed.length && undo) {
       for (const a of put) {
         try {
-          if (a.repo) git(a.repo, 'worktree', 'remove', a.cwd); // just checked out, so no --force
-          else renameSync(a.cwd, join(PARKED, a.id));
+          if (!a.repo) renameSync(a.cwd, join(PARKED, a.id));
+          else {
+            park(a); // the remove below would delete what unpark() put back
+            git(a.repo, 'worktree', 'remove', a.cwd); // just checked out, so no --force
+          }
         } catch (e) {
           console.warn(`cannot take back the workdir of ${a.id}: ${(e as Error).message.trim()}`);
         }
       }
     }
-    if (existsSync(PARKED) && !readdirSync(PARKED).length) rmSync(PARKED, { recursive: true });
+    for (const d of [PARKED, IGNORED]) if (existsSync(d) && !readdirSync(d).length) rmSync(d, { recursive: true });
     if (failed.length) throw new Error(`workdirs could not be put back:\n${failed.join('\n')}`);
   }
 
@@ -826,6 +936,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
     agents.set(a.id, a);
     emit('spawned', { agent: a });
   }
+  // An archive that crashed after parking left files parked under a workdir that is still there: they belong in it.
+  for (const a of workers()) {
+    if (!a.repo || !existsSync(a.cwd)) continue;
+    try {
+      unpark(a);
+    } catch (e) {
+      console.warn(`cannot put back the parked ignored files of ${a.id}: ${(e as Error).message.trim()}`);
+    }
+  }
+  if (existsSync(IGNORED) && !readdirSync(IGNORED).length) rmSync(IGNORED, { recursive: true });
 
   return {
     meta,
@@ -967,8 +1087,15 @@ export function archivedInfo(id: string) {
   }
   const parkedDir = join(dir, 'parked-workdirs');
   const parked = existsSync(parkedDir) ? readdirSync(parkedDir) : [];
+  const ignoredDir = join(dir, 'parked-ignored');
+  const ignored = (existsSync(ignoredDir) ? readdirSync(ignoredDir) : [])
+    .filter((f) => f.endsWith('.json'))
+    .map((f) => {
+      const paths: string[] = readJson(join(ignoredDir, f));
+      return `${f.slice(0, -5)}: ${paths.slice(0, 10).join(', ')}${paths.length > 10 ? ', …' : ''}`;
+    });
   const branches = [...agents.values()].filter((a) => a.repo).map((a) => `${a.repo}: jarvis/${a.id}`);
-  return { ...meta, agents: agents.size - 1, parked, branches };
+  return { ...meta, agents: agents.size - 1, parked, ignored, branches };
 }
 
 // Permanent. The caller must repeat the workspace name. Agent branches in your repos are left alone.

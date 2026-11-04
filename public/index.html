@@ -853,7 +853,7 @@ async function wsPost(path, data) {
 
 async function archiveWs(w) {
   const v = await choose(`ARCHIVE "${w.name}"?`, '',
-    'Agents are stopped and the workspace moves to the archive. Nothing is deleted: committed work stays on jarvis/<id> branches, plain workdirs and logs move with it, and you can restore it any time.',
+    'Agents are stopped and the workspace moves to the archive. Nothing is deleted: committed work stays on jarvis/<id> branches, plain workdirs, files ignored by git (.env, node_modules) and logs move with it, and you can restore it any time.',
     [{ value: 'archive', label: 'ARCHIVE' }]);
   if (!v) return;
   let r = await wsPost('/workspaces/archive', { ws: w.id });
@@ -876,6 +876,7 @@ async function deleteArchivedUi(a) {
   const lines = [
     `Deleted for good: the event log (graph, chats, board) of ${info.agents} agent(s) and Jarvis.`,
     info.parked.length ? `Deleted for good: plain workdirs ${info.parked.join(', ')}.` : 'No plain workdirs to delete.',
+    info.ignored.length ? `Deleted for good: files ignored by git, parked from agent workdirs:\n  ${info.ignored.join('\n  ')}` : 'No parked ignored files to delete.',
     info.branches.length ? `Kept: agent branches in your repos:\n  ${info.branches.join('\n  ')}` : 'No agent branches.',
   ].join('\n\n');
   $('archived').close();
@@ -960,7 +961,7 @@ async function post(path, data) {
   const r = await postJson(path, { ...data, ws: WS }).catch((e) => e);
   if (r instanceof Error) return toast(`${path.slice(1)} failed: ${r.message}`), false;
   if (r.ok) return true;
-  if (r.status === 409 && path === '/delete') askDirty(data.id, await r.text());
+  if (r.status === 409 && path === '/delete') askDirty(data.id, await r.text(), r.headers.get('x-can-commit') === 'true');
   else toast(`${path.slice(1)} failed: ${(await r.text()) || r.status}`);
   return false;
 }
@@ -1000,9 +1001,15 @@ function choose(title, text, question, choices) {
   return new Promise((r) => { $('choice').onclose = () => r($('choice').returnValue); });
 }
 
-async function askDirty(id, text) {
-  const v = await choose('UNCOMMITTED CHANGES', text, "Commit them to the agent's branch before deleting, or discard them?",
-    [{ value: 'commit', label: 'COMMIT & DELETE' }, { value: 'discard', label: 'DISCARD & DELETE', danger: true }]);
+// canCommit comes from the server: only uncommitted changes can be committed; ignored files and plain workdirs can only be discarded.
+async function askDirty(id, text, canCommit) {
+  const discard = { value: 'discard', label: 'DISCARD & DELETE', danger: true };
+  const v = canCommit
+    ? await choose('UNCOMMITTED CHANGES', text, "Commit changes to the agent's branch before deleting, or discard them? Files ignored by git cannot be committed and are deleted either way.",
+      [{ value: 'commit', label: 'COMMIT & DELETE' }, discard])
+    : agents.get(id)?.agent.repo
+      ? await choose('FILES IGNORED BY GIT', text, 'Git does not keep these files, so they cannot be committed. Delete them with the agent?', [discard])
+      : await choose('FILES OUTSIDE GIT', text, 'This workdir is not in git, so there is no branch to commit to. Delete its files?', [discard]);
   if (v) post('/delete', { id, dirty: v });
 }
 // Picks one value of `key` for an agent and sends it to /config; the current one is ticked.
@@ -1013,7 +1020,7 @@ async function pickConfig(id, key, question, values, cur) {
 const pickModel = (id) => pickConfig(id, 'model', `Model for ${nameOf(id)}. A running session switches right away.`, ['haiku', 'sonnet', 'opus'], agents.get(id)?.agent.model);
 const pickEffort = (id) => pickConfig(id, 'effort', `Reasoning effort for ${nameOf(id)}. Higher is slower and pricier.`, ['low', 'medium', 'high', 'xhigh', 'max'], agents.get(id)?.agent.effort ?? 'medium');
 function deleteAgentUi(id) {
-  if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
+  if (confirm(`Delete ${id}? Its session stops and its workdir is removed. If it has uncommitted changes or files git does not keep, you will be asked what to do with them. The jarvis/<id> branch is kept.`)) post('/delete', { id });
 }
 $('pdelete').onclick = () => selected && deleteAgentUi(selected);
 $('core').onclick = (ev) => { if (!ev.target.closest('#coreBadge')) select(ARBITER); };

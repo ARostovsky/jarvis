@@ -80,7 +80,8 @@ createServer(async (req, res) => {
     } catch (e) {
       // stderr goes to server.log; never the body, it may hold user content.
       console.error(`${new Date().toISOString()} ${req.method} ${url.pathname}: ${JSON.stringify((e as Error).message)}`);
-      res.writeHead(e instanceof DirtyWorktree ? 409 : 400).end((e as Error).message);
+      if (e instanceof DirtyWorktree) res.writeHead(409, { 'x-can-commit': String(e.canCommit) }).end(e.message);
+      else res.writeHead(400).end((e as Error).message);
     }
   } else {
     res.writeHead(404).end();
