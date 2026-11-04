@@ -11,7 +11,7 @@ const PAGE = resolve(import.meta.dirname, '..', 'public', 'index.html');
 async function body(req: IncomingMessage): Promise<any> {
   let s = '';
   for await (const chunk of req) s += chunk;
-  return JSON.parse(s || '{}');
+  try { return JSON.parse(s || '{}'); } catch { throw new Error('invalid JSON'); } // the parser's own message quotes part of the body, which is never logged
 }
 
 function ws(id: unknown): Workspace {
@@ -78,6 +78,8 @@ createServer(async (req, res) => {
       if (out === undefined) res.writeHead(204).end();
       else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
     } catch (e) {
+      // stderr goes to server.log; never the body, it may hold user content.
+      console.error(`${new Date().toISOString()} ${req.method} ${url.pathname}: ${JSON.stringify((e as Error).message)}`);
       res.writeHead(e instanceof DirtyWorktree ? 409 : 400).end((e as Error).message);
     }
   } else {

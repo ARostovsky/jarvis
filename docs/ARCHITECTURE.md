@@ -266,7 +266,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `POST /delete` | `{ws, id, dirty?: 'commit' \| 'discard'}` | 409 if dirty and no choice |
 | `POST /board` | `{ws, to?, text}` | note from `user` |
 
-Every request must have a `Host` of `127.0.0.1:<port>` or `localhost:<port>`, otherwise 403: this blocks DNS rebinding. Every POST must also have `Content-Type: application/json` and an `Origin` of the page itself (`http://127.0.0.1:<port>` or `http://localhost:<port>`), otherwise 403. Errors are 400 with the message as plain text. Example:
+Every request must have a `Host` of `127.0.0.1:<port>` or `localhost:<port>`, otherwise 403: this blocks DNS rebinding. Every POST must also have `Content-Type: application/json` and an `Origin` of the page itself (`http://127.0.0.1:<port>` or `http://localhost:<port>`), otherwise 403. Errors are 400 with the message as plain text. Each one is also logged to stderr (`server.log`) as method, path and JSON-quoted message, never the request body. Example:
 
 ```bash
 curl -X POST http://127.0.0.1:7777/say \
