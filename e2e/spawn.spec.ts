@@ -48,3 +48,17 @@ test('a report to a parent without a workdir goes to the nearest ancestor that h
   await expect.poll(() => events(id).some((e) => e.type === 'routed' && e.from === child.id && e.to === 'arbiter' && e.text === report), { timeout: 10_000 }).toBe(true);
   expect(events(id).some((e) => e.type === 'routed' && e.from === child.id && e.to === lead.id)).toBe(false);
 });
+
+test('a parent is told when its agent passes the context or cost limit', async ({ page }) => {
+  const repo = tmp('repo');
+  const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: 'pipe' }).trim();
+  g('init', '-q');
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  const id = await createWs(page, uniq('alert'), { project: repo });
+  const task = 'usage 250000\ncost 11\nsay big done';
+  expect((await say(page, id, `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'big', task })}`)).ok()).toBe(true);
+  const routed = () => events(id).filter((e) => e.type === 'routed' && e.to === 'arbiter').map((e) => e.text as string);
+  await expect.poll(() => routed().some((t) => /^\[agent \S+ context 250k tokens, over 200k\]/.test(t))).toBe(true);
+  await expect.poll(() => routed().some((t) => /^\[agent \S+ cost \$11\.00, over \$10\]/.test(t))).toBe(true);
+  expect(routed().filter((t) => /context 250k/.test(t))).toHaveLength(1); // once per session
+});

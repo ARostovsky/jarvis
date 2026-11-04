@@ -6,6 +6,8 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   usage <tokens>          the later assistant messages report this many input tokens
+//   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
@@ -40,10 +42,10 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   });
   aborted.catch(() => {});
   let n = 0;
-  let tokens = 0, lastUsage = 0;
+  let tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = 0;
   const base = { session_id, parent_tool_use_id: null };
   const assistant = (content: Assistant['content']): SDKAssistantMessage =>
-    ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: {} as Usage } });
+    ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: { input_tokens: usageTokens } as Usage } });
   const result = (tool_use_id: string, text: string, is_error = false): SDKUserMessage =>
     ({ ...base, uuid: randomUUID(), type: 'user', message: { role: 'user', content: [{ type: 'tool_result', tool_use_id, content: text, is_error }] } });
 
@@ -63,7 +65,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   }
 
   const end = (text: string): SDKResultMessage =>
-    ({ ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', total_cost_usd: 0, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] });
+    ({ ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', total_cost_usd: costUsd, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] });
 
   async function* compact(): AsyncGenerator<SDKMessage> {
     const pre = tokens;
@@ -102,6 +104,10 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         lastUsage = tokens += 30_000;
         const subtype = rest as SDKResultError['subtype'];
         return yield { ...base, uuid: randomUUID(), type: 'result', subtype, errors: [`fake ${rest}`], stop_reason: null, total_cost_usd: 0, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
+      } else if (cmd === 'usage') {
+        usageTokens = Number(rest);
+      } else if (cmd === 'cost') {
+        costUsd = Number(rest);
       } else if (cmd === 'pace') {
         pace = Number(rest);
       } else if (cmd === 'sleep') {

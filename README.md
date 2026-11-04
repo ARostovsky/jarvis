@@ -94,7 +94,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 - Every agent is a separate Claude session. Each panel shows its cost and **Σ**, the total with its helpers.
 - Jarvis picks the cheapest fitting model (`haiku`, `sonnet`, `opus`). You can change it.
-- Long context costs more. Press **COMPACT** to summarize.
+- Long context costs more. Press **COMPACT** to summarize. When a helper's context passes 200k tokens or its cost passes $10, its lead (or Jarvis) is told, and can restart it with a summary. Nothing is stopped automatically.
 
 ## Settings
 

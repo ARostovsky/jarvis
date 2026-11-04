@@ -53,7 +53,7 @@ flowchart LR
 Inside `src/agents.ts`, top to bottom:
 
 1. Types `Status`, `Agent`, `WorkspaceMeta`.
-2. Constants and env config (`DATA`, `MODELS`, `EFFORTS`, defaults, `MAX_DEPTH`, `REPORT_CAP`).
+2. Constants and env config (`DATA`, `MODELS`, `EFFORTS`, defaults, `MAX_DEPTH`, `REPORT_CAP`, `CONTEXT_ALERT_TOKENS`, `BUDGET_ALERT_USD`).
 3. `userSettings()` and `userPlugins()`: what agents take from `~/.claude`.
 4. `inbox()`: an async iterable queue that feeds user messages into a long-lived SDK `query()`.
 5. `makeWorkdir()`: creates a git worktree or a plain dir.
@@ -82,6 +82,8 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `bash <command>` | `Bash` tool: really runs the command in the session cwd |
 | `tool <mcp tool> <json>` | calls an in-process MCP tool, e.g. `tool mcp__jarvis__spawn_agent {...}` |
 | `perm <tool> <json>` | calls `options.canUseTool` as the real SDK does for a call it cannot decide (in any permission mode), waits for the UI's answer, then says `allow <updated input as JSON>` or `deny <message>`; runs nothing |
+| `usage <tokens>` | the later assistant messages report this many input tokens (the server sums input, cache creation and cache reads for the context alert) |
+| `cost <usd>` | the result reports this `total_cost_usd` (for the budget alert) |
 | `fail <subtype>` | ends the turn with an error result, e.g. `fail error_during_execution`; the session lives on |
 | `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
 | `/compact` (the whole message) | a `compact_boundary`, then an empty success result. Every other turn adds 30k tokens of context; `getContextUsage` reports the pre-compact size for `summary` (as the real SDK, which reads the last response's usage) and the compacted size for `full` |
@@ -152,6 +154,8 @@ Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {
 Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
 
 When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (1000) characters, so reports do not fill the parent's context. The parent can call `read_agent` for the full text.
+
+Soft cost alerts go to the parent by the same route, once per session each, and never stop anything: `[agent <id> context <n>k tokens, over 200k]` when one call's context (input + cache creation + cache reads of a non-subagent assistant message) passes `CONTEXT_ALERT_TOKENS` (re-armed by a compaction), and `[agent <id> cost $<n>, over $10]` when `costUsd` passes `BUDGET_ALERT_USD` at a result. The prompts tell the parent to restart the agent with a summary. Prompts also steer leads to coordinate only (no code reading) on sonnet, and large reviews to one reviewer per diff area.
 
 ### Notes folder
 

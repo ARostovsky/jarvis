@@ -331,14 +331,23 @@ const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`)
 const NOTES_TOOLS = ['notes_message'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
+// Soft alerts to an agent's parent, once per session each; nothing is stopped. Context counts input + cache creation + cache reads of one
+// call: above ~200k every tool call re-reads that much, and logs showed leads at 450-600k costing $20-45. $10 is ~2x the median
+// agent session and catches runaways without alerting normal work.
+const CONTEXT_ALERT_TOKENS = 200_000;
+const BUDGET_ALERT_USD = 10;
+
 const ARBITER_PROMPT = `You are Jarvis, the coordinator (your agent id is arbiter). You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
 When an agent finishes you get a message starting with "[agent <id> finished". Decide the next step: send follow-ups, pass its results to another agent, or summarize for the user.
 For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.
-Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning).
+Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning). Leads coordinate and rarely need opus: give them sonnet unless the coordination itself is hard reasoning.
+Split a large review into one reviewer per diff area instead of one reviewer reading everything.
+Every tool call re-reads your whole context, so long sessions get expensive. When the goal is done, or your context is large, tell the user to start a fresh workspace and put what it needs (state, decisions, open items) into your last summary.
+When an agent reports "[agent <id> context ...]" or "[agent <id> cost ...]", it passed a size or cost limit: restart it with a short summary of its state and the remaining work (spawn a new agent or compact it), instead of letting it continue.
 Agents you spawn can spawn their own sub-agents. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent per area and tell it to split its area into sub-agents, instead of managing every small task yourself.`;
 
-const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches, starting from your current files, uncommitted changes included. Commit your own changes before you merge a sub-agent's branch. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. Do small or sequential work yourself. Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
+const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches, starting from your current files, uncommitted changes included. Commit your own changes before you merge a sub-agent's branch. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. You coordinate: do not read or write code yourself, give every piece of reading and writing to a sub-agent and keep your own context small (your context is re-read on every call). Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
 
 const BOARD_PROMPT = `There is a shared board with other agents. Notes addressed to you arrive at the top of your messages as "[board notes for you]"; board_read fetches new ones mid-task. Use board_post only for things another agent actually needs (an interface you defined, a decision, a blocker), addressed to those agents.`;
 
@@ -488,6 +497,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   async function pump(a: Agent, q: Query) {
     // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
     const base = a.costUsd;
+    let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
     const bash = new Map<string, () => void>(); // the arbiter's Bash calls in flight: tool_use id -> claims the notes files the call changed
     try {
       for await (const m of q) {
@@ -506,8 +516,15 @@ export function createWorkspace(meta: WorkspaceMeta) {
             emit('runtime', { agentId: a.id, model: m.model });
           }
         } else if (m.type === 'system' && m.subtype === 'compact_boundary') {
+          ctxAlerted = false;
           emit('compacted', { agentId: a.id, trigger: m.compact_metadata.trigger, pre: m.compact_metadata.pre_tokens, post: m.compact_metadata.post_tokens });
         } else if (m.type === 'assistant') {
+          const u = m.message.usage;
+          const ctx = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
+          if (a.parentId && m.parent_tool_use_id === null && !ctxAlerted && ctx > CONTEXT_ALERT_TOKENS) {
+            ctxAlerted = true;
+            report(a, `[agent ${a.id} context ${Math.round(ctx / 1000)}k tokens, over ${CONTEXT_ALERT_TOKENS / 1000}k]\nEvery call re-reads this context. When it reaches a stopping point, restart it with a short summary of its state and the remaining work.`);
+          }
           for (const block of m.message.content) {
             if (block.type === 'text') {
               a.lastText = block.text;
@@ -528,6 +545,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
           setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
+          if (a.parentId && !budgetAlerted && a.costUsd > BUDGET_ALERT_USD) {
+            budgetAlerted = true;
+            report(a, `[agent ${a.id} cost $${a.costUsd.toFixed(2)}, over $${BUDGET_ALERT_USD}]\nSoft limit, nothing was stopped. Check whether the work still justifies the spend; consider restarting it with a summary.`);
+          }
           for (const done of bash.values()) done();
           bash.clear();
           if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.id, meta.name);
@@ -737,7 +758,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           name: z.string().describe('short role name, e.g. "tests" or "backend"'),
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
           repo: z.string().optional().describe('absolute path to the repository to work on'),
-          model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: architecture, hard debugging, design, ambiguous problems.`),
+          model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: architecture, hard debugging, design, ambiguous problems. A lead that coordinates sub-agents is sonnet unless the coordination itself is hard reasoning.`),
           effort: z.enum(EFFORTS).optional().describe(`reasoning effort, default ${DEFAULT_EFFORT.agent}. low for mechanical work, high or xhigh only for genuinely hard problems.`),
         }, async ({ name, task, repo, model, effort }) => {
           const a = spawnAgent(name, task, repo, owner, model, effort);
