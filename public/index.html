@@ -803,7 +803,7 @@ async function refreshTabs() {
     ]);
     return b;
   }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
-  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: `ARCHIVE ${archived.length}`, title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
+  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
 }
 
 async function renameWs(w) {
