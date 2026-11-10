@@ -1231,13 +1231,14 @@ const VIEW = [
   ['cost', 'Cost', true],
   ['ts', 'Timestamps', false],
 ];
+const VIEW_DEFAULT = 'jarvis.view.default'; // global, all workspaces; below every per-agent setting
 const viewKey = () => `jarvis.view.${WS}`;
 const viewAll = () => loadJson(viewKey());
 const saveView = (v) => saveJson(viewKey(), v);
 const parentOf = (id) => (id === ARBITER ? null : agents.get(id)?.agent.parentId ?? ARBITER);
 function shown(id, k, all = viewAll()) {
   for (let cur = id; cur; cur = parentOf(cur)) if (all[cur]?.[k] !== undefined) return all[cur][k];
-  return VIEW.find((v) => v[0] === k)[2];
+  return loadJson(VIEW_DEFAULT)[k] ?? VIEW.find((v) => v[0] === k)[2];
 }
 function applyView() {
   if (!selected) return;
@@ -1264,7 +1265,11 @@ function renderViewMenu() {
   const reset = Object.keys(own).length && id !== ARBITER
     ? [Object.assign(document.createElement('button'), { textContent: 'RESET TO INHERITED', style: 'border:1px solid var(--line);padding:4px 10px;margin-top:6px', onclick: () => { const v = viewAll(); delete v[id]; saveView(v); applyView(); renderViewMenu(); } })]
     : [];
-  $('viewMenu').replaceChildren(head, ...rows, ...reset);
+  const saved = loadJson(VIEW_DEFAULT), same = VIEW.every(([k]) => saved[k] === shown(id, k, all));
+  const setDefault = id === ARBITER
+    ? [Object.assign(document.createElement('button'), { textContent: same ? '✓ DEFAULT FOR ALL WORKSPACES' : 'USE AS DEFAULT FOR ALL WORKSPACES', disabled: same, style: `border:1px solid var(--line);padding:4px 10px;margin-top:6px;${same ? 'opacity:.5' : ''}`, onclick: () => { saveJson(VIEW_DEFAULT, Object.fromEntries(VIEW.map(([k]) => [k, shown(id, k)]))); renderViewMenu(); } })]
+    : [];
+  $('viewMenu').replaceChildren(head, ...rows, ...reset, ...setDefault);
 }
 $('pview').onclick = () => { renderViewMenu(); $('viewMenu').classList.toggle('open'); };
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pview')) $('viewMenu').classList.remove('open'); });
