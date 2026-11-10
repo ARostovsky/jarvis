@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -31,6 +31,7 @@ const replyOf = (b: any): AskReply | undefined =>
 const commands: Record<string, (b: any) => unknown> = {
   '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }, b.notes ? String(b.notes) : undefined).meta,
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
+  '/workspaces/reorder': (b) => reorderWorkspaces(Array.isArray(b.ids) ? b.ids.map(String) : []),
   '/workspaces/notes': (b) => setWorkspaceNotes(String(b.ws), b.notes ? String(b.notes) : undefined),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),

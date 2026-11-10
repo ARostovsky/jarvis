@@ -256,6 +256,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |
+| `POST /workspaces/reorder` | `{ids}` tab order; unknown ids ignored, unlisted ones go last; persisted in `workspaces.json` | 204 |
 | `POST /workspaces/notes` | `{ws, notes?}` sets the notes folder (created if missing); empty clears it | 204 |
 | `POST /workspaces/archive` | `{ws, commit?}` | 204, 409 if dirty |
 | `POST /workspaces/restore` | `{id}` | meta |

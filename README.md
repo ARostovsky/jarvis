@@ -64,6 +64,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 ### Controls
 
+- Drag a tab left or right to reorder workspaces; the order is kept across restarts.
 - Right-click an agent, Jarvis or a tab: model, effort, stop, delete, hide, rename, archive.
 
 ![Right-click menu on the frontend agent: Open log, Model, Effort, Hide, Stop, Delete agent](docs/screenshots/menu.png)

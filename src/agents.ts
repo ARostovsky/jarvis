@@ -1000,6 +1000,15 @@ function saveRegistry() {
   renameSync(REGISTRY + '.tmp', REGISTRY);
 }
 
+// Unknown ids are ignored; workspaces not listed keep their relative order at the end.
+export function reorderWorkspaces(ids: string[]) {
+  const all = new Map(workspaces);
+  workspaces.clear();
+  for (const id of ids) { const w = all.get(id); if (w) { workspaces.set(id, w); all.delete(id); } }
+  for (const [id, w] of all) workspaces.set(id, w);
+  saveRegistry();
+}
+
 // ---- recently used project and notes folders, for the New workspace dialog: recent.json, path -> last use (ms) ----
 
 type Recent = { project: Record<string, number>; notes: Record<string, number> };
