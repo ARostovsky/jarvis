@@ -91,7 +91,7 @@
   #log th, #log td { border: 1px solid var(--line); padding: 2px 8px; text-align: left; vertical-align: top; }
   #log th { color: var(--cyan); font-weight: normal; }
   #log pre { margin: 4px 0; padding: 6px 10px; background: rgba(0, 0, 0, .3); border-left: 2px solid var(--line); overflow-x: auto; white-space: pre; }
-  #log code { color: #e8d2a8; } #log strong { color: var(--text); }
+  #log a { color: var(--cyan); overflow-wrap: anywhere; } #log code { color: #e8d2a8; } #log strong { color: var(--text); }
   #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
   #log:not(.hide-ts) [data-ts]::before { content: attr(data-ts); font-size: 11px; color: var(--cyan-dim); margin-right: 8px; }
   #log.hide-user .user, #log.hide-report .report, #log.hide-outgoing .outgoing, #log.hide-tool .tool, #log.hide-note .note, #log.hide-cost .cost { display: none; }
@@ -504,10 +504,17 @@ function renderTitle() {
   $('pmeta').classList.toggle('full', ctxPct(a.agent) >= 80);
 }
 const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
-// Markdown subset agents use: ``` fences, pipe tables, `code`, **bold**. Built with DOM nodes, never innerHTML, so agent text cannot inject markup.
+// Markdown subset agents use: ``` fences, pipe tables, `code`, **bold**, [label](url) and bare URLs (http/https only). Built with DOM nodes, never innerHTML, so agent text cannot inject markup.
 function inlineMd(text) {
-  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*)/).map((p, i) => i % 2 === 0 ? document.createTextNode(p)
-    : Object.assign(document.createElement(p[0] === '`' ? 'code' : 'strong'), { textContent: p[0] === '`' ? p.slice(1, -1) : p.slice(2, -2) }));
+  const link = (href, label) => Object.assign(document.createElement('a'), { href, textContent: label, target: '_blank', rel: 'noopener noreferrer' });
+  return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\s)]+\)|https?:\/\/[^\s<>]+)/).flatMap((p, i) => {
+    if (i % 2 === 0) return [document.createTextNode(p)];
+    if (p[0] === '`' || p[0] === '*') return [Object.assign(document.createElement(p[0] === '`' ? 'code' : 'strong'), { textContent: p[0] === '`' ? p.slice(1, -1) : p.slice(2, -2) })];
+    if (p[0] === '[') { const m = p.match(/^\[(.+)\]\((.+)\)$/); return [/^https?:\/\//i.test(m[2]) ? link(m[2], m[1]) : document.createTextNode(p)]; }
+    let url = p; // bare URL: trailing punctuation, and a ")" with no "(" before it, belong to the sentence
+    while (/[.,;:!?'"\]]$/.test(url) || (url.endsWith(')') && !url.includes('('))) url = url.slice(0, -1);
+    return [link(url, url), document.createTextNode(p.slice(url.length))];
+  });
 }
 function renderMd(text) {
   const out = [], lines = text.split('\n'), para = [];
