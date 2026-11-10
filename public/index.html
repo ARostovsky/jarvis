@@ -153,12 +153,19 @@
   #menu.open { display: block; }
   #menu button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); padding: 10px 14px; }
   #menu button:last-child { border-bottom: 0; }
+  #empty { display: none; position: fixed; inset: 0; z-index: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
+  #empty h2 { margin: 0; color: var(--cyan); letter-spacing: .3em; }
+  #empty p { margin: 0 0 12px; color: var(--cyan-dim); }
+  #empty button { border: 1px solid var(--line); padding: 10px 18px; margin: 0 6px; }
+  body.empty #empty { display: flex; }
+  body.empty #view, body.empty #hint, body.empty #asks { display: none; }
   #conn { position: fixed; top: 16px; right: 16px; font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
 </style>
 </head>
 <body>
 <div id="grid"></div>
 <nav id="tabs" aria-label="Workspaces"></nav>
+<div id="empty"><h2>NO WORKSPACES</h2><p>Create a workspace to start.</p><div><button id="emptyNew">NEW WORKSPACE</button><button id="emptyArchive" hidden>ARCHIVE</button></div></div>
 <div id="menu" role="menu"></div>
 <div id="conn">LINK…</div>
 <div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
@@ -792,8 +799,17 @@ async function refreshTabs() {
   try { ({ workspaces: list, archived, settingsModel } = await (await fetch('/workspaces')).json()); } catch { return; }
   renderTitle();
   renderArchived(archived);
-  if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
-  if (!es) connect();
+  if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
+    if (WS) $('pclose').onclick();
+    WS = null;
+    es?.close();
+    es = null;
+  } else {
+    if (!list.some((w) => w.id === WS)) return switchTo(list[0].id);
+    if (!es) connect();
+  }
+  document.body.classList.toggle('empty', !list.length);
+  $('emptyArchive').hidden = !archived.length;
   // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
   const sig = JSON.stringify([WS, list, archived.length]);
   if (sig === tabsSig) return;
@@ -958,6 +974,8 @@ async function openNewWs() {
   $('newws').showModal();
 }
 
+$('emptyNew').onclick = openNewWs;
+$('emptyArchive').onclick = () => $('archived').showModal();
 $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
   const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), notes: $('wsNotes').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
@@ -1068,7 +1086,7 @@ $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => {
   if (e.key === 'Escape') $('pclose').onclick();
   // With the panel closed, Enter or / brings back the arbiter chat.
-  else if ((e.key === 'Enter' || e.key === '/') && !selected && !e.target.closest('input, textarea, dialog') && !(e.key === 'Enter' && e.target.closest('button'))) { e.preventDefault(); select(ARBITER); }
+  else if ((e.key === 'Enter' || e.key === '/') && WS && !selected && !e.target.closest('input, textarea, dialog') && !(e.key === 'Enter' && e.target.closest('button'))) { e.preventDefault(); select(ARBITER); }
 };
 
 // ---- pan, zoom, drag ----

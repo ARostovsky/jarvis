@@ -27,7 +27,7 @@ Browser tests: `npm run e2e` (Playwright, starts its own server on port 7798 wit
 
 First goal:
 
-1. Click **+**. Name the workspace and, optionally, give the path to your git project. Project and notes folders you used before are offered in a list, most recent first.
+1. A fresh install has no workspace and shows an empty screen: click **NEW WORKSPACE** (or **+** in the tab bar). Name the workspace and, optionally, give the path to your git project. Project and notes folders you used before are offered in a list, most recent first.
 2. In the Jarvis chat, describe a goal, for example: *"Add a /health endpoint with a test."*
 3. Watch Jarvis hire agents. Answer approval cards.
 4. Work lands on `jarvis/<agent-id>` branches in your repo. Review and merge.
@@ -87,7 +87,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 - **Your project folder is never edited directly** when it is a git repo. Each agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge.
 - **Nothing is lost silently.** Deleting an agent with unsaved changes asks you to commit or discard them. It also names the files no commit keeps, which can only be discarded: files your `.gitignore` ignores (`.env`, `node_modules`), and all files of an agent that works outside git. Archiving refuses while agents work, and commits unsaved work first. Ignored files move into the archive with the workspace and come back on restore; one the restored branch now has a file for stays parked, and deleting the agent names it. Jarvis never deletes agent branches.
 - **Agents cannot run code through Jarvis's own git.** Jarvis takes the git dir from your repo, not from the worktree's `.git` file, which an agent could replace. Repos nested in a worktree are not looked into.
-- **Archive, not delete.** Closing a workspace archives it, and you can restore it with all conversations. Agents whose branch you have since merged and deleted come back without a workdir; delete them. If a branch is checked out somewhere else, the restore fails with that error and the workspace stays in the archive. Permanent delete works only in the archive and asks you to type the workspace name.
+- **Archive, not delete.** Closing a workspace archives it (also the last one: zero workspaces is fine and shows the empty screen), and you can restore it with all conversations. Agents whose branch you have since merged and deleted come back without a workdir; delete them. If a branch is checked out somewhere else, the restore fails with that error and the workspace stays in the archive. Permanent delete works only in the archive and asks you to type the workspace name.
 - **Local only.** The web UI listens on `127.0.0.1` and rejects requests from other websites.
 - **Restarts are safe.** Every event is written to disk. After a restart the map, logs and costs return, and agents continue on the next message.
 

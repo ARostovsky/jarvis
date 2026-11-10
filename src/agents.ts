@@ -1092,7 +1092,6 @@ export function archiveWorkspace(id: string, commit = false) {
   writeFileSync(join(w.dir, 'meta.json'), JSON.stringify({ ...w.meta, archivedAt: new Date().toISOString() }, null, 2));
   renameSync(w.dir, join(ARCHIVE, id));
   workspaces.delete(id);
-  if (!workspaces.size) addWorkspace('Main');
   saveRegistry();
 }
 
@@ -1161,5 +1160,4 @@ export function loadWorkspaces() {
   mkdirSync(DATA, { recursive: true });
   const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? readJson(REGISTRY) : [];
   for (const m of metas) workspaces.set(m.id, createWorkspace(m));
-  if (!workspaces.size) addWorkspace('Main');
 }
