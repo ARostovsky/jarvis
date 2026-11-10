@@ -25,11 +25,31 @@ test('the active tab stays visible in a scrolled tab bar and a poll keeps the sc
   const inView = () => page.evaluate((name) => {
     const bar = document.getElementById('tabs')!.getBoundingClientRect();
     const r = [...document.querySelectorAll('#tabs button')].find((b) => b.firstChild?.textContent === name)!.getBoundingClientRect();
-    return r.left >= bar.left && r.right <= bar.right;
+    return r.left >= bar.left && r.right <= bar.right - 28; // clear of the right-edge fade
   }, last);
   await page.waitForTimeout(2500); // next poll
   expect(await inView()).toBe(true);
   await page.evaluate(() => { document.getElementById('tabs')!.scrollLeft = 0; });
   await page.waitForTimeout(2500);
   expect(await page.evaluate(() => document.getElementById('tabs')!.scrollLeft)).toBe(0);
+  await page.reload(); // the agent panel opens after the first render and narrows the bar
+  await expect.poll(inView).toBe(true);
+});
+
+test('a real mouse drag shows the drop bar on the hovered tab and reorders', async ({ page }) => {
+  const [a, b] = [uniq('barA'), uniq('barB')];
+  await createWs(page, a);
+  await createWs(page, b);
+  await open(page, a);
+  const [src, dst] = [(await tab(page, b).boundingBox())!, (await tab(page, a).boundingBox())!];
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(src.x + src.width / 2 - 5, src.y + src.height / 2, { steps: 3 });
+  await page.mouse.move(dst.x + 4, dst.y + dst.height / 2, { steps: 10 });
+  // inset: the tab's clip-path would cut an outer shadow
+  await expect(tab(page, a)).toHaveClass(/drop-before/);
+  expect(await tab(page, a).evaluate((el) => getComputedStyle(el).boxShadow)).toContain('inset');
+  await page.mouse.up();
+  const x = async (n: string) => (await tab(page, n).boundingBox())?.x ?? Infinity; // null while the bar rebuilds
+  await expect.poll(async () => (await x(b)) < (await x(a))).toBe(true);
 });
