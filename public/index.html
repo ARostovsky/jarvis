@@ -130,7 +130,7 @@
   #toast span { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
   #toast button { border: 1px solid var(--line); padding: 0 8px; }
   #hint { position: fixed; top: 36px; right: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
-  #tabs { position: fixed; top: 8px; left: 16px; right: 400px; /* clears LINK and the DRAG hint */ display: flex; gap: 4px; align-items: flex-end; overflow-x: auto; scrollbar-width: none; padding: 4px 24px 4px 0; z-index: 2; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  #tabs { position: fixed; top: 8px; left: 16px; right: 400px; /* clears LINK and the DRAG hint */ display: flex; gap: 4px; align-items: flex-end; overflow-x: auto; scroll-padding-inline: 0 32px; scrollbar-width: none; padding: 4px 24px 4px 0; z-index: 2; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
   #tabs::-webkit-scrollbar { display: none; }
   body.panel-open #tabs { right: max(400px, calc(min(var(--panel-w), 100vw - 32px) + var(--panel-x) + 16px)); }
   #tabs button { flex: none; white-space: nowrap; border: 0; border-bottom: 2px solid var(--line); background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .05)); clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); padding: 6px 16px 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); font-size: 14px; letter-spacing: .08em; transition: color .15s, background .15s, border-color .15s; }
@@ -791,6 +791,7 @@ let WS = (() => { try { return localStorage.getItem('jarvis.ws'); } catch { retu
 let es = null;
 
 let tabsSig = '';
+let shownWs = null;
 let dragId = null;
 const clearDrop = () => $('tabs').querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
 const dropAfter = (ev, b) => ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
@@ -814,6 +815,7 @@ async function refreshTabs() {
   const sig = JSON.stringify([WS, list, archived.length]);
   if (sig === tabsSig) return;
   tabsSig = sig;
+  const keepScroll = $('tabs').scrollLeft; // replaceChildren clamps scrollLeft to 0
   $('tabs').replaceChildren(...list.map((w) => {
     const b = document.createElement('button');
     b.className = w.id === WS ? 'active' : '';
@@ -849,6 +851,9 @@ async function refreshTabs() {
     return b;
   }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
   ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
+  $('tabs').scrollLeft = keepScroll;
+  if (shownWs !== WS) $('tabs').querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+  shownWs = WS;
 }
 
 async function renameWs(w) {
