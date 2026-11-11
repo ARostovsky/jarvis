@@ -114,7 +114,7 @@ type Agent = {
   lastText: string;      // last assistant text block, used by read_agent
   costUsd: number;       // cumulative across sessions and restarts
   parentId?: string;     // undefined only for the arbiter
-  model?: string;        // haiku | sonnet | opus; unset = model from settings
+  model?: string;        // haiku | sonnet | opus; unset = agent default (arbiter: JARVIS_ARBITER_MODEL)
   effort?: EffortLevel;  // low..max; unset = role default
   runtimeModel?: string; // what the SDK session reports, e.g. claude-opus-5-5
   repo?: string;         // set when cwd is a git worktree of this repo
@@ -175,7 +175,7 @@ Arbiter-to-arbiter messages across workspaces, arbiter only (the other agents ne
 
 ### Model and effort
 
-Defaults: agents `sonnet` + `medium`; arbiter = model from settings + `medium`. The arbiter's setup is picked in the New workspace dialog. `configure(id, {model, effort})` changes it at any time and applies to a live session immediately through `q.setModel()` and `q.applyFlagSettings({effortLevel})`.
+Defaults: agents `sonnet` + `medium`; arbiter `sonnet` (`JARVIS_ARBITER_MODEL`) + `medium`. The arbiter's setup is picked in the New workspace dialog. `configure(id, {model, effort})` changes it at any time and applies to a live session immediately through `q.setModel()` and `q.applyFlagSettings({effortLevel})`.
 
 ## Events
 
@@ -260,7 +260,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | Method and path | Body | Returns |
 |-----------------|------|---------|
 | `GET /` | | the UI |
-| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel}` |
+| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel, arbiterModel}` |
 | `GET /recent` | | `{project: [path], notes: [path]}`: folders used before, newest first, existing only; read when the New workspace dialog opens; seeded once from existing workspaces |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
@@ -312,7 +312,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `XDG_DATA_HOME` | `~/.local/share` | Data dir is `$XDG_DATA_HOME/jarvis` |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for spawned agents |
 | `JARVIS_AGENT_EFFORT` | `medium` | Default effort for spawned agents |
-| `JARVIS_ARBITER_MODEL` | model from settings | Arbiter model when the workspace does not set one |
+| `JARVIS_ARBITER_MODEL` | `sonnet` | Arbiter model when the workspace does not set one |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |

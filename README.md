@@ -107,7 +107,7 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `PORT` | `7777` | Web UI port |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for new agents |
 | `JARVIS_AGENT_EFFORT` | `medium` | Default agent effort (`low` ... `max`) |
-| `JARVIS_ARBITER_MODEL` | your Claude Code model | Jarvis model |
+| `JARVIS_ARBITER_MODEL` | `sonnet` | Jarvis model |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Jarvis effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |

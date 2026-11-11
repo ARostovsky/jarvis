@@ -199,7 +199,7 @@
     <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" list="recentProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off"><datalist id="recentProject"></datalist>
     <label for="wsNotes">NOTES FOLDER (OPTIONAL)</label><input id="wsNotes" list="recentNotes" placeholder="/home/you/notes/something" autocomplete="off"><datalist id="recentNotes"></datalist>
     <div style="display:flex;gap:12px">
-      <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">from settings</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
+      <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">default (sonnet)</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
       <div style="flex:1"><label for="wsEffort">JARVIS EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
     </div>
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
@@ -498,8 +498,8 @@ function log(id, cls, text, cost, at) {
   if (selected === id) appendLog(cls, text, cost, at);
 }
 // What model an agent really runs: what its session reported, else what was asked for, else the settings default.
-let settingsModel = null;
-const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? settingsModel ?? '';
+let settingsModel = null, arbiterModel = null;
+const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? (ag.id === ARBITER ? arbiterModel : settingsModel) ?? '';
 // Cost of an agent plus everything it spawned, recursively.
 const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + kidsOf(id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
 function renderTitle() {
@@ -803,7 +803,7 @@ const clearDrop = () => $('tabs').querySelectorAll('.drop-before, .drop-after').
 const dropAfter = (ev, b) => ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
 async function refreshTabs() {
   let list, archived;
-  try { ({ workspaces: list, archived, settingsModel } = await (await fetch('/workspaces')).json()); } catch { return; }
+  try { ({ workspaces: list, archived, settingsModel, arbiterModel } = await (await fetch('/workspaces')).json()); } catch { return; }
   wsNames.clear();
   list.forEach((w) => wsNames.set(w.id, w.name));
   renderTitle();
