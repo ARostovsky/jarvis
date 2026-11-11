@@ -70,3 +70,23 @@ test('without notes_message the subject lists the files', async ({ page }) => {
   expect(c.files).toEqual(['A\tb2.md']);
   expect(git('status', '--porcelain')).toBe('?? stray.md');
 });
+
+test('a sub-agent\'s notes file, written by absolute path, is committed at the arbiter\'s next turn', async ({ page }) => {
+  const before = count();
+  const task = `write ${notes}/from-helper.md helper note\nsay helper done`;
+  expect((await say(page, a.id, `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'helper', task })}`)).ok()).toBe(true);
+  // The helper's report starts an arbiter turn, which ends in the commit.
+  await expect.poll(count, { timeout: 15000 }).toBe(before + 1);
+  const c = last();
+  expect(c.subject).toBe('Update from-helper.md');
+  expect(c.body).toMatch(new RegExp(`Workspace: ${a.name}$`));
+  expect(c.files).toEqual(['A\tfrom-helper.md']);
+});
+
+test('a sub-agent\'s notes file written by a script that never names the notes path is committed too', async ({ page }) => {
+  const before = count();
+  const task = `write ptr.txt ${notes}\nbash sh -c 'echo helper > "$(cat ptr.txt)/via-script.md"'\nsay helper done`;
+  expect((await say(page, a.id, `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'scripter', task })}`)).ok()).toBe(true);
+  await expect.poll(count, { timeout: 15000 }).toBe(before + 1);
+  expect(last().files).toEqual(['A\tvia-script.md']);
+});

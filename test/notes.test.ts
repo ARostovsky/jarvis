@@ -9,7 +9,7 @@ import { join } from 'node:path';
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-notes-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'; // no user hooks or signing; commitNotes supplies the identity
-const { prepareNotes, commitNotes, notesWritten, notesBash, addWorkspace } = await import('../src/agents.ts');
+const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace } = await import('../src/agents.ts');
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' }).trim();
 // What the arbiter's Write tool call does.
@@ -121,6 +121,43 @@ test('a commit subject is the arbiter\'s message or a file list, then a Workspac
   commitNotes(notes, ws.meta.id, 'Proj');
   assert.equal(body().split('\n')[0], 'x'.repeat(100));
   assert.ok(!/^notes: /m.test(git(tmp, '--git-dir', own, 'log', '--format=%s')));
+});
+
+// What the pump does for a sub-agent's tool call: returns the claim-on-end function of a Bash call.
+const sub = (notes: string, ws: string, name: string, input: object) => notesToolUse(notes, ws, false, name, input);
+
+test('a sub-agent\'s Write and Bash on the notes path are claimed and committed by its workspace, a Bash elsewhere claims nothing', () => {
+  const notes = join(tmp, 'sub');
+  prepareNotes(notes);
+  const own = git(notes, 'rev-parse', '--absolute-git-dir');
+  const files = () => git(tmp, '--git-dir', own, 'show', '--name-status', '--format=', 'HEAD').split('\n').sort();
+  write(notes, 'a', 'old.md', 'old\n');
+  write(notes, 'a', 'gone.md', 'gone\n');
+  commitNotes(notes, 'a', 'A');
+  writeFileSync(join(notes, 'w.md'), 'w\n');
+  sub(notes, 'a', 'Write', { file_path: join(notes, 'w.md') });
+  // Bash naming the notes path: claimed. Bash without it, running while b edits: not claimed.
+  const named = sub(notes, 'a', 'Bash', { command: `rm ${notes}/gone.md; sed -i s/old/new/ ${notes}/old.md` })!;
+  const other = sub(notes, 'a', 'Bash', { command: 'npm test' });
+  assert.equal(other, undefined);
+  rmSync(join(notes, 'gone.md'));
+  writeFileSync(join(notes, 'old.md'), 'new\n');
+  named();
+  write(notes, 'b', 'b.md', 'b\n');
+  commitNotes(notes, 'b', 'B');
+  assert.deepEqual(files(), ['A\tb.md']);
+  commitNotes(notes, 'a', 'A');
+  assert.deepEqual(files(), ['A\tw.md', 'D\tgone.md', 'M\told.md']);
+});
+
+test('claims survive a restart', async () => {
+  const notes = join(tmp, 'restart');
+  prepareNotes(notes);
+  const own = git(notes, 'rev-parse', '--absolute-git-dir');
+  write(notes, 'a', 'kept.md', 'k\n');
+  const again = await import(`../src/agents.ts?${'restart'}`) as typeof import('../src/agents.ts'); // a second module instance reads the claims file like a new server
+  again.commitNotes(notes, 'a', 'A');
+  assert.equal(git(tmp, '--git-dir', own, 'show', 'HEAD:kept.md'), 'k');
 });
 
 test('home and folders above it are refused', () => {

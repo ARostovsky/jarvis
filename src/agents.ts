@@ -41,6 +41,7 @@ const REGISTRY = join(DATA, 'workspaces.json');
 const ARCHIVE = join(DATA, 'archive');
 const NOTES_GIT = join(DATA, 'notes-git');
 const RECENT = join(DATA, 'recent.json');
+const NOTES_OWNER = join(DATA, 'notes-owner.json');
 // Live-only events: replaying them after a restart would show stale typing or dead permission prompts.
 const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
@@ -227,6 +228,22 @@ export function prepareNotes(notes: string) {
 // Who changed each notes file last (absolute path -> workspace id), so a workspace commits only what its own arbiter changed in a shared folder.
 // Write/Edit/NotebookEdit name their file; a Bash call is diffed against a snapshot taken when it starts, so a mv lands in one commit, as a move.
 const notesOwner = new Map<string, { ws: string; n: number }>();
+let notesSeq = 0;
+
+// Claims are kept in notes-owner.json (tmp file + rename), so a restart does not leave files uncommitted for good.
+function saveNotesOwner() {
+  try { // non-critical: never fail the caller
+    mkdirSync(DATA, { recursive: true });
+    writeFileSync(NOTES_OWNER + '.tmp', JSON.stringify([...notesOwner].map(([file, o]) => [file, o.ws])));
+    renameSync(NOTES_OWNER + '.tmp', NOTES_OWNER);
+  } catch (e) {
+    console.warn(`notes: cannot save ${NOTES_OWNER}: ${(e as Error).message}`);
+  }
+}
+
+try {
+  for (const [file, ws] of readJson(NOTES_OWNER) as [string, string][]) if (typeof file === 'string' && typeof ws === 'string') notesOwner.set(file, { ws, n: ++notesSeq });
+} catch {} // missing or damaged: no claims
 // The arbiter's one-line summary of this turn's notes changes (workspace id -> subject), set by notes_message and used then cleared by commitNotes.
 const notesMessages = new Map<string, string>();
 // One line, at most 100 chars, no leading or trailing blanks: it goes straight into git commit -m.
@@ -237,8 +254,6 @@ function fallbackSubject(paths: string[]) {
   const names = [...new Set(paths.map((p) => (p.startsWith('journal/') ? 'journal' : p)))];
   return names.length > 3 ? `Update ${names.length} notes files` : `Update ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}`;
 }
-let notesSeq = 0;
-
 // after: a Bash diff leaves a file to another workspace that named it in a Write or Edit during the call. A journal belongs to the workspace it is named after.
 function claim(notes: string, ws: string, file: string, after = Infinity) {
   const rel = relative(notes, file);
@@ -248,7 +263,10 @@ function claim(notes: string, ws: string, file: string, after = Infinity) {
   notesOwner.set(file, { ws: /^journal\/\d{4}-\d{2}-\d{2}-(.+)\.md$/.exec(rel)?.[1] ?? ws, n: ++notesSeq });
 }
 
-export const notesWritten = (notes: string, ws: string, file: string) => claim(notes, ws, resolve(file));
+export function notesWritten(notes: string, ws: string, file: string) {
+  claim(notes, ws, resolve(file));
+  saveNotesOwner();
+}
 
 // mtime and size of every file under dir; does not follow symlinks or enter .git and embedded repos.
 function stamps(dir: string, out = new Map<string, string>()) {
@@ -267,18 +285,27 @@ function stamps(dir: string, out = new Map<string, string>()) {
 }
 
 // Call when a Bash call starts; the returned function, called when it ends, claims every notes file the call changed.
-// shortcut: two workspaces' Bash calls that change notes at the same moment can claim each other's files, and run_in_background changes are missed; snapshot per process if that bites.
+// shortcut: two workspaces' Bash calls (or a sub-agent turn) that change notes at the same moment can claim each other's unclaimed files, and run_in_background changes are missed; snapshot per process if that bites.
 export function notesBash(notes: string, ws: string) {
   const before = stamps(notes), start = notesSeq;
   return () => {
     const now = stamps(notes);
     for (const f of new Set([...before.keys(), ...now.keys()])) if (before.get(f) !== now.get(f)) claim(notes, ws, f, start);
+    saveNotesOwner();
   };
+}
+
+// A tool call of any agent in the workspace: claims Write/Edit/NotebookEdit files now and returns the claim-on-end function for a Bash call that may change notes.
+// A sub-agent's Bash is snapshotted on its own only when its command names the notes folder; other writes of a sub-agent are caught by the turn snapshot in pump().
+export function notesToolUse(notes: string, ws: string, arbiter: boolean, name: string, input: { file_path?: unknown; notebook_path?: unknown; command?: unknown }) {
+  const file = name === 'NotebookEdit' ? input.notebook_path : input.file_path;
+  if (name === 'Bash') return arbiter || (typeof input.command === 'string' && input.command.includes(notes)) ? notesBash(notes, ws) : undefined;
+  if (['Write', 'Edit', 'NotebookEdit'].includes(name) && typeof file === 'string') notesWritten(notes, ws, file);
 }
 
 // Commits only the files this workspace's arbiter changed, so other workspaces' changes and whatever else is staged in a shared repo stay out.
 // Never throws: files stay attributed and go in the next commit. Commits of all workspaces run in this one process through the synchronous execFileSync, so they never overlap: no locks needed.
-// shortcut: attribution is per file and in memory: two workspaces editing one shared file before either commits put both edits in the last writer's commit, and changes left uncommitted at a restart (or made by the user) are not committed except the workspace's own journal; persist notesOwner if that bites.
+// shortcut: attribution is per file: two workspaces editing one shared file before either commits put both edits in the last writer's commit, and changes made by the user (or by a sub-agent indirectly) are not committed except the workspace's own journal; claims of a workspace that is never asked to commit again stay in notes-owner.json.
 export function commitNotes(notes: string, id: string, name: string) {
   try {
     const at = notesGit(notes);
@@ -297,6 +324,7 @@ export function commitNotes(notes: string, id: string, name: string) {
     }
     notesMessages.delete(id); // also when nothing was committed: a stale message must not name a later turn
     for (const f of mine) notesOwner.delete(f);
+    if (mine.length) saveNotesOwner();
   } catch (e) {
     console.warn(`notes: commit failed in ${notes}: ${(e as Error).message}`);
   }
@@ -508,7 +536,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
     const base = a.costUsd;
     let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
-    const bash = new Map<string, () => void>(); // the arbiter's Bash calls in flight: tool_use id -> claims the notes files the call changed
+    const bash = new Map<string, () => void>(); // Bash calls in flight that may change notes: tool_use id -> claims the notes files the call changed; key '' is a sub-agent's whole turn
     try {
       for await (const m of q) {
         if (m.type === 'stream_event') {
@@ -541,11 +569,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
               emit('text', { agentId: a.id, text: block.text });
             } else if (block.type === 'tool_use') {
               emit('tool', { agentId: a.id, name: block.name, input: block.input });
-              if (a.id !== ARBITER || !meta.notes) continue;
-              const input = block.input as { file_path?: unknown; notebook_path?: unknown };
-              const file = block.name === 'NotebookEdit' ? input.notebook_path : input.file_path;
-              if (block.name === 'Bash') bash.set(block.id, notesBash(meta.notes, meta.id));
-              else if (['Write', 'Edit', 'NotebookEdit'].includes(block.name) && typeof file === 'string') notesWritten(meta.notes, meta.id, file);
+              if (!meta.notes) continue;
+              // A sub-agent can write notes in ways its tool calls do not show (a script, a path read from a file): claim whatever changed during its turn.
+              if (a.parentId && !bash.has('')) bash.set('', notesBash(meta.notes, meta.id));
+              const done = notesToolUse(meta.notes, meta.id, a.id === ARBITER, block.name, block.input as object);
+              if (done) bash.set(block.id, done);
             }
           }
         } else if (m.type === 'user' && Array.isArray(m.message.content)) {
@@ -853,7 +881,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
       ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${meta.id}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
-      : `\nProject notes (read-only for you, Jarvis maintains them): ${meta.notes}.`;
+      : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
       ...(meta.notes ? { additionalDirectories: [meta.notes] } : {}),
