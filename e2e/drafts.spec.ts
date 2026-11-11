@@ -78,3 +78,24 @@ test('archiving a workspace drops its drafts', async ({ page }) => {
   expect(Object.keys(d).filter((k) => k.startsWith(`${idA}/`))).toEqual([]);
   expect(d[`${idB}/arbiter`]).toBe('survivor');
 });
+
+test('a restored draft gets its own input height, not a squeezed one', async ({ page }) => {
+  const a = uniq('drh'), b = uniq('dri');
+  await createWs(page, a);
+  await createWs(page, b);
+  await open(page, a);
+  await arbiter(page);
+  const h = () => page.locator('#dinput').evaluate((t) => t.getBoundingClientRect().height);
+  const empty = await h();
+  await page.fill('#dinput', 'one\ntwo\nthree\nfour');
+  const grown = await h();
+  expect(grown).toBeGreaterThan(empty);
+  await tab(page, b).click();
+  await expect(tab(page, b)).toHaveClass('active');
+  await expect(page.locator('#dinput')).toHaveValue(''); // the switch selects Jarvis by itself: no click, so the panel was hidden during the restore
+  expect(await h()).toBe(empty);
+  await tab(page, a).click();
+  await expect(tab(page, a)).toHaveClass('active');
+  await expect(page.locator('#dinput')).toHaveValue('one\ntwo\nthree\nfour');
+  expect(await h()).toBe(grown);
+});

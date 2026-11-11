@@ -604,7 +604,6 @@ function select(id) {
   setDraft();
   selected = id;
   $('dinput').value = drafts[draftKey()] ?? '';
-  $('dinput').oninput();
   const a = agents.get(id);
   markSelected(id);
   renderTitle();
@@ -622,6 +621,7 @@ function select(id) {
     document.body.classList.add('panel-open');
     $('tabs').querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   }
+  $('dinput').oninput(); // after the panel is visible and sized: hidden, scrollHeight is 0
   // Every agent takes orders from its parent (Jarvis or a lead); a stray message from the user derails it, so typing needs a double-click first.
   const lead = id === ARBITER ? null : nameOf(parentOf(id)) ?? parentOf(id);
   $('dinput').readOnly = !!lead;
