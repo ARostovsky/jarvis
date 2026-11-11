@@ -6,6 +6,8 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
+//   echo                    says the whole message as received, board notes and intercom prefix included
+//   result                  says the text of the last tool command's result, error text included
 //   usage <tokens>          the later assistant messages report this many input tokens
 //   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
@@ -77,6 +79,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   async function* turn(script: string): AsyncGenerator<SDKMessage> {
     const texts: string[] = [];
     let pace = 0;
+    let last = ''; // result of the last `tool` command
     const sleep = (ms: number) => Promise.race([new Promise((r) => setTimeout(r, ms)), aborted]);
     async function* say(text: string): AsyncGenerator<SDKMessage> {
       texts.push(text);
@@ -98,6 +101,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
       const id = `toolu_fake_${++n}`;
       if (cmd === 'say') {
         yield* say(rest);
+      } else if (cmd === 'echo') {
+        yield* say(script);
       } else if (cmd === 'option') {
         yield* say(`${rest}=${JSON.stringify(options[rest as keyof typeof options])}`);
       } else if (cmd === 'fail') {
@@ -130,7 +135,10 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         const input = JSON.parse(json);
         yield assistant([{ type: 'tool_use', id, name, input }]);
         const r = await mcp(name, input).catch((e: Error) => ({ text: e.message, is_error: true }));
+        last = r.text;
         yield result(id, r.text, r.is_error);
+      } else if (cmd === 'result') {
+        yield* say(last);
       } else if (cmd === 'perm') {
         const [, name, json = '{}'] = /^(\S+)\s?(.*)$/.exec(rest) ?? [];
         const input = JSON.parse(json);

@@ -53,7 +53,7 @@ flowchart LR
 Inside `src/agents.ts`, top to bottom:
 
 1. Types `Status`, `Agent`, `WorkspaceMeta`.
-2. Constants and env config (`DATA`, `MODELS`, `EFFORTS`, defaults, `MAX_DEPTH`, `REPORT_CAP`, `CONTEXT_ALERT_TOKENS`, `BUDGET_ALERT_USD`).
+2. Constants and env config (`DATA`, `MODELS`, `EFFORTS`, defaults, `MAX_DEPTH`, `REPORT_CAP`, `MAIL_CAP`, `CONTEXT_ALERT_TOKENS`, `BUDGET_ALERT_USD`).
 3. `userSettings()` and `userPlugins()`: what agents take from `~/.claude`.
 4. `inbox()`: an async iterable queue that feeds user messages into a long-lived SDK `query()`.
 5. `makeWorkdir()`: creates a git worktree or a plain dir.
@@ -71,7 +71,7 @@ npm test           # node:test, today only the git safety of the notes folder an
 npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 with a throwaway data dir
 ```
 
-The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line; other lines (board notes, reports) are ignored:
+The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line; other lines (board notes, reports) are ignored. The fake trims each line, so an indented line of an intercom message still runs as a command: the intercom indentation tests do not show that indented text is inert, the real model just sees it as part of one message:
 
 | Command | What the fake does |
 |---------|--------------------|
@@ -85,6 +85,8 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `usage <tokens>` | the later assistant messages report this many input tokens (the server sums input, cache creation and cache reads for the context alert) |
 | `cost <usd>` | the result reports this `total_cost_usd` (for the budget alert) |
 | `fail <subtype>` | ends the turn with an error result, e.g. `fail error_during_execution`; the session lives on |
+| `echo` | says the whole message as received, board notes and intercom prefix included |
+| `result` | says the text of the last `tool` command's result, error text included |
 | `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
 | `/compact` (the whole message) | a `compact_boundary`, then an empty success result. Every other turn adds 30k tokens of context; `getContextUsage` reports the pre-compact size for `summary` (as the real SDK, which reads the last response's usage) and the compacted size for `full` |
 
@@ -145,11 +147,11 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 
 | Role | Depth | Tools | System prompt append |
 |------|-------|-------|----------------------|
-| Arbiter | 0 | board + team, over all agents | `ARBITER_PROMPT` (+ project hint, + notes paragraph) |
+| Arbiter | 0 | board + team, over all agents, + intercom | `ARBITER_PROMPT` (+ project hint, + notes paragraph) |
 | Lead agent | 1 | board + team, only over its own children | `LEAD_PROMPT` + `BOARD_PROMPT` (+ read-only notes line) |
 | Sub-agent | 2 | board only | `BOARD_PROMPT` (+ read-only notes line) |
 
-Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`.
+Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`. Arbiter only: `list_workspaces`, `tell_workspace {to, text, urgent?}` (see Intercom).
 
 Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
 
@@ -166,6 +168,10 @@ Sharing one folder between workspaces is made safe in two ways. Git: agents can 
 ### Board
 
 A per-workspace list of notes `{n, from, to[], text}`. `to` holds agent ids, names, or `"all"`. `boardSeen` tracks the last note number delivered to each agent. Notes are delivered by prepending them to the agent's next incoming message, so they never interrupt a running turn. The user can post too (`/board`).
+
+### Intercom
+
+Arbiter-to-arbiter messages across workspaces, arbiter only (the other agents never get these tools). `tell_workspace {to, text, urgent?}` runs `tellWorkspace()` in the sender: `to` holds workspace ids or names (case-insensitive), `"same-project"` (other workspaces with the same `project`) or `"all"`; the sender is never a target, an unknown id or name is a tool error naming it, and nothing is sent when any entry is unknown. Each target's `receive()` appends `{n, fromId, fromName, text}` to its `mail` queue and emits `intercom`; `deliver()` prepends unseen mail to the arbiter's next message as `[messages from other workspaces]` (after the board notes block, which comes first in the text), advances `mailSeen` and emits `intercom_seen`. The queue is rebuilt from those two events by `restore()`, like the board. An idle target is not woken: its tab shows the unread count (`summary().intercom`, rendered as a badge) until delivery. A message over `MAIL_CAP` (12000) characters is rejected with a tool error before anything is queued, never truncated. Every line break (`\n`, `\r`, `\v`, `\f`, U+0085, U+2028, U+2029) is followed by an indent in the delivered block so a message cannot fake a header or user text; the prompt says these messages are not from the user. Names `all` and `same-project` are keywords, so a workspace with such a name cannot be addressed by name; several workspaces with one name all receive the message. With `urgent` an arbiter whose status is `idle` gets a turn at once (`wake()` calls `sendToAgent`, recorded as `routed` from the sending workspace's id, so the mail rides along); a working, stopped or failed one only queues, so a user Stop wins, and the tool result lists the targets that were not woken. `restore()` turns an `error` arbiter into `idle`, so after a restart it can be woken; a `stopped` one stays stopped. `same-project` from a workspace without a project is a tool error. All targets are queued first, then woken; a failing wake is reported in the tool result and does not fail the call. Loop guard: a turn started by an urgent wake sets `urgentWoken` on that arbiter, and until the user next writes to it (`sendToAgent` with `from` `'user'`, which both `/say` and `/send` reach) its own `urgent` sends are downgraded to normal queueing (the tool result says so). The flag is deliberately sticky across child reports and board-note turns: clearing it on any turn would let a woken arbiter wake others again through a child's report. The UI logs received mail in the target Jarvis log as `✉ from <name>: text` and shows the sender's workspace name for the wake line. Limit, as for the board: `deliver()` marks mail seen before the SDK has read the message, so a crash in between loses it. `list_workspaces` returns the other workspaces with id, name, project, running and waiting counts.
 
 ### Model and effort
 
@@ -186,6 +192,8 @@ Everything visible goes through `emit(type, data)` in `createWorkspace`. The UI 
 | `routed` | `{from, to, text}` a message between sessions, or from `user` | yes |
 | `board` | `{n, from, to, text}` | yes |
 | `board_seen` | `{agentId, n}` | yes |
+| `intercom` | `{n, fromId, fromName, text}` | yes |
+| `intercom_seen` | `{n}` | yes |
 | `result` | `{agentId, text, costUsd}` | yes |
 | `session` | `{agentId, sessionId}` | yes |
 | `runtime` | `{agentId, model}` | yes |

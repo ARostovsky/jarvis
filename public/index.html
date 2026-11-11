@@ -141,6 +141,7 @@
   #tabs .dot { width: 7px; height: 7px; border-radius: 50%; }
   #tabs .dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
   #tabs .dot.wait { background: var(--amber); animation: blink .8s steps(2) infinite; }
+  #tabs .mail { font-size: 10px; margin-left: 6px; padding: 0 5px; border-radius: 8px; background: var(--amber); color: #000; }
   #newws label { display: block; margin: 10px 0 4px; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
   #newws input, #newws select { width: 100%; border: 1px solid var(--line); padding: 8px 10px; background: transparent; color: var(--text); font: 16px Rajdhani, sans-serif; }
   #newws option { background: #06141f; }
@@ -228,7 +229,8 @@
 
 <script>
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
-const who = (id) => (id === ARBITER ? 'jarvis' : id);
+const wsNames = new Map(); // workspace id -> name, for messages between workspaces
+const who = (id) => (id === ARBITER ? 'jarvis' : wsNames.get(id) ?? id);
 const nameOf = (id) => (id === ARBITER ? 'Jarvis' : agents.get(id)?.agent.name);
 const $ = (id) => document.getElementById(id);
 const NS = 'http://www.w3.org/2000/svg';
@@ -738,11 +740,11 @@ const handlers = {
     if (a?.act) a.act.textContent = short(e.name.replace(/^mcp__\w+?__/, ''), 18);
   },
   routed: (e) => {
-    if (!replaying) pulse(e.from, e.to);
+    if (!replaying && agents.has(e.from)) pulse(e.from, e.to); // from another workspace there is no node to pulse from
     // Messages from the user or from the agent's own parent are its inputs; from anyone else, reports.
     const input = e.from === 'user' || e.from === parentOf(e.to);
     log(e.to, input ? 'user' : 'report', `⇐ ${who(e.from)}: ${e.text}`, undefined, e.at);
-    if (e.from !== 'user') log(e.from, 'outgoing', `⇒ ${who(e.to)}: ${short(e.text, 300)}`, undefined, e.at);
+    if (e.from !== 'user' && agents.has(e.from)) log(e.from, 'outgoing', `⇒ ${who(e.to)}: ${short(e.text, 300)}`, undefined, e.at);
   },
   board: (e) => {
     const to = e.to.includes('all') ? [...agents.keys()].filter((id) => id !== e.from) : e.to;
@@ -750,6 +752,7 @@ const handlers = {
     log(e.from, 'note', `✎ board #${e.n} → ${e.to.map(who).join(', ')}: ${e.text}`, undefined, e.at);
     to.forEach((id) => log(id, 'note', `✎ board #${e.n} from ${who(e.from)}: ${e.text}`, undefined, e.at));
   },
+  intercom: (e) => log(ARBITER, 'note', `✉ from ${e.fromName}: ${e.text}`, undefined, e.at),
   result: (e) => {
     const a = agents.get(e.agentId);
     if (a) a.agent.costUsd = e.costUsd;
@@ -801,6 +804,8 @@ const dropAfter = (ev, b) => ev.clientX > b.getBoundingClientRect().left + b.off
 async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel } = await (await fetch('/workspaces')).json()); } catch { return; }
+  wsNames.clear();
+  list.forEach((w) => wsNames.set(w.id, w.name));
   renderTitle();
   renderArchived(archived);
   if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
@@ -826,6 +831,7 @@ async function refreshTabs() {
     b.append(w.name);
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
+    if (w.intercom) b.append(Object.assign(document.createElement('span'), { className: 'mail', textContent: w.intercom, title: `${w.intercom} unread message(s) from other workspaces` }));
     b.onclick = () => switchTo(w.id);
     b.draggable = true;
     b.ondragstart = (ev) => { ev.dataTransfer.setData('text/plain', w.id); ev.dataTransfer.effectAllowed = 'move'; dragId = w.id; };

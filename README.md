@@ -65,6 +65,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 ### Controls
 
 - Drag a tab left or right to reorder workspaces; the order is kept across restarts.
+- Jarvis in one workspace can message Jarvis in another (`tell_workspace`, e.g. a heads-up about a shared branch). An idle one is not woken: its tab shows a count of unread messages, and they arrive with its next turn. Only an urgent message wakes it, and only if it is idle (a stopped one stays stopped; the reply says which targets were not woken).
 - Right-click an agent, Jarvis or a tab: model, effort, stop, delete, hide, rename, archive.
 
 ![Right-click menu on the frontend agent: Open log, Model, Effort, Hide, Stop, Delete agent](docs/screenshots/menu.png)
