@@ -1,4 +1,4 @@
-import { test, expect, createWs, open, tab, uniq } from './helpers.ts';
+import { test, expect, createWs, open, tab, uniq, say } from './helpers.ts';
 
 test('dragging a tab reorders it and the order survives a reload', async ({ page }) => {
   const [a, b] = [uniq('ordA'), uniq('ordB')];
@@ -41,6 +41,7 @@ test('a real mouse drag shows the drop bar on the hovered tab and reorders', asy
   await createWs(page, a);
   await createWs(page, b);
   await open(page, a);
+  await tab(page, b).scrollIntoViewIfNeeded(); // with many tabs the bar scrolls, and b sits beyond its right edge: a drag cannot start there
   const [src, dst] = [(await tab(page, b).boundingBox())!, (await tab(page, a).boundingBox())!];
   await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
   await page.mouse.down();
@@ -51,5 +52,27 @@ test('a real mouse drag shows the drop bar on the hovered tab and reorders', asy
   expect(await tab(page, a).evaluate((el) => getComputedStyle(el).boxShadow)).toContain('inset');
   await page.mouse.up();
   const x = async (n: string) => (await tab(page, n).boundingBox())?.x ?? Infinity; // null while the bar rebuilds
+  await expect.poll(async () => (await x(b)) < (await x(a))).toBe(true);
+});
+
+test('a badge appearing on a tab mid-drag does not cancel the drag; the bar catches up on drop', async ({ page }) => {
+  const [a, b, s] = [uniq('racA'), uniq('racB'), uniq('racS')];
+  const [, , sid] = [await createWs(page, a), await createWs(page, b), await createWs(page, s)];
+  await open(page, a);
+  await tab(page, b).scrollIntoViewIfNeeded(); // with many tabs the bar scrolls, and b sits beyond its right edge: a drag cannot start there
+  const [src, dst] = [(await tab(page, b).boundingBox())!, (await tab(page, a).boundingBox())!];
+  await page.mouse.move(src.x + src.width / 2, src.y + src.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(src.x + src.width / 2 - 5, src.y + src.height / 2, { steps: 3 });
+  await page.mouse.move(dst.x + 4, dst.y + dst.height / 2, { steps: 10 });
+  await expect(tab(page, a)).toHaveClass(/drop-before/);
+  // an unread intercom message changes tab a's badge, so the next poll would rebuild the bar
+  expect((await say(page, sid, `tool mcp__jarvis__tell_workspace ${JSON.stringify({ to: [a], text: 'hi' })}`)).ok()).toBe(true);
+  await page.waitForTimeout(3500);
+  await expect(tab(page, a)).toHaveClass(/drop-before/); // gone if the bar was rebuilt (the badge text would also break tab())
+  await page.mouse.up();
+  const badge = page.locator('#tabs button', { hasText: a }).locator('.mail');
+  await expect(badge).toHaveText('1'); // applied after the drop
+  const x = async (n: string) => (await page.locator('#tabs button', { hasText: n }).boundingBox())?.x ?? Infinity;
   await expect.poll(async () => (await x(b)) < (await x(a))).toBe(true);
 });

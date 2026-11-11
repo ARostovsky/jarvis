@@ -821,7 +821,7 @@ async function refreshTabs() {
   $('emptyArchive').hidden = !archived.length;
   // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
   const sig = JSON.stringify([WS, list, archived.length]);
-  if (sig === tabsSig) return;
+  if (sig === tabsSig || dragId) return; // a rebuild mid-drag would drop the dragged tab; ondragend catches up
   tabsSig = sig;
   const keepScroll = $('tabs').scrollLeft; // replaceChildren clamps scrollLeft to 0
   $('tabs').replaceChildren(...list.map((w) => {
@@ -835,7 +835,7 @@ async function refreshTabs() {
     b.onclick = () => switchTo(w.id);
     b.draggable = true;
     b.ondragstart = (ev) => { ev.dataTransfer.setData('text/plain', w.id); ev.dataTransfer.effectAllowed = 'move'; dragId = w.id; };
-    b.ondragend = () => { dragId = null; clearDrop(); };
+    b.ondragend = () => { dragId = null; clearDrop(); refreshTabs(); };
     b.ondragover = (ev) => {
       if (!dragId || dragId === w.id) return;
       ev.preventDefault();
