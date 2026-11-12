@@ -363,11 +363,12 @@ setInterval(() => { if (isFolded(ARBITER) && kidsOf(ARBITER).some((a) => !a.hidd
 const autoFold = (id) => (id === ARBITER ? kidsOf(ARBITER).length > JARVIS_FOLD_AT : !kidsOf(id).some(active));
 const isFolded = (id) => override()[id] ?? autoFold(id);
 const saveOverride = () => saveJson(`jarvis.collapsed.${WS}`, override());
-// Single agents of Jarvis can be hidden by hand; one comes back when it, or one of its sub-agents, gets work.
+// Single agents of Jarvis can be hidden by hand; one comes back when it, or one of its sub-agents, turns busy after the hide time (by the event's `at`, so replayed history from before the hide never unhides).
 const hiddenSets = {};
-const hiddenByHand = () => hiddenSets[WS] ??= loadJson(`jarvis.hidden.${WS}`);
+// Entries from before hide times were stored are `true`: they count as hidden now, so replayed history stays older and live work still unhides.
+const hiddenByHand = () => hiddenSets[WS] ??= Object.fromEntries(Object.entries(loadJson(`jarvis.hidden.${WS}`)).map(([id, v]) => [id, v === true ? Date.now() : v]));
 function hideAgent(id, on) {
-  if (on) hiddenByHand()[id] = true; else delete hiddenByHand()[id];
+  if (on) hiddenByHand()[id] = Date.now(); else delete hiddenByHand()[id];
   saveJson(`jarvis.hidden.${WS}`, hiddenByHand());
   layout();
   leaveHidden();
@@ -387,7 +388,7 @@ function showAll() {
 }
 // Hides every group idle right now, the selected one too, and hands hiding back to auto.
 function hideIdle() {
-  for (const a of idleShown()) hiddenByHand()[a.agent.id] = true;
+  for (const a of idleShown()) hiddenByHand()[a.agent.id] = Date.now();
   saveJson(`jarvis.hidden.${WS}`, hiddenByHand());
   delete override()[ARBITER];
   saveOverride();
@@ -461,9 +462,10 @@ function setStatus(id, status, at = Date.now()) {
   if (was !== active(a) || a.since === undefined) a.since = at; // start of the current busy or idle stretch
   const lead = a.agent.parentId;
   if (was !== active(a) && lead) {
-    if (lead !== ARBITER && override()[lead] === autoFold(lead)) { delete override()[lead]; saveOverride(); }
+    // Replayed history must not drop overrides or unhide: its stretches are old, and the snapshot is replayed on every workspace switch.
+    if (!replaying && lead !== ARBITER && override()[lead] === autoFold(lead)) { delete override()[lead]; saveOverride(); }
     const top = lead === ARBITER ? id : lead;
-    if (active(a) && hiddenByHand()[top]) { delete hiddenByHand()[top]; saveJson(`jarvis.hidden.${WS}`, hiddenByHand()); }
+    if (active(a) && at > hiddenByHand()[top]) { delete hiddenByHand()[top]; saveJson(`jarvis.hidden.${WS}`, hiddenByHand()); }
     layout(); // may fold or unfold its lead, or show it among Jarvis's busy agents
   }
   a.g.classList.remove('running', 'idle', 'waiting', 'error', 'stopped');
@@ -730,7 +732,15 @@ function endLive(id) {
 
 let replaying = true;
 const handlers = {
-  ready: () => { replaying = false; if (!selected) select(ARBITER); },
+  ready: () => {
+    replaying = false;
+    // The replay's transitions skipped the override cleanup, so drop the overrides that now agree with auto.
+    const o = override();
+    for (const id in o) if (id !== ARBITER && o[id] === autoFold(id)) delete o[id];
+    saveOverride();
+    layout();
+    if (!selected) select(ARBITER);
+  },
   delta: (e) => {
     const a = agents.get(e.agentId);
     if (!a) return;
