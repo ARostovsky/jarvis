@@ -2,10 +2,11 @@ import { query as sdkQuery, tool, createSdkMcpServer, type SDKUserMessage, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync, openSync, closeSync, fstatSync, ftruncateSync, constants } from 'node:fs';
+import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
+import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -258,9 +259,80 @@ function fallbackSubject(paths: string[]) {
 function claim(notes: string, ws: string, file: string, after = Infinity) {
   const rel = relative(notes, file);
   if (!rel || rel.startsWith('..')) return;
+  if (basename(file).startsWith('.merge-')) return; // a journal merge in flight: never attributed, never committed
   const o = notesOwner.get(file);
   if (o && o.ws !== ws && o.n > after) return;
-  notesOwner.set(file, { ws: /^journal\/\d{4}-\d{2}-\d{2}-(.+)\.md$/.exec(rel)?.[1] ?? ws, n: ++notesSeq });
+  const key = /^journal\/\d{4}-\d{2}-\d{2}-([^/]+)\.md$/.exec(rel)?.[1];
+  notesOwner.set(file, { ws: (key && journalOwner(key)) || ws, n: ++notesSeq });
+}
+
+// The workspace a journal key belongs to: the id itself (journals from before keys followed renames), else the one whose id ends with the key's `-xxxx` suffix, whatever name the key was made from; a key of any other shape (a user's own file) belongs to nobody.
+// Only workspaces in the registry count: the journal of an archived workspace has no owner here, so a claim falls back to the workspace that wrote it (before, the owner was the id in the file name) and syncJournals leaves it alone until the workspace is restored.
+function journalOwner(key: string) {
+  const ids = [...workspaces.keys()];
+  if (ids.includes(key)) return key;
+  const s = /-[a-z0-9]{4}$/.exec(key)?.[0];
+  return s ? ids.find((id) => id.endsWith(s)) : undefined;
+}
+// What is appended of a stale rewrite `add` to `old`: whole lines only, after the lines both start with. A rewrite from memory plus a new line adds only the new line.
+// shortcut: only the common leading lines are dropped; a rewrite that changes an early line is appended in full after it, so some text repeats (never lost).
+function newLines(old: string, add: string) {
+  const nl = (x: string) => (x && !x.endsWith('\n') ? `${x}\n` : x);
+  const a = nl(add), o = nl(old);
+  let p = 0;
+  while (p < a.length && p < o.length && a[p] === o[p]) p++;
+  return a.slice(p ? a.lastIndexOf('\n', p - 1) + 1 : 0);
+}
+// Agents write the notes folder, so a symlink or hard link there must never make the server read or write outside it. Opens a plain file without following a symlink and checks the open fd (not the path, which could be swapped meanwhile); undefined for anything else.
+// O_NONBLOCK: a FIFO planted there must not block the server.
+function openPlain(p: string, flags: number) {
+  let fd: number;
+  try { fd = openSync(p, flags | constants.O_NOFOLLOW | constants.O_NONBLOCK); } catch { return undefined; }
+  try {
+    const st = fstatSync(fd);
+    if (st.isFile() && st.nlink <= 1) return fd;
+  } catch {}
+  closeSync(fd);
+}
+// Moves the workspace's journals to the name its current name gives (a merge into the file there if one exists), claims the result; commitNotes then commits delete and add as one rename.
+function syncJournals(notes: string, meta: { id: string; name: string }) {
+  const dir = join(notes, 'journal');
+  if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return;
+  const key = journalKey(meta);
+  let moved = false;
+  try {
+    for (const f of readdirSync(dir)) {
+      // A leftover `.merge-` file is a merge a crash cut short: the same work, from the moved-aside copy.
+      const j = /^(\d{4}-\d{2}-\d{2})-([^/]+)\.md$/.exec(f), t = /^\.merge-(\d{4}-\d{2}-\d{2})-(.+)-[0-9a-f]{8}$/.exec(f);
+      const m = j ?? t;
+      if (!m || (j && m[2] === key) || journalOwner(m[2]) !== meta.id) continue;
+      const from = join(dir, f), to = join(dir, `${m[1]}-${key}.md`);
+      const was = lstatSync(from, { throwIfNoEntry: false }), there = lstatSync(to, { throwIfNoEntry: false });
+      if (!was?.isFile() || was.nlink > 1 || (there && !there.isFile())) continue;
+      if (there) {
+        // Moved aside first, so a line an agent appends to the old name meanwhile lands in a new file for the next sync instead of being lost with the delete.
+        const tmp = t ? from : join(dir, `.merge-${m[1]}-${key}-${randomBytes(4).toString('hex')}`);
+        if (!t) renameSync(from, tmp);
+        const src = openPlain(tmp, constants.O_RDWR), dst = openPlain(to, constants.O_RDWR | constants.O_APPEND);
+        try {
+          if (src === undefined || dst === undefined) continue; // the moved-aside file stays and is retried; it is never committed
+          const old = readFileSync(dst, 'utf8'), add = readFileSync(src, 'utf8');
+          const rest = old.includes(add) ? '' : newLines(old, add);
+          if (rest) appendFileSync(dst, (old && !old.endsWith('\n') ? '\n' : '') + rest);
+          ftruncateSync(src, 0); // merged: if the remove below fails, a retry has nothing left to append
+        } finally {
+          if (src !== undefined) closeSync(src);
+          if (dst !== undefined) closeSync(dst);
+        }
+        try { rmSync(tmp); } catch (e) { console.warn(`notes: cannot remove ${tmp}: ${(e as Error).message}`); }
+      } else renameSync(from, to);
+      notesOwner.delete(from);
+      notesOwner.set(to, { ws: meta.id, n: ++notesSeq });
+      moved = true;
+    }
+  } finally {
+    if (moved) saveNotesOwner();
+  }
 }
 
 export function notesWritten(notes: string, ws: string, file: string) {
@@ -310,11 +382,15 @@ export function commitNotes(notes: string, id: string, name: string) {
   try {
     const at = notesGit(notes);
     if (!at) return void console.warn(`notes: not committing ${notes}: its git dir is inside the folder, where agents can plant hooks. To let Jarvis commit it, move the git dir out: mkdir -p ${NOTES_GIT} && git -C ${notes} init --separate-git-dir ${notesGitDir(notes)}`);
+    // Also catches a stale session still writing the old name; a failure here must not block the commit.
+    try { syncJournals(notes, { id, name }); } catch (e) { console.warn(`notes: cannot move journals in ${notes}: ${(e as Error).message}`); }
     const mine = [...notesOwner].filter(([f, o]) => o.ws === id && !relative(notes, f).startsWith('..')).map(([f]) => f);
-    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-${id}.md`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
+    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-*${idSuffix(id)}.md`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
     // Porcelain paths are relative to the repo root, hence top; -uall lists files, never an untracked folder that may hold other workspaces' files.
     const paths = git(notes, ...at, 'status', '--porcelain', '-z', '--no-renames', '--untracked-files=all', ...spec).split('\0').filter(Boolean).map((l) => l.slice(3));
-    const changed = paths.map((p) => `:(top,literal)${p}`);
+    // A symlink (agents can plant one) is never committed: it would publish whatever it points at.
+    const top = git(notes, ...at, 'rev-parse', '--show-toplevel').trim();
+    const changed = paths.filter((p) => !lstatSync(join(top, p), { throwIfNoEntry: false })?.isSymbolicLink()).map((p) => `:(top,literal)${p}`);
     if (changed.length) {
       const has = (k: string) => { try { return !!git(notes, ...at, 'config', k).trim(); } catch { return false; } };
       const env = has('user.name') && has('user.email') ? process.env : { ...process.env, GIT_AUTHOR_NAME: 'Jarvis', GIT_AUTHOR_EMAIL: 'jarvis@localhost', GIT_COMMITTER_NAME: 'Jarvis', GIT_COMMITTER_EMAIL: 'jarvis@localhost' };
@@ -624,8 +700,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const unread = (a: Agent) =>
     board.filter((x) => x.n > (boardSeen.get(a.id) ?? 0) && x.from !== a.id && (x.to.includes(a.id) || x.to.includes('all')));
 
+  // Set by a rename: told to the arbiter in its next message, never by a message of its own (that would wake an idle arbiter and spend a turn).
+  let journalNote: string | undefined;
   // Every message into a session carries the board notes this agent has not seen yet.
   function deliver(a: Agent, text: string) {
+    if (a.id === ARBITER && journalNote) {
+      text = `${journalNote}\n\n${text}`;
+      journalNote = undefined;
+    }
     const msgs = a.id === ARBITER ? mail.filter((m) => m.n > mailSeen) : [];
     if (msgs.length) {
       // shortcut: marked seen before the SDK has read the text, as the board is, so a crash in between loses it; ack after the turn starts if that bites.
@@ -880,7 +962,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const team = a.id === ARBITER || depth(a) < MAX_DEPTH;
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
-      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${meta.id}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
+      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${journalKey(meta)}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
       : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
@@ -1086,6 +1168,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     configure,
     postNote,
     receive,
+    noteJournalMoved: (key: string) => void (journalNote = `[workspace renamed] Your journal files are now named journal/YYYY-MM-DD-${key}.md and the old ones were moved there. Use only the new name.`),
     wake,
     notesMessage,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
@@ -1153,8 +1236,12 @@ export function recentFolders() {
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   if (notes) prepareNotes(resolve(notes));
-  const slug = name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'ws';
-  const meta: WorkspaceMeta = { id: `${slug}-${Date.now().toString(36).slice(-4)}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}) };
+  const slug = slugOf(name);
+  // Journals are matched to workspaces by the id suffix: it must differ from every live and archived workspace and from every journal already in the notes folder.
+  const taken = new Set([...workspaces.keys(), ...listArchived().map((m) => m.id)].map((id) => id.slice(-4)));
+  if (notes) try { for (const f of readdirSync(join(resolve(notes), 'journal'))) { const m = /-([a-z0-9]{4})\.md$/.exec(f); if (m) taken.add(m[1]); } } catch {}
+  const suffix = uniqueSuffix(taken);
+  const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}) };
   const w = createWorkspace(meta);
   if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
@@ -1167,8 +1254,11 @@ export function renameWorkspace(id: string, name: string) {
   const w = workspaces.get(id);
   if (!w) throw new Error(`no workspace ${id}`);
   if (!name.trim()) throw new Error('name is empty');
+  const was = journalKey(w.meta);
   w.meta.name = name.trim();
   saveRegistry();
+  if (w.meta.notes && journalKey(w.meta) !== was) w.noteJournalMoved(journalKey(w.meta));
+  if (w.meta.notes) try { syncJournals(w.meta.notes, w.meta); } catch (e) { console.warn(`notes: cannot move journals in ${w.meta.notes}: ${(e as Error).message}`); }
 }
 
 // Takes effect when a session next starts or resumes: agentOptions() is read then. Empty clears.
