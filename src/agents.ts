@@ -55,6 +55,19 @@ export const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const DEFAULT_AGENT_MODEL = process.env.JARVIS_AGENT_MODEL ?? 'sonnet';
 export const ARBITER_MODEL = process.env.JARVIS_ARBITER_MODEL ?? 'sonnet'; // a workspace's own model still wins
 const DEFAULT_EFFORT = { arbiter: (process.env.JARVIS_ARBITER_EFFORT ?? 'medium') as EffortLevel, agent: (process.env.JARVIS_AGENT_EFFORT ?? 'medium') as EffortLevel };
+const LEAD_MAX_EFFORT = (process.env.JARVIS_LEAD_MAX_EFFORT ?? 'medium') as EffortLevel; // top effort a lead may give its sub-agents
+// Sub-agents of a lead never get a higher model than the lead, nor an effort above its own or LEAD_MAX_EFFORT. The arbiter is not clamped.
+export function clampSpawn(parent: Pick<Agent, 'model' | 'effort'>, model: string, effort?: EffortLevel) {
+  const rank = (m?: string) => MODELS.indexOf((m ?? DEFAULT_AGENT_MODEL) as (typeof MODELS)[number]);
+  const level = (e: EffortLevel) => (EFFORTS.indexOf(e) < 0 ? EFFORTS.indexOf('medium') : EFFORTS.indexOf(e)); // a bad env value counts as medium
+  const cap = Math.min(level(parent.effort ?? DEFAULT_EFFORT.agent), level(LEAD_MAX_EFFORT));
+  const want = effort ?? DEFAULT_EFFORT.agent;
+  const [rm, rp] = [rank(model), rank(parent.model)];
+  return {
+    model: rm >= 0 && rp >= 0 && rm > rp ? (parent.model ?? DEFAULT_AGENT_MODEL) : model, // a model outside MODELS (full id) is kept as asked
+    effort: level(want) > cap ? EFFORTS[cap] : want,
+  };
+}
 const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
 const PLAYWRIGHT = process.env.JARVIS_PLAYWRIGHT ?? '1'; // browser MCP for every session: '1' headless, 'headed' visible windows, '0' off
 const MAX_DEPTH = 2; // arbiter = 0, its agents = 1, their sub-agents = 2
@@ -454,7 +467,7 @@ Every tool call re-reads your whole context, so long sessions get expensive. Whe
 When an agent reports "[agent <id> context ...]" or "[agent <id> cost ...]", it passed a size or cost limit: restart it with a short summary of its state and the remaining work (spawn a new agent or compact it), instead of letting it continue.
 Agents you spawn can spawn their own sub-agents. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent per area and tell it to split its area into sub-agents, instead of managing every small task yourself.`;
 
-const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches, starting from your current files, uncommitted changes included. Commit your own changes before you merge a sub-agent's branch. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. You coordinate: do not read or write code yourself, give every piece of reading and writing to a sub-agent and keep your own context small (your context is re-read on every call). Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
+const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches, starting from your current files, uncommitted changes included. Commit your own changes before you merge a sub-agent's branch. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. You coordinate: do not read or write code yourself, give every piece of reading and writing to a sub-agent and keep your own context small (your context is re-read on every call). Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning or reviews, never for code that mirrors an existing pattern or module. Default effort is medium (low for mechanical work), never above medium unless unavoidable. Never pick a higher model or effort than your own unless your task says so; spawn_agent lowers such requests and reports what it applied. When a sub-agent finishes you get a message starting with "[agent <id> finished".`;
 
 const BOARD_PROMPT = `There is a shared board with other agents. Notes addressed to you arrive at the top of your messages as "[board notes for you]"; board_read fetches new ones mid-task. Use board_post only for things another agent actually needs (an interface you defined, a decision, a blocker), addressed to those agents.`;
 
@@ -776,6 +789,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     // In the parent's repo or its worktree, start from what the parent has now, uncommitted work included, not from a HEAD.
     const from = parent.repo && (at === parent.repo || at === parent.cwd) ? workCommit(parent) : undefined;
     const wd = makeWorkdir(id, base, from, owner?.repo);
+    if (parentId !== ARBITER) ({ model, effort } = clampSpawn(parent, model, effort));
     const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort };
     agents.set(id, a);
     emit('spawned', { agent: a });
@@ -940,11 +954,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
           name: z.string().describe('short role name, e.g. "tests" or "backend"'),
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
           repo: z.string().optional().describe('absolute path to the repository to work on'),
-          model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: architecture, hard debugging, design, ambiguous problems. A lead that coordinates sub-agents is sonnet unless the coordination itself is hard reasoning.`),
-          effort: z.enum(EFFORTS).optional().describe(`reasoning effort, default ${DEFAULT_EFFORT.agent}. low for mechanical work, high or xhigh only for genuinely hard problems.`),
+          model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: hard reasoning or reviews (architecture, hard debugging, ambiguous problems), never code that mirrors an existing pattern or module. A lead that coordinates sub-agents is sonnet unless the coordination itself is hard reasoning. A lead cannot give a sub-agent a higher model than its own.`),
+          effort: z.enum(EFFORTS).optional().describe(`reasoning effort, default ${DEFAULT_EFFORT.agent}. low for mechanical work, never above medium unless unavoidable. A lead's sub-agents are capped at medium (and at the lead's own effort); the result shows what was applied.`),
         }, async ({ name, task, repo, model, effort }) => {
           const a = spawnAgent(name, task, repo, owner, model, effort);
-          return ok({ id: a.id, cwd: a.cwd, model: a.model, effort: a.effort ?? DEFAULT_EFFORT.agent });
+          return ok({ id: a.id, cwd: a.cwd, model: a.model, effort: a.effort ?? DEFAULT_EFFORT.agent, ...(a.model !== (model ?? DEFAULT_AGENT_MODEL) || a.effort !== (effort ?? DEFAULT_EFFORT.agent) ? { note: 'model or effort lowered to your own level, max medium effort' } : {}) });
         }),
         tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
           id: z.string(),

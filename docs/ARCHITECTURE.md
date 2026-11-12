@@ -312,6 +312,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `XDG_DATA_HOME` | `~/.local/share` | Data dir is `$XDG_DATA_HOME/jarvis` |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for spawned agents |
 | `JARVIS_AGENT_EFFORT` | `medium` | Default effort for spawned agents |
+| `JARVIS_LEAD_MAX_EFFORT` | `medium` | Top effort (sub-agent model is also capped at the lead's own) a lead may give its sub-agents; higher requests are lowered |
 | `JARVIS_ARBITER_MODEL` | `sonnet` | Arbiter model when the workspace does not set one |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |

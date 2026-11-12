@@ -112,6 +112,7 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `PORT` | `7777` | Web UI port |
 | `JARVIS_AGENT_MODEL` | `sonnet` | Default model for new agents |
 | `JARVIS_AGENT_EFFORT` | `medium` | Default agent effort (`low` ... `max`) |
+| `JARVIS_LEAD_MAX_EFFORT` | `medium` | Top effort a lead may give its sub-agents; a lead also cannot give them a higher model than its own |
 | `JARVIS_ARBITER_MODEL` | `sonnet` | Jarvis model |
 | `JARVIS_ARBITER_EFFORT` | `medium` | Jarvis effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | `auto`, `acceptEdits`, `default`, ... |
