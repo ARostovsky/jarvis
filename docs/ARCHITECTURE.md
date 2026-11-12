@@ -83,6 +83,7 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `tool <mcp tool> <json>` | calls an in-process MCP tool, e.g. `tool mcp__jarvis__spawn_agent {...}` |
 | `perm <tool> <json>` | calls `options.canUseTool` as the real SDK does for a call it cannot decide (in any permission mode), waits for the UI's answer, then says `allow <updated input as JSON>` or `deny <message>`; runs nothing |
 | `usage <tokens>` | the later assistant messages report this many input tokens (the server sums input, cache creation and cache reads for the context alert) |
+| `slowinterrupt <ms>` | the result of an interrupted turn takes this long, so a spec can send a message before it arrives |
 | `cost <usd>` | the result reports this `total_cost_usd` (for the budget alert) |
 | `fail <subtype>` | ends the turn with an error result, e.g. `fail error_during_execution`; the session lives on |
 | `echo` | says the whole message as received, board notes and intercom prefix included |
@@ -156,6 +157,8 @@ Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {
 Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
 
 When an agent finishes a turn, its result goes to its parent as `[agent <id> finished, status <s>]\n<text>`, capped at `REPORT_CAP` (1000) characters, so reports do not fill the parent's context. The parent can call `read_agent` for the full text.
+
+Cost accounting: `costUsd` is set at each SDK `result` (`base + total_cost_usd`). `stopAgent` on a working agent calls `q.interrupt()` instead of aborting, so the turn ends with a result carrying its cost; `pump` then keeps the status `stopped`, skips the parent report and aborts the session (a 5 s timer aborts anyway if no result comes; a turn blocked on a permission prompt usually loses its spend). Spend of deleted agents is `removedUsd`, rebuilt by `restore()` from the log: `removed` adds the agent's replayed `costUsd`, `removed_cost {usd}` is the result of a turn that ended after its agent was deleted. `summary().costUsd` (tab title) is `removedUsd` plus all agents; the panel's Σ stays per agent subtree. The fake SDK's `interrupt()` ends the running turn with an `error_during_execution` result that carries the cost.
 
 Soft cost alerts go to the parent by the same route, once per session each, and never stop anything: `[agent <id> context <n>k tokens, over 200k]` when one call's context (input + cache creation + cache reads of a non-subagent assistant message) passes `CONTEXT_ALERT_TOKENS` (re-armed by a compaction), and `[agent <id> cost $<n>, over $10]` when `costUsd` passes `BUDGET_ALERT_USD` at a result. The prompts tell the parent to restart the agent with a summary. Prompts also steer leads to coordinate only (no code reading) on sonnet, and large reviews to one reviewer per diff area.
 

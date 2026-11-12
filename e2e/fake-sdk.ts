@@ -3,6 +3,7 @@
 //   say <text>              assistant text; with includePartialMessages first streamed word by word as text deltas
 //   pace <ms>               pause after each text delta of the later say lines, so the stream can be watched
 //   sleep <ms>              keeps the turn running
+//   slowinterrupt <ms>      the result of an interrupted turn takes this long
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
@@ -43,6 +44,11 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     options.abortController?.signal.addEventListener('abort', fail);
   });
   aborted.catch(() => {});
+  // interrupt(): the turn ends early with an error result that still carries the cost, as in the real SDK.
+  // It ends only the running turn and does nothing when idle; queued messages still run.
+  let interruptDelay = 0; // slowinterrupt: how long the interrupted result takes
+  let interrupted = false, inTurn = false, wake = () => {};
+  let woken = Promise.resolve();
   let n = 0;
   let tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = 0;
   const base = { session_id, parent_tool_use_id: null };
@@ -80,7 +86,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     const texts: string[] = [];
     let pace = 0;
     let last = ''; // result of the last `tool` command
-    const sleep = (ms: number) => Promise.race([new Promise((r) => setTimeout(r, ms)), aborted]);
+    const sleep = (ms: number) => Promise.race([new Promise((r) => setTimeout(r, ms)), woken, aborted]);
     async function* say(text: string): AsyncGenerator<SDKMessage> {
       texts.push(text);
       if (options.includePartialMessages) {
@@ -97,6 +103,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
     if (script.trim() === '/compact') return yield* compact();
     for (const line of script.split('\n')) {
+      if (interrupted) await new Promise((r) => setTimeout(r, interruptDelay));
+      if (interrupted) return interrupted = false, yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'error_during_execution', errors: [], stop_reason: null, total_cost_usd: costUsd, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
       const [, cmd, rest = ''] = /^(\w+)\s*(.*)$/.exec(line.trim()) ?? [];
       const id = `toolu_fake_${++n}`;
       if (cmd === 'say') {
@@ -113,6 +121,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         usageTokens = Number(rest);
       } else if (cmd === 'cost') {
         costUsd = Number(rest);
+      } else if (cmd === 'slowinterrupt') {
+        interruptDelay = Number(rest);
       } else if (cmd === 'pace') {
         pace = Number(rest);
       } else if (cmd === 'sleep') {
@@ -165,13 +175,15 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
       const next = await Promise.race([input.next(), aborted]);
       if (next.done) return;
       const c = next.value.message.content;
-      yield* turn(typeof c === 'string' ? c : c.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+      interrupted = false, inTurn = true, woken = new Promise<void>((res) => (wake = res));
+      try { yield* turn(typeof c === 'string' ? c : c.map((b) => (b.type === 'text' ? b.text : '')).join('\n')); } finally { inTurn = false; }
     }
   }
 
   // Only what the server calls; the cast stands in for the many other control methods of a real Query.
-  const q: Pick<Query, 'getContextUsage' | 'setModel' | 'applyFlagSettings'> & AsyncGenerator<SDKMessage, void> = Object.assign(run(), {
+  const q: Pick<Query, 'getContextUsage' | 'interrupt' | 'setModel' | 'applyFlagSettings'> & AsyncGenerator<SDKMessage, void> = Object.assign(run(), {
     getContextUsage: async (o?: { detail?: 'summary' | 'full' }) => ({ totalTokens: o?.detail === 'full' ? tokens : lastUsage, maxTokens: 200_000 }) as Awaited<ReturnType<Query['getContextUsage']>>,
+    interrupt: async () => void (inTurn && ((interrupted = true), wake())),
     setModel: async () => {},
     applyFlagSettings: async () => {},
   });

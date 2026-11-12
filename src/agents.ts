@@ -497,7 +497,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   const agents = new Map<string, Agent>();
-  const sessions = new Map<string, { push: (text: string) => void; abort: AbortController; q: Query }>();
+  let removedUsd = 0; // spend of deleted agents, rebuilt from the log (removed, removed_cost) so it survives restarts
+  type Session = { push: (text: string) => void; abort: AbortController; q: Query; interrupting?: boolean; timer?: ReturnType<typeof setTimeout> };
+  const sessions = new Map<string, Session>();
+  // Ends a session now and frees its slot, so a message sent after this starts a new one.
+  const kill = (id: string, s: Session) => (s.abort.abort(), sessions.get(id) === s && sessions.delete(id));
   const compacting = new Set<string>(); // agents whose next result is a /compact, not a report for the parent
   const pendingAsks = new Map<string, { resolve: (allow: boolean, reply?: AskReply) => void; event: object }>();
 
@@ -537,7 +541,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   // For the tab bar: how much is going on in this workspace.
   const summary = () => {
     const all = [...agents.values()];
-    const costUsd = all.reduce((sum, a) => sum + a.costUsd, 0);
+    const costUsd = removedUsd + all.reduce((sum, a) => sum + a.costUsd, 0);
     return { ...meta, running: all.filter((a) => a.status === 'running').length, waiting: pendingAsks.size, costUsd, intercom: mail.filter((m) => m.n > mailSeen).length };
   };
 
@@ -552,7 +556,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
       history.push(line);
       const a = agents.get(e.agentId);
       if (e.type === 'spawned') agents.set(e.agent.id, spawned(e, repoAt));
-      else if (e.type === 'removed') agents.delete(e.agentId);
+      else if (e.type === 'removed') (removedUsd += a?.costUsd ?? 0, agents.delete(e.agentId));
+      else if (e.type === 'removed_cost') removedUsd += e.usd;
       else if (e.type === 'board') board.push(e);
       else if (e.type === 'board_seen') boardSeen.set(e.agentId, e.n);
       else if (e.type === 'intercom') mail.push(e);
@@ -608,8 +613,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
         ...agentOptions(a),
       },
     });
-    const s = {
+    const s: Session = {
       push: (text: string) => {
+        clearTimeout(s.timer);
+        s.timer = undefined; // a message during the interrupt window keeps the session: its turn runs after the interrupted one
         setStatus(a, 'running');
         box.push(text);
       },
@@ -617,13 +624,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
       q,
     };
     sessions.set(a.id, s);
-    pump(a, q);
+    pump(a, q, s);
     return s;
   }
 
-  async function pump(a: Agent, q: Query) {
+  async function pump(a: Agent, q: Query, s: Session) {
     // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
     const base = a.costUsd;
+    const current = () => !sessions.has(a.id) || sessions.get(a.id) === s; // false once kill() made room for a newer session: this pump must not touch its state
     let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
     const bash = new Map<string, () => void>(); // Bash calls in flight that may change notes: tool_use id -> claims the notes files the call changed; key '' is a sub-agent's whole turn
     try {
@@ -668,9 +676,19 @@ export function createWorkspace(meta: WorkspaceMeta) {
         } else if (m.type === 'user' && Array.isArray(m.message.content)) {
           for (const b of m.message.content) if (b.type === 'tool_result') bash.get(b.tool_use_id)?.(), bash.delete(b.tool_use_id);
         } else if (m.type === 'result') {
-          a.costUsd = base + m.total_cost_usd;
+          const interrupted = !!s.interrupting; // this result ends a turn that stopAgent interrupted
+          s.interrupting = false;
+          clearTimeout(s.timer);
+          const spent = base + m.total_cost_usd - a.costUsd;
+          a.costUsd += spent;
+          if (!agents.has(a.id)) { // deleted mid-turn: the turn's spend still counts for the workspace
+            removedUsd += spent;
+            emit('removed_cost', { usd: spent });
+            kill(a.id, s);
+            continue;
+          }
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
-          setStatus(a, m.subtype === 'success' ? 'idle' : 'error');
+          if (!interrupted) setStatus(a, m.subtype === 'success' ? 'idle' : 'error'); // an interrupted turn is neither done nor failed: status is stopped, or running when a message is queued
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
           if (a.parentId && !budgetAlerted && a.costUsd > BUDGET_ALERT_USD) {
             budgetAlerted = true;
@@ -682,21 +700,26 @@ export function createWorkspace(meta: WorkspaceMeta) {
           // Cap what lands in the parent's context; the full text stays available via read_agent.
           const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
           const compacted = compacting.delete(a.id);
-          if (a.parentId && !compacted) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
+          if (a.parentId && !compacted && !interrupted) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
           // 'summary' reads the last response's usage, which after /compact is the pre-compact history: count instead.
           q.getContextUsage({ detail: compacted ? 'full' : 'summary' }).then((u) => {
             a.context = { tokens: u.totalTokens, max: u.maxTokens };
             emit('context', { agentId: a.id, ...a.context });
           }, () => {}); // only an indicator: a failed measurement is not worth an error
+          if (interrupted && a.status === 'stopped') kill(a.id, s); // the interrupted turn is accounted: end the session
         }
       }
-      setStatus(a, 'stopped');
+      if (current()) setStatus(a, 'stopped');
     } catch (e) {
-      setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
-      emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
+      if (current()) {
+        setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
+        emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
+      }
     } finally {
-      sessions.delete(a.id);
-      compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
+      if (current()) {
+        sessions.delete(a.id);
+        compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
+      }
     }
   }
 
@@ -835,6 +858,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       // Only its own dir: a sub-agent of a non-git parent works inside the parent's dir.
       rmSync(a.cwd, { recursive: true, force: true });
     }
+    removedUsd += a.costUsd;
     agents.delete(id);
     emit('removed', { agentId: id });
   }
@@ -877,10 +901,19 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   function stopAgent(id: string) {
     const a = agent(id);
+    const wasWorking = working(a);
     setStatus(a, 'stopped');
-    sessions.get(id)?.abort.abort();
+    const s = sessions.get(id);
+    let asked = false;
     // Its permission prompts die with the session.
-    for (const [reqId, p] of pendingAsks) if ((p.event as { agentId: string }).agentId === id) { pendingAsks.delete(reqId); emit('answered', { reqId }); }
+    for (const [reqId, p] of pendingAsks) if ((p.event as { agentId: string }).agentId === id) { asked = true; pendingAsks.delete(reqId); emit('answered', { reqId }); }
+    if (s?.interrupting && s.timer) return; // already interrupted, its result is on the way: aborting now would lose that turn's cost
+    if (s && wasWorking && !asked) {
+      // Interrupt instead of abort: the turn ends with a result carrying its cost, then pump ends the session. Abort anyway if none comes.
+      s.interrupting = true;
+      s.q.interrupt().catch(() => {});
+      s.timer = setTimeout(() => kill(id, s), 5000).unref();
+    } else if (s) kill(id, s); // a turn blocked on a prompt cannot end by itself
   }
 
   // Stops everything that is working, waiting or holding a session. Each resumes on its next message.
@@ -1076,7 +1109,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (d.length && !commit) throw new DirtyWorktree(d.map((x) => `${x.id}:\n${head(x.changes.split('\n'), 5)}`).join('\n\n'));
     for (const x of d) commitWork(agents.get(x.id)!, `jarvis: save uncommitted work of ${x.id} before archiving workspace`);
     closed = true;
-    for (const s of sessions.values()) s.abort.abort();
+    // shortcut: aborts at once, so the spend of a turn still being interrupted is lost; wait for its result if archiving mid-stop matters
+    for (const [id, s] of [...sessions]) kill(id, s);
     try {
       for (const a of workers()) {
         if (a.repo && existsSync(a.cwd)) {

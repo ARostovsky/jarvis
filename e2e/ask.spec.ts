@@ -1,4 +1,4 @@
-import { test, expect, createWs, open, uniq, say, type Page } from './helpers.ts';
+import { test, expect, createWs, open, uniq, say, post, events, type Page } from './helpers.ts';
 
 // The fake's perm command calls canUseTool and says what came back: "allow <input>" or "deny <message>".
 const reply = (page: Page, start: string) => page.locator('#log div:not(.user)').filter({ hasText: new RegExp(`^${start}`) });
@@ -73,4 +73,36 @@ test('STOP while a prompt waits: the prompt goes away and the next message resum
   await say(page, id, 'say back');
   await expect(reply(page, 'back')).toHaveText('back');
   await expect(page.locator('#core')).toHaveClass(/\bidle\b/);
+});
+
+test('STOP in the middle of a turn keeps the cost of that turn and the agent stays stopped', async ({ page }) => {
+  const id = await createWs(page, uniq('stopcost'));
+  await say(page, id, 'cost 0.5', 'sleep 30000', 'say never');
+  await expect.poll(async () => (await (await page.request.get('/workspaces')).json()).workspaces.find((w: any) => w.id === id)?.running).toBe(1);
+  expect((await post(page, '/stop', { ws: id, id: 'arbiter' })).ok()).toBe(true);
+  await expect.poll(() => events(id).find((e) => e.type === 'result')?.costUsd).toBe(0.5);
+  expect(events(id).filter((e) => e.type === 'status').at(-1).status).toBe('stopped');
+});
+
+test('a message after STOP once the interrupted result is in: a new session resumes and runs it', async ({ page }) => {
+  const id = await createWs(page, uniq('stopmsg'));
+  await say(page, id, 'sleep 30000', 'say never');
+  await expect.poll(async () => (await (await page.request.get('/workspaces')).json()).workspaces.find((w: any) => w.id === id)?.running).toBe(1);
+  await post(page, '/stop', { ws: id, id: 'arbiter' });
+  await say(page, id, 'cost 0.7', 'sleep 6000', 'say back');
+  await expect.poll(() => events(id).filter((e) => e.type === 'result').at(-1)?.costUsd, { timeout: 15000 }).toBe(0.7);
+  expect(events(id).filter((e) => e.type === 'text').at(-1).text).toBe('back');
+  expect(events(id).filter((e) => e.type === 'status').at(-1).status).toBe('idle');
+});
+
+test('a message after STOP but before the interrupted result: the turn is not an error and the queued turn runs', async ({ page }) => {
+  const id = await createWs(page, uniq('stopslow'));
+  await say(page, id, 'slowinterrupt 1500', 'sleep 30000', 'say never');
+  await expect.poll(async () => (await (await page.request.get('/workspaces')).json()).workspaces.find((w: any) => w.id === id)?.running).toBe(1);
+  await post(page, '/stop', { ws: id, id: 'arbiter' });
+  await say(page, id, 'cost 0.7', 'sleep 6000', 'say back');
+  await expect.poll(() => events(id).filter((e) => e.type === 'result').at(-1)?.costUsd, { timeout: 15000 }).toBe(0.7);
+  expect(events(id).filter((e) => e.type === 'text').at(-1).text).toBe('back');
+  expect(events(id).some((e) => e.type === 'status' && e.status === 'error')).toBe(false);
+  expect(events(id).filter((e) => e.type === 'status').at(-1).status).toBe('idle');
 });
