@@ -83,6 +83,10 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 - Jarvis reads it at the start of a goal and keeps it up to date. Other agents are only *told* to read it, and to edit it only when their task asks for it. This is a prompt rule, not enforced.
 - Jarvis commits the folder to git after each turn. Each workspace commits only the files its own agents changed (Jarvis and helpers); your own edits there stay uncommitted. Each commit has a short description of the change written by Jarvis, and ends with `Workspace: <name>`. Details: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+### Code blocks
+
+- Every fenced code block in the chat has a **Copy** button at its top right (shown on hover or keyboard focus, always on touch screens). One click copies the whole block.
+
 ## Safety
 
 - **Your project folder is never edited directly** when it is a git repo. Each agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge.

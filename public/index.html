@@ -90,6 +90,14 @@
   #log table { display: block; overflow-x: auto; border-collapse: collapse; margin: 4px 0; }
   #log th, #log td { border: 1px solid var(--line); padding: 2px 8px; text-align: left; vertical-align: top; }
   #log th { color: var(--cyan); font-weight: normal; }
+  #log .codeblock { position: relative; margin-bottom: 0; }
+  #log .codeblock pre { padding-top: 26px; }
+  #log .codeblock button { position: absolute; top: 6px; right: 6px; padding: 2px 8px; background: var(--bg); border: 1px solid var(--line); font-size: 11px; letter-spacing: .08em; opacity: 0; user-select: none; }
+  #log .codeblock button:hover, #log .codeblock button:focus-visible { background: linear-gradient(rgba(79, 216, 255, .12), rgba(79, 216, 255, .12)), var(--bg); }
+  #log .codeblock button:focus-visible { outline: 1px solid var(--cyan); }
+  #log .codeblock:hover button, #log .codeblock:focus-within button { opacity: 1; }
+  @media (hover: none) { #log .codeblock button { opacity: 1; } }
+  #log .codeblock [role=status] { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); user-select: none; }
   #log pre { margin: 4px 0; padding: 6px 10px; background: rgba(0, 0, 0, .3); border-left: 2px solid var(--line); overflow-x: auto; white-space: pre; }
   #log a { color: var(--cyan); overflow-wrap: anywhere; } #log code { color: #e8d2a8; } #log strong { color: var(--text); }
   #log .tool, #log .meta { color: #8fb8cc; } #log .user, #log .outgoing { color: var(--amber); } #log .report { color: #d9b77a; } #log .result { color: var(--cyan); }
@@ -542,7 +550,16 @@ function renderMd(text) {
       flush();
       const code = [];
       while (++i < lines.length && !/^\s*```/.test(lines[i])) code.push(lines[i]);
-      out.push(Object.assign(document.createElement('pre'), { textContent: code.join('\n') }));
+      const src = code.join('\n'), box = document.createElement('div'), btn = Object.assign(document.createElement('button'), { textContent: 'Copy', type: 'button' });
+      const status = document.createElement('span'); // the label is covered by aria-label, so the result is announced here
+      let timer;
+      const show = (label) => { btn.textContent = status.textContent = label; clearTimeout(timer); timer = setTimeout(() => { btn.textContent = 'Copy'; status.textContent = ''; }, 1500); };
+      status.setAttribute('role', 'status');
+      btn.setAttribute('aria-label', 'Copy code');
+      btn.onclick = async () => { try { await navigator.clipboard.writeText(src); show('Copied'); } catch { show('Failed'); } }; // no clipboard (insecure context) throws too
+      box.className = 'codeblock';
+      box.append(Object.assign(document.createElement('pre'), { textContent: src }), btn, status);
+      out.push(box);
     } else if (/^\s*\|.*\|\s*$/.test(l) && /^\s*\|?(\s*:?-+:?\s*\|)+\s*:?-*:?\s*$/.test(lines[i + 1] ?? '')) {
       flush();
       const table = document.createElement('table');
