@@ -68,7 +68,7 @@ npm install
 npm start          # server in the foreground on http://127.0.0.1:7777
 npm run check      # tsc type check
 npm test           # node:test, today only the git safety of the notes folder and agent worktrees
-npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 with a throwaway data dir
+npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 (override: `E2E_PORT=7810 npm run e2e`, so parallel runs and worktrees do not clash) with a throwaway data dir
 ```
 
 The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then imports `query()` from that module instead of the SDK, so agent sessions cost nothing and need no network. The fake treats each incoming message as a script, one command per line; other lines (board notes, reports) are ignored. The fake trims each line, so an indented line of an intercom message still runs as a command: the intercom indentation tests do not show that indented text is inert, the real model just sees it as part of one message:

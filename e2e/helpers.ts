@@ -2,9 +2,9 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { appendFileSync, mkdtempSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { DATA_HOME } from '../playwright.config.ts';
+import { DATA_HOME, ORIGIN } from '../playwright.config.ts';
 
-export { expect, type Page };
+export { expect, ORIGIN, type Page };
 export const DATA = join(DATA_HOME, 'jarvis');
 
 // Every test fails on an uncaught page error or a console error.
@@ -25,7 +25,7 @@ export const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), `jarvis-e2e-${
 
 // Origin and content-type are required by the server on POST.
 export const post = (page: Page, path: string, data: object) =>
-  page.request.post(path, { headers: { origin: 'http://127.0.0.1:7798' }, data });
+  page.request.post(path, { headers: { origin: ORIGIN }, data });
 
 // Persisted events of a workspace, oldest first.
 export const events = (ws: string): any[] => readFileSync(join(DATA, 'workspaces', ws, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));

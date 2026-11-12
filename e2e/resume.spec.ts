@@ -2,10 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { PORT as MAIN_PORT } from '../playwright.config.ts';
 import { test, expect, open, uniq, tmp } from './helpers.ts';
 
 // A restart needs a server of its own: the shared one must keep running for the other specs.
-const PORT = 7796;
+const PORT = MAIN_PORT + 1000;
 const URL = `http://127.0.0.1:${PORT}`;
 const data = tmp('resume');
 let server: ChildProcess | undefined;

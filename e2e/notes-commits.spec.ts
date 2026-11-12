@@ -2,7 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect, uniq, tmp, say, events, DATA } from './helpers.ts';
+import { test, expect, uniq, tmp, say, events, DATA, ORIGIN } from './helpers.ts';
 
 // Two workspaces share one notes folder; each turn of an arbiter should end in one commit with only its own files.
 test.describe.configure({ mode: 'serial' });
@@ -28,7 +28,7 @@ async function turn(page: import('@playwright/test').Page, w: typeof a, ...lines
 
 test.beforeAll(async ({ request }) => {
   for (const w of [a, b]) {
-    const r = await request.post('/workspaces', { headers: { origin: 'http://127.0.0.1:7798' }, data: { name: w.name, notes } });
+    const r = await request.post('/workspaces', { headers: { origin: ORIGIN }, data: { name: w.name, notes } });
     expect(r.ok()).toBe(true);
     w.id = (await r.json()).id;
   }

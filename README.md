@@ -23,7 +23,7 @@ jarvis            # starts the server in the background and opens http://127.0.0
 
 Also: `jarvis stop|restart|status|logs`. Foreground: `npm start`.
 
-Browser tests: `npm run e2e` (Playwright, starts its own server on port 7798 with a throwaway data dir and a scripted fake of the Agent SDK, so no API calls; needs chromium, `npx playwright install chromium`).
+Browser tests: `npm run e2e` (Playwright, starts its own server on port 7798, or `E2E_PORT` to run several at once, e.g. `E2E_PORT=7810 npm run e2e`, with a throwaway data dir and a scripted fake of the Agent SDK, so no API calls; needs chromium, `npx playwright install chromium`).
 
 First goal:
 

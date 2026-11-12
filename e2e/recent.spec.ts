@@ -2,7 +2,7 @@ import { test, expect, type Page } from '@playwright/test';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { DATA_HOME } from '../playwright.config.ts';
+import { DATA_HOME, ORIGIN } from '../playwright.config.ts';
 
 // Tests share one server and build on each other: run in order.
 test.describe.configure({ mode: 'serial' });
@@ -13,7 +13,7 @@ const [p1, p2, p3, n1, n2] = ['p1', 'p2', 'p3', 'n1', 'n2'].map(dir);
 
 // Origin and content-type are required by the server on POST.
 const create = async (page: Page, name: string, project: string, notes: string) => {
-  const r = await page.request.post('/workspaces', { headers: { origin: 'http://127.0.0.1:7798' }, data: { name, project, notes } });
+  const r = await page.request.post('/workspaces', { headers: { origin: ORIGIN }, data: { name, project, notes } });
   expect(r.ok()).toBe(true);
   await page.waitForTimeout(5); // distinct timestamps keep the order deterministic
 };
