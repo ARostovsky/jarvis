@@ -72,6 +72,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 ### Big teams
 
+- Every agent ends its report with a `VERDICT: verified`, `partial` or `failed` line; Jarvis routes on it. A small task goes straight to one agent, a large or unclear goal gets a planner agent first.
 - A lead folds its helpers into a `+N` badge while none of them works.
 - Jarvis hides agents that were idle over 10 minutes once it has more than 8. Right-click Jarvis for **Hide idle agents** or **Show all agents**.
 
