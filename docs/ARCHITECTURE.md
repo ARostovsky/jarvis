@@ -42,8 +42,8 @@ flowchart LR
 
 | Path | What it is |
 |------|------------|
-| `src/agents.ts` | All domain logic: agents, SDK sessions, MCP tools, board, events, persistence, worktrees, workspaces, archive. About 650 lines. |
-| `src/server.ts` | HTTP server: serves the page, SSE stream, JSON command table. About 80 lines. |
+| `src/agents.ts` | All domain logic: agents, SDK sessions, MCP tools, board, events, persistence, worktrees, workspaces, archive. Over a thousand lines. |
+| `src/server.ts` | HTTP server: serves the page, SSE stream, JSON command table. Under a hundred lines. |
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
 | `e2e/` | Playwright specs, `helpers.ts` and `fake-sdk.ts`, the scripted stand-in for the SDK (see [Running and checking](#running-and-checking)). |
@@ -67,7 +67,7 @@ Inside `src/agents.ts`, top to bottom:
 npm install
 npm start          # server in the foreground on http://127.0.0.1:7777
 npm run check      # tsc type check
-npm test           # node:test, today only the git safety of the notes folder and agent worktrees
+npm test           # node:test, unit tests in test/ (no SDK, no network)
 npm run e2e        # Playwright browser tests in e2e/, own server on port 7798 (override: `E2E_PORT=7810 npm run e2e`, so parallel runs and worktrees do not clash) with a throwaway data dir
 ```
 
@@ -91,7 +91,7 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
 | `/compact` (the whole message) | a `compact_boundary`, then an empty success result. Every other turn adds 30k tokens of context; `getContextUsage` reports the pre-compact size for `summary` (as the real SDK, which reads the last response's usage) and the compacted size for `full` |
 
-Messages come in the real order (system init, per tool an assistant tool_use, the tool runs, a user tool_result, then the result). MCP tools are called on the `jarvis` server from `options.mcpServers` through an `@modelcontextprotocol/sdk` client over an in-memory transport, so their input validation runs as in the real SDK. The fake is typed against the SDK (`typeof query`, `SDKMessage`) and `npm run check` covers `e2e/`, so a change in the SDK's message shapes fails the type check. The fake keeps no conversation: a resumed session only gets `resume` set. A spec that restarts the server (`e2e/resume.spec.ts`) starts its own on port 7796 with its own data dir and kills it after the test, so the shared server is never touched.
+Messages come in the real order (system init, per tool an assistant tool_use, the tool runs, a user tool_result, then the result). MCP tools are called on the `jarvis` server from `options.mcpServers` through an `@modelcontextprotocol/sdk` client over an in-memory transport, so their input validation runs as in the real SDK. The fake is typed against the SDK (`typeof query`, `SDKMessage`) and `npm run check` covers `e2e/`, so a change in the SDK's message shapes fails the type check. The fake keeps no conversation: a resumed session only gets `resume` set. A spec that restarts the server (`e2e/resume.spec.ts`) starts its own on port `PORT + 1000` (8798 with the default e2e port) with its own data dir and kills it after the test, so the shared server is never touched.
 
 Requirements: Node 24+ (runs TypeScript by type stripping, so only erasable syntax is allowed: no `enum`, no `namespace`, no parameter properties; `tsconfig.json` enforces this with `erasableSyntaxOnly`). Git is needed for worktrees.
 
@@ -120,6 +120,7 @@ type Agent = {
   runtimeModel?: string; // what the SDK session reports, e.g. claude-opus-5-5
   repo?: string;         // set when cwd is a git worktree of this repo
   sessionId?: string;    // SDK session id, used for resume
+  context?: { tokens: number; max: number }; // context window use after the last turn
 };
 ```
 
@@ -190,6 +191,7 @@ Everything visible goes through `emit(type, data)` in `createWorkspace`. The UI 
 |------|---------|-----------|
 | `spawned` | `{agent}` | yes |
 | `removed` | `{agentId}` | yes |
+| `removed_cost` | `{usd}` spend of a turn that ended after its agent was deleted | yes |
 | `status` | `{agentId, status}` | yes |
 | `text` | `{agentId, text}` | yes |
 | `delta` | `{agentId, text}` streamed text | no |
@@ -387,5 +389,5 @@ Search the code for `shortcut:` for the current list. At the time of writing:
 - A non-git repo is used in place, without isolation.
 - `a.repo` is trusted as the repo the server chose, but `spawn_agent` takes any `repo` path, so an agent can name a folder whose `.git` it controls (its own worktree, say, or a sub-agent of a plain-dir agent defaults to that dir); `git worktree add` and `wtGit()` would then read that repo. Restricting `repo` to the project and the parents' repos would close it.
 - The whole event log of a workspace is kept in memory and replayed to each UI client; it should be rotated once it grows past a few MB.
-- Unit tests cover only the git safety of the notes folder and agent worktrees (`npm test`). The e2e tests drive the UI and agent sessions on the fake SDK, permission prompts, resume after a restart, `/compact`, streaming and error results included, but the fake follows the SDK's types and documented behavior, not recorded traffic: when the real SDK calls `canUseTool` in `auto` mode, the exact messages around a compaction, the timing of deltas and what a resumed session remembers are not checked. Recording a real session and replaying it in the fake would close that.
+- Unit tests (`npm test`, `test/*.test.ts`) cover the git safety of the notes folder and agent worktrees (`notes`, `worktree`, `nested-repo`) and workspace logic: cost summary after restore (`cost`), intercom mail (`intercom`), journal slugs (`slug`), workspace order (`reorder`), recent folders (`recent`), the lead's model and effort cap (`clamp`), an empty registry (`empty`). The e2e tests drive the UI and agent sessions on the fake SDK, permission prompts, resume after a restart, `/compact`, streaming and error results included, but the fake follows the SDK's types and documented behavior, not recorded traffic: when the real SDK calls `canUseTool` in `auto` mode, the exact messages around a compaction, the timing of deltas and what a resumed session remembers are not checked. Recording a real session and replaying it in the fake would close that.
 - The launcher opens the browser with `xdg-open` (Linux) or `open` (macOS); on other systems open the URL by hand.
