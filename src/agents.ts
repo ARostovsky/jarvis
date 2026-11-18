@@ -22,6 +22,7 @@ export type Agent = {
   lastText: string;
   costUsd: number;
   parentId?: string; // undefined only for the arbiter
+  lead?: boolean; // the arbiter opted in: this agent has spawn_agent and may coordinate sub-agents
   model?: string; // alias (haiku | sonnet | opus); unset = model from settings
   effort?: EffortLevel; // unset = the default for its role
   runtimeModel?: string; // the model the SDK session actually reports, e.g. claude-opus-5-5[1m]
@@ -92,7 +93,8 @@ function readLog(file: string): { line: string; e: any }[] {
 // repoAt maps the worktrees of the agents spawned so far, deleted ones included, to their repo.
 // shortcut: exact path match, so symlinked paths and agent worktrees of other workspaces are not resolved; compare realpaths or ask git if that bites.
 function spawned(e: any, repoAt: Map<string, string>): Agent {
-  const a: Agent = { ...e.agent, repo: repoAt.get(e.agent.repo) ?? e.agent.repo };
+  // Logs from before `lead` existed: every agent below the arbiter had team tools then, so they stay leads.
+  const a: Agent = { ...e.agent, repo: repoAt.get(e.agent.repo) ?? e.agent.repo, lead: e.agent.lead ?? !!e.agent.parentId };
   if (a.repo) repoAt.set(a.cwd, a.repo);
   return a;
 }
@@ -467,7 +469,7 @@ Pick each agent's model by difficulty with spawn_agent's model parameter: the ch
 Split a large review into one reviewer per diff area instead of one reviewer reading everything.
 Every tool call re-reads your whole context, so long sessions get expensive. When the goal is done, or your context is large, tell the user to start a fresh workspace and put what it needs (state, decisions, open items) into your last summary.
 When an agent reports "[agent <id> context ...]" or "[agent <id> cost ...]", it passed a size or cost limit: restart it with a short summary of its state and the remaining work (spawn a new agent or compact it), instead of letting it continue.
-Agents you spawn can spawn their own sub-agents. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent per area and tell it to split its area into sub-agents, instead of managing every small task yourself.`;
+Agents you spawn cannot spawn sub-agents unless you pass lead=true. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent (lead=true) per area and tell it to split its area into sub-agents, instead of managing every small task yourself. Small or read-only tasks go to a plain agent without lead.`;
 
 const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the same repository on their own branches, starting from your current files, uncommitted changes included. Commit your own changes before you merge a sub-agent's branch. If your task says to coordinate, or splits into independent parts that can run in parallel, spawn sub-agents and integrate their results. You coordinate: do not read or write code yourself, give every piece of reading and writing to a sub-agent and keep your own context small (your context is re-read on every call). Always delegate with spawn_agent, never with the built-in Agent tool. Pick sub-agent models by difficulty: haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning or reviews, never for code that mirrors an existing pattern or module. Default effort is medium (low for mechanical work), never above medium unless unavoidable. Never pick a higher model or effort than your own unless your task says so; spawn_agent lowers such requests and reports what it applied. When a sub-agent finishes you get a message starting with "[agent <id> finished". Roll your sub-agents' verdicts up into your own VERDICT line.`;
 
@@ -524,6 +526,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return a;
   }
   const working = (a: Agent) => a.status === 'running' || a.status === 'waiting';
+  // In memory only: after a restart the deferred report is lost (statuses reset to idle).
+  const held = new Set<string>(); // parents whose turn ended while sub-agents still work: kept running, report to their parent deferred
+  const pending = new Map<string, string[]>(); // child results waiting for the last sibling, delivered to the held parent in one message
+  const cap = (a: Agent, text: string) => text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
   const depth = (a: Agent): number => (a.parentId ? 1 + depth(agents.get(a.parentId)!) : 0);
   const children = (id: string) => [...agents.values()].filter((c) => c.parentId === id);
 
@@ -621,6 +627,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
         clearTimeout(s.timer);
         s.timer = undefined; // a message during the interrupt window keeps the session: its turn runs after the interrupted one
         setStatus(a, 'running');
+        held.delete(a.id);
+        const queued = pending.get(a.id); // results of finished children go into this turn, not a later wake
+        if (queued) (pending.delete(a.id), text = [...queued, text].join('\n\n'));
         box.push(text);
       },
       abort,
@@ -691,7 +700,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
             continue;
           }
           const text = m.subtype === 'success' ? m.result : `error: ${m.subtype}`;
-          if (!interrupted) setStatus(a, m.subtype === 'success' ? 'idle' : 'error'); // an interrupted turn is neither done nor failed: status is stopped, or running when a message is queued
+          const waitsForChildren = !!a.parentId && !interrupted && m.subtype === 'success' && children(a.id).some(working); // the arbiter is never held: urgent mail, /compact and the running count need its real status
+          if (waitsForChildren) held.add(a.id); // stays running: a child's result starts its next turn
+          else if (!interrupted) setStatus(a, m.subtype === 'success' ? 'idle' : 'error'); // an interrupted turn is neither done nor failed: status is stopped, or running when a message is queued
           emit('result', { agentId: a.id, text, costUsd: a.costUsd });
           if (a.parentId && !budgetAlerted && a.costUsd > BUDGET_ALERT_USD) {
             budgetAlerted = true;
@@ -701,9 +712,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           bash.clear();
           if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.id, meta.name);
           // Cap what lands in the parent's context; the full text stays available via read_agent.
-          const brief = text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [truncated, ${text.length} chars total: read_agent("${a.id}") for all]` : text;
+          const brief = cap(a, text);
           const compacted = compacting.delete(a.id);
-          if (a.parentId && !compacted && !interrupted) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
+          if (a.parentId && !compacted && !interrupted && !waitsForChildren) report(a, `[agent ${a.id} finished, status ${a.status}]\n${brief}`);
+          if (!waitsForChildren) releaseParent(a); // no report was sent (interrupted, compacted): a held parent must not wait for this child
           // 'summary' reads the last response's usage, which after /compact is the pre-compact history: count instead.
           q.getContextUsage({ detail: compacted ? 'full' : 'summary' }).then((u) => {
             a.context = { tokens: u.totalTokens, max: u.maxTokens };
@@ -720,10 +732,25 @@ export function createWorkspace(meta: WorkspaceMeta) {
       }
     } finally {
       if (current()) {
+        held.delete(a.id); // queued results stay in `pending`: the next message to a resumed session carries them
+        releaseParent(a); // the session ended (stopped or failed): its parent must not wait for it
         sessions.delete(a.id);
         compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
       }
     }
+  }
+
+  // A child that ends without a report (stopped, failed, interrupted) must not leave its held parent running forever:
+  // deliver the results of the other children, or finish the parent's own turn.
+  function releaseParent(child: Agent) {
+    const p = child.parentId ? agents.get(child.parentId) : undefined;
+    if (!p || !held.has(p.id) || children(p.id).some(working)) return;
+    held.delete(p.id);
+    const results = pending.get(p.id);
+    pending.delete(p.id);
+    if (results?.length) return deliver(p, results.join('\n\n'));
+    setStatus(p, 'idle');
+    if (p.parentId) report(p, `[agent ${p.id} finished, status idle]\n${cap(p, p.lastText)}`);
   }
 
   function report(a: Agent, text: string) {
@@ -733,7 +760,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (!to) return void console.warn(`report of ${a.id} dropped: no ancestor has a workdir`);
     if (to.status === 'stopped') return;
     emit('routed', { from: a.id, to: to.id, text });
-    deliver(to, text);
+    // A held parent waits for its other children, so their results arrive together in one turn.
+    if (held.has(to.id) && children(to.id).some((c) => c.id !== a.id && working(c))) return void pending.set(to.id, [...(pending.get(to.id) ?? []), text]);
+    const queued = pending.get(to.id);
+    pending.delete(to.id);
+    deliver(to, queued ? [...queued, text].join('\n\n') : text);
   }
 
   const unread = (a: Agent) =>
@@ -802,7 +833,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return true;
   }
 
-  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL, effort?: EffortLevel): Agent {
+  function spawnAgent(name: string, task: string, repo?: string, parentId = ARBITER, model = DEFAULT_AGENT_MODEL, effort?: EffortLevel, lead?: boolean): Agent {
     const parent = agent(parentId);
     if (depth(parent) >= MAX_DEPTH) throw new Error(`max depth ${MAX_DEPTH} reached`);
     // Time suffix keeps ids, worktree dirs and jarvis/<id> branches unique across server restarts.
@@ -816,7 +847,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const from = parent.repo && (at === parent.repo || at === parent.cwd) ? workCommit(parent) : undefined;
     const wd = makeWorkdir(id, base, from, owner?.repo);
     if (parentId !== ARBITER) ({ model, effort } = clampSpawn(parent, model, effort));
-    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort };
+    const a: Agent = { id, name, task, ...wd, status: 'idle', lastText: '', costUsd: 0, parentId, model, effort, lead: !!lead };
     agents.set(id, a);
     emit('spawned', { agent: a });
     emit('routed', { from: parentId, to: id, text: task });
@@ -904,8 +935,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   function stopAgent(id: string) {
     const a = agent(id);
-    const wasWorking = working(a);
+    const wasWorking = working(a) && !held.has(id); // a held parent has no turn to interrupt
+    held.delete(id);
+    pending.delete(id);
     setStatus(a, 'stopped');
+    releaseParent(a);
     const s = sessions.get(id);
     let asked = false;
     // Its permission prompts die with the session.
@@ -991,9 +1025,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           task: z.string().describe('full self-contained instructions; the agent sees nothing else'),
           repo: z.string().optional().describe('absolute path to the repository to work on'),
           model: z.enum(MODELS).optional().describe(`model for this agent, default ${DEFAULT_AGENT_MODEL}. haiku: trivial or mechanical work (lookups, renames, formatting, simple shell). sonnet: regular coding, tests, refactors. opus: hard reasoning or reviews (architecture, hard debugging, ambiguous problems), never code that mirrors an existing pattern or module. A lead that coordinates sub-agents is sonnet unless the coordination itself is hard reasoning. A lead cannot give a sub-agent a higher model than its own.`),
+          lead: z.boolean().optional().describe('default false: the agent has no spawn_agent and works alone. true only for a large multi-part area that the agent should split into sub-agents.'),
           effort: z.enum(EFFORTS).optional().describe(`reasoning effort, default ${DEFAULT_EFFORT.agent}. low for mechanical work, never above medium unless unavoidable. A lead's sub-agents are capped at medium (and at the lead's own effort); the result shows what was applied.`),
-        }, async ({ name, task, repo, model, effort }) => {
-          const a = spawnAgent(name, task, repo, owner, model, effort);
+        }, async ({ name, task, repo, model, effort, lead }) => {
+          const a = spawnAgent(name, task, repo, owner, model, effort, lead);
           return ok({ id: a.id, cwd: a.cwd, model: a.model, effort: a.effort ?? DEFAULT_EFFORT.agent, ...(a.model !== (model ?? DEFAULT_AGENT_MODEL) || a.effort !== (effort ?? DEFAULT_EFFORT.agent) ? { note: 'model or effort lowered to your own level, max medium effort' } : {}) });
         }),
         tool('send_to_agent', 'Send a follow-up message or context to an existing agent. A stopped agent is resumed with its previous conversation.', {
@@ -1009,7 +1044,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   function agentOptions(a: Agent): Options {
-    const team = a.id === ARBITER || depth(a) < MAX_DEPTH;
+    const team = a.id === ARBITER || (!!a.lead && depth(a) < MAX_DEPTH);
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
       ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${journalKey(meta)}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`

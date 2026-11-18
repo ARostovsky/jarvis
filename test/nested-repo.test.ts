@@ -25,6 +25,7 @@ git(repo, 'add', 'f');
 git(repo, 'commit', '-qm', 'init');
 
 const wt = (id: string) => join(data, 'worktrees', id);
+// No `lead` field, as in logs from before it existed: resume must keep these agents' spawn_agent (spawnVia below relies on it).
 const spawned = (id: string, repo: string) => JSON.stringify({ type: 'spawned', agent: { id, name: id, task: '', cwd: wt(id), repo, status: 'idle', lastText: '', costUsd: 0, parentId: 'arbiter' } });
 // A lead with a commit of its own on its branch, as makeWorkdir() makes it.
 const lead = (id: string, from = repo) => {

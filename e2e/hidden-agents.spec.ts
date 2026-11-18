@@ -69,7 +69,7 @@ test('a hand-set expand of a lead survives a workspace switch', async ({ page })
   await createWs(page, b);
   await open(page, a);
   const leadTask = `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'child', task: 'say child done' })}\nsay lead done`;
-  await say(page, id, `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'lead', task: leadTask })}`);
+  await say(page, id, `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'lead', task: leadTask, lead: true })}`);
   const lead = page.locator('#nodes .node', { hasText: 'lead' }), child = page.locator('#nodes .node', { hasText: 'child' });
   const spawnedChild = () => events(id).find((e) => e.type === 'spawned' && e.agent.name === 'child')?.agent.id;
   await expect.poll(spawnedChild).toBeTruthy();

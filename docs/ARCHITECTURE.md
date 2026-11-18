@@ -21,7 +21,7 @@ This file is for people (and their coding agents) who want to change Jarvis. The
 
 ## Design in one paragraph
 
-A Node process (`src/server.ts`) hosts one or more **workspaces**. Each workspace has an **arbiter** (shown to the user as **Jarvis**; the id stays `arbiter` in events, `parentId` and the `workspaces/<ws>/arbiter` folder, so old logs keep working): a Claude Agent SDK session whose only job is to plan and delegate. It gets MCP tools to spawn other SDK sessions (**agents**), message them, read their output and stop them. Agents can spawn their own **sub-agents** (max depth 2). Every agent runs in its own git worktree on branch `jarvis/<id>`. Every change of state becomes an **event** on an in-process `EventEmitter`. Events are appended to `events.jsonl` and streamed to the browser over SSE. The browser (`public/index.html`, one file, no build) draws the agents as a graph and sends commands back as JSON POSTs. On restart the server replays `events.jsonl` to rebuild everything, and SDK sessions resume by session id.
+A Node process (`src/server.ts`) hosts one or more **workspaces**. Each workspace has an **arbiter** (shown to the user as **Jarvis**; the id stays `arbiter` in events, `parentId` and the `workspaces/<ws>/arbiter` folder, so old logs keep working): a Claude Agent SDK session whose only job is to plan and delegate. It gets MCP tools to spawn other SDK sessions (**agents**), message them, read their output and stop them. An agent can spawn its own **sub-agents** (max depth 2) only when the arbiter spawned it with `lead: true`. Every agent runs in its own git worktree on branch `jarvis/<id>`. Every change of state becomes an **event** on an in-process `EventEmitter`. Events are appended to `events.jsonl` and streamed to the browser over SSE. The browser (`public/index.html`, one file, no build) draws the agents as a graph and sends commands back as JSON POSTs. On restart the server replays `events.jsonl` to rebuild everything, and SDK sessions resume by session id.
 
 ```mermaid
 flowchart LR
@@ -115,6 +115,7 @@ type Agent = {
   lastText: string;      // last assistant text block, used by read_agent
   costUsd: number;       // cumulative across sessions and restarts
   parentId?: string;     // undefined only for the arbiter
+  lead?: boolean;        // the arbiter spawned it with lead=true: it has team tools. Logs without the field count as true
   model?: string;        // haiku | sonnet | opus; unset = agent default (arbiter: JARVIS_ARBITER_MODEL)
   effort?: EffortLevel;  // low..max; unset = role default
   runtimeModel?: string; // what the SDK session reports, e.g. claude-opus-5-5
@@ -137,7 +138,7 @@ type Agent = {
 | `assistant` text block | `text` |
 | `assistant` tool_use block | `tool` |
 | `system/compact_boundary` | `compacted` |
-| `result` | `status`, `result` (with cumulative cost), then a capped report `routed` to the parent (skipped for a `/compact` turn), then `context` from `q.getContextUsage()` |
+| `result` | `status`, `result` (with cumulative cost), then a capped report `routed` to the parent (skipped for a `/compact` turn, and deferred while the agent has working sub-agents, see Roles and tools), then `context` from `q.getContextUsage()` |
 
 SDK options per session: `cwd`, `settingSources: ['project', 'local']`, `settings` (only `apiKeyHelper`, `env`, `model`, `attribution`, `includeCoAuthoredBy` from `~/.claude/settings.json`), `plugins` (only `JARVIS_PLUGINS`), `permissionMode` (default `auto`), `canUseTool` (turns undecided calls into UI `ask` cards), `resume: sessionId`, plus `agentOptions(a)` for MCP servers, allowed tools and the system prompt append. MCP servers: `jarvis` (below) and, unless `JARVIS_PLAYWRIGHT=0`, `playwright` (`npx @playwright/mcp@latest --isolated --headless`, without `--headless` when `JARVIS_PLAYWRIGHT=headed`, one browser per session, all its tools allowed, output in `workspaces/<ws>/playwright/<agent>/`).
 
@@ -151,9 +152,12 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 |------|-------|-------|----------------------|
 | Arbiter | 0 | board + team, over all agents, + intercom | `ARBITER_PROMPT` (+ project hint, + notes paragraph) |
 | Lead agent | 1 | board + team, only over its own children | `LEAD_PROMPT` + `BOARD_PROMPT` (+ notes line) |
+| Plain agent | 1 | board only (spawned without `lead`, the default) | `BOARD_PROMPT` (+ notes line) |
 | Sub-agent | 2 | board only | `BOARD_PROMPT` (+ notes line) |
 
-Team tools: `spawn_agent {name, task, repo?, model?, effort?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`. Arbiter only: `list_workspaces`, `tell_workspace {to, text, urgent?}` (see Intercom).
+Team tools: `spawn_agent {name, task, repo?, model?, effort?, lead?}`, `send_to_agent {id, message}`, `list_agents`, `read_agent {id}`, `stop_agent {id}`. Board tools: `board_post {to, text}`, `board_read`. Arbiter only: `list_workspaces`, `tell_workspace {to, text, urgent?}` (see Intercom).
+
+`lead` (default false, stored as `Agent.lead`) decides who gets team tools and the `LEAD_PROMPT` sentence about sub-agents: the arbiter always, other agents only with `lead: true` (and below `MAX_DEPTH`). A plain agent has no `spawn_agent` and no sub-agent text, which stops small tasks from growing unrequested sub-agents. Parent reports are deferred: when a turn of a non-arbiter agent ends while any of its sub-agents is `running` or `waiting`, `pump()` keeps its status `running` (it is in the `held` set), sends no `[agent <id> finished ...]` to its parent and waits. Child reports to a held parent are queued in `pending` and delivered together, in one wake (`deliver()` → `push()` clears `held`), when the last sibling is done; the report goes out after the turn that follows. A child that ends without a report (stopped, deleted, failed session, interrupted, compacted) calls `releaseParent()`, which delivers the queued results or, with none, sets the held parent idle and reports it (its `lastText`, capped). Stopping the held parent clears its entry without interrupting (it has no turn) and drops its queued results. The arbiter is never held, so urgent intercom, `/compact` and the running count see its real status. A message to a held parent starts its turn at once and carries the queued results (`push()` drains `pending`); queued results also survive a crash of its session until its next message. Known limits: stopping a held parent drops its queued results; a child that is deleted while its parent is held releases it only through `stopAgent()`. `held` and `pending` are in memory only: after a restart statuses reset to idle and a deferred report is lost.
 
 Roles with team tools (arbiter and leads) get `disallowedTools: ['Agent', 'Task']`: the built-in Claude Code subagent would bypass `spawn_agent` and stay invisible in the graph. Sub-agents keep it, as their only way to fan out.
 
@@ -367,7 +371,7 @@ Agents take `apiKeyHelper`, `env` (for example `ANTHROPIC_BASE_URL`) and `model`
 
 ### Raise the depth limit
 
-Change `MAX_DEPTH`. Agents at `depth < MAX_DEPTH` get team tools. Watch cost: every level multiplies sessions.
+Change `MAX_DEPTH`. Agents with `lead` at `depth < MAX_DEPTH` get team tools. Watch cost: every level multiplies sessions.
 
 ### Add a UI action on an agent
 
