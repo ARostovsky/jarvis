@@ -2,7 +2,7 @@ import { query as sdkQuery, tool, createSdkMcpServer, type SDKUserMessage, type 
 import { z } from 'zod';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync, openSync, closeSync, fstatSync, ftruncateSync, constants } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync, openSync, closeSync, fstatSync, ftruncateSync, unlinkSync, constants } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
@@ -151,6 +151,51 @@ function inbox() {
       }
     },
   };
+}
+
+// The repo's main branch, or undefined when it has none of the usual names.
+const mainBranch = (repo: string) => ['main', 'master'].find((b) => hasBranch(repo, b));
+// Removes an agent's worktree and jarvis/<id> branch when that loses nothing, else returns why it was kept (undefined: removed or nothing to do).
+// Safe: every commit of the branch is on main (ancestor, or a rebase-merge that git cherry shows as all '-'; an agent that changed nothing is an ancestor too),
+// and the worktree has no uncommitted or ignored files, except an untracked node_modules (symlink: unlinked; real dir: deleted). Never --force, never -D unless cherry proved the commits are on main.
+function cleanupWorktree(a: Agent): string | undefined {
+  if (!a.repo || a.id === ARBITER) return;
+  const branch = `jarvis/${a.id}`;
+  try {
+    if (!hasBranch(a.repo, branch)) return;
+    const main = mainBranch(a.repo);
+    if (!main) return `${branch} kept: no main branch in ${a.repo}`;
+    let ancestor = true;
+    try {
+      git(a.repo, 'merge-base', '--is-ancestor', branch, main);
+    } catch {
+      ancestor = false;
+    }
+    if (!ancestor && git(a.repo, 'cherry', main, branch).split('\n').some((l) => l.startsWith('+')))
+      return `${branch} kept: it has commits that are not on ${main}`;
+    if (existsSync(a.cwd)) {
+      const at = wtGit(a);
+      const nm = join(a.cwd, 'node_modules');
+      const isNm = (p: string) => p.replace(/\/$/, '') === 'node_modules';
+      const dirty = wtChanges(a, at).split('\n').filter((l) => l && !(l.startsWith('?? ') && isNm(l.slice(3))));
+      const ignored = wtIgnored(a).filter((p) => !isNm(p));
+      if (dirty.length || ignored.length) return `${a.cwd} kept: it has uncommitted or ignored files`;
+      // An untracked node_modules (a symlink or an npm ci dir) is the only thing it may hold besides the checkout, and blocks git worktree remove.
+      if (!git(a.cwd, ...at, 'ls-files', '--', 'node_modules').trim()) {
+        const st = lstatSync(nm, { throwIfNoEntry: false });
+        if (st?.isSymbolicLink()) unlinkSync(nm); // the link only, never its target
+        else if (st) rmSync(nm, { recursive: true });
+      }
+      git(a.repo, 'worktree', 'remove', a.cwd);
+    }
+    try {
+      git(a.repo, 'branch', '-d', branch);
+    } catch {
+      git(a.repo, 'branch', '-D', branch); // -d also compares with HEAD or a rebase-merge; both proofs above passed
+    }
+  } catch (e) {
+    return `${branch} kept: ${(e as Error).message.trim()}`;
+  }
 }
 
 // Git options for an agent's worktree. The agent can replace the .git file in its cwd with its own repo, whose hooks and config would then run here,
@@ -735,6 +780,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         held.delete(a.id); // queued results stay in `pending`: the next message to a resumed session carries them
         releaseParent(a); // the session ended (stopped or failed): its parent must not wait for it
         sessions.delete(a.id);
+        if (a.status === 'stopped') tidy(a);
         compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
       }
     }
@@ -899,6 +945,12 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // In the callers, not in deliver(): report() delivers from inside a child's pump, which a throw would end.
   function needWorkdir(a: Agent) {
+    if (cleaned.delete(a.id) && !existsSync(a.cwd)) {
+      // Its worktree was freed on stop, with nothing in it that main lacks: a new one from main, so a stopped agent still resumes.
+      try {
+        git(a.repo!, 'worktree', 'add', '-b', `jarvis/${a.id}`, a.cwd, mainBranch(a.repo!)!);
+      } catch {} // the error below names the missing workdir
+    }
     if (!existsSync(a.cwd)) throw new Error(`${a.id} has no workdir (its branch or folder is gone); delete it`);
   }
 
@@ -933,6 +985,17 @@ export function createWorkspace(meta: WorkspaceMeta) {
     session(a).push('/compact');
   }
 
+  // Frees the worktree and branch of a stopped agent when that loses nothing; the reason it stayed is logged.
+  const cleaned = new Set<string>(); // agents whose worktree tidy() freed in this process
+  function tidy(a: Agent) {
+    if (parkedIgnored(a.id).length) return; // an archive parked files for a restore, which needs the branch
+    const had = existsSync(a.cwd);
+    const kept = cleanupWorktree(a);
+    if (!kept && had && !existsSync(a.cwd)) cleaned.add(a.id);
+    if (kept) console.warn(`cleanup ${a.id}: ${kept}`);
+    return kept;
+  }
+
   function stopAgent(id: string) {
     const a = agent(id);
     const wasWorking = working(a) && !held.has(id); // a held parent has no turn to interrupt
@@ -944,6 +1007,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     let asked = false;
     // Its permission prompts die with the session.
     for (const [reqId, p] of pendingAsks) if ((p.event as { agentId: string }).agentId === id) { asked = true; pendingAsks.delete(reqId); emit('answered', { reqId }); }
+    if (!s) tidy(a); // a live session still writes to the worktree: pump's end cleans up then
     if (s?.interrupting && s.timer) return; // already interrupted, its result is on the way: aborting now would lose that turn's cost
     if (s && wasWorking && !asked) {
       // Interrupt instead of abort: the turn ends with a result carrying its cost, then pump ends the session. Abort anyway if none comes.
@@ -1038,7 +1102,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         tool('list_agents', 'List agents you manage: id, status, task, cost and the start of the last message.', {}, async () =>
           ok((owner === ARBITER ? [...agents.values()] : children(owner)).map(({ lastText, ...a }) => ({ ...a, lastText: lastText.slice(0, 300) })))),
         tool('read_agent', 'Full last message of an agent.', { id: z.string() }, async ({ id }) => ok(agents.get(mine(id))?.lastText ?? 'no such agent')),
-        tool('stop_agent', 'Stop an agent session. Its worktree is kept.', { id: z.string() }, async ({ id }) => (stopAgent(mine(id)), ok('stopped'))),
+        tool('stop_agent', 'Stop an agent session. Its worktree and branch are removed when merged or empty and clean, else kept.', { id: z.string() }, async ({ id }) => (stopAgent(mine(id)), ok('stopped'))),
       ] : [])],
     });
   }
@@ -1248,6 +1312,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     answerAsk,
     sendToAgent,
     stopAgent,
+    cleanup: () => workers().map(tidy).filter((k): k is string => !!k),
     compactAgent,
     deleteAgent,
     stopAll,
@@ -1366,11 +1431,13 @@ export function archiveWorkspace(id: string, commit = false) {
   const busy = w.busy();
   if (busy.length) throw new Error(`agents are still working or waiting for you: ${busy.join(', ')}. Stop them first.`);
   w.detach(commit);
+  const kept = w.cleanup(); // never throws; the archive's parked-ignored lists are still in place here
   mkdirSync(ARCHIVE, { recursive: true });
   writeFileSync(join(w.dir, 'meta.json'), JSON.stringify({ ...w.meta, archivedAt: new Date().toISOString() }, null, 2));
   renameSync(w.dir, join(ARCHIVE, id));
   workspaces.delete(id);
   saveRegistry();
+  return { kept };
 }
 
 export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {

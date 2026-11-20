@@ -932,12 +932,12 @@ addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
 const postJson = (path, data) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
 async function wsPost(path, data) {
   const r = await postJson(path, data);
-  return { ok: r.ok, status: r.status, text: r.ok ? '' : await r.text() };
+  return { ok: r.ok, status: r.status, text: r.ok ? '' : await r.text(), json: r.ok ? await r.json().catch(() => null) : null };
 }
 
 async function archiveWs(w) {
   const v = await choose(`ARCHIVE "${w.name}"?`, '',
-    'Agents are stopped and the workspace moves to the archive. Nothing is deleted: committed work stays on jarvis/<id> branches, plain workdirs, files ignored by git (.env, node_modules) and logs move with it, and you can restore it any time.',
+    'Agents are stopped and the workspace moves to the archive. Branches already merged into main (or empty) and their clean worktrees are removed; committed work stays on the other jarvis/<id> branches, plain workdirs, files ignored by git (.env, node_modules) and logs move with it, and you can restore it any time.',
     [{ value: 'archive', label: 'ARCHIVE' }]);
   if (!v) return;
   let r = await wsPost('/workspaces/archive', { ws: w.id });
@@ -951,6 +951,7 @@ async function archiveWs(w) {
   dropDrafts(w.id);
   WS = null;
   refreshTabs();
+  if (r.json?.kept?.length) toast(`kept, not safe to remove:\n${r.json.kept.join('\n')}`);
 }
 
 async function deleteArchivedUi(a) {
