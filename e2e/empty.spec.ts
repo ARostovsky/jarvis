@@ -1,8 +1,9 @@
 // Zero workspaces shows an empty screen whose button opens the new-workspace dialog.
-import { test, expect, post, uniq } from './helpers.ts';
+import { test, expect, post, uniq, createWs } from './helpers.ts';
 
 test('empty screen shows with no workspaces and its button creates one', async ({ page }) => {
-  // The server is shared: archive every workspace that exists now.
+  // The server is shared: archive every workspace that exists now. Create one first, so the archive is never empty (run alone, nothing else exists).
+  await createWs(page, uniq('empty-seed-'));
   const { workspaces } = await (await page.request.get('/workspaces')).json();
   for (const w of workspaces) {
     await post(page, '/stopall', { ws: w.id });

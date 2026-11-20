@@ -67,7 +67,7 @@ test('a badge appearing on a tab mid-drag does not cancel the drag; the bar catc
   await page.mouse.move(dst.x + 4, dst.y + dst.height / 2, { steps: 10 });
   await expect(tab(page, a)).toHaveClass(/drop-before/);
   // an unread intercom message changes tab a's badge, so the next poll would rebuild the bar
-  expect((await say(page, sid, `tool mcp__jarvis__tell_workspace ${JSON.stringify({ to: [a], text: 'hi' })}`)).ok()).toBe(true);
+  expect((await say(page, sid, `tool mcp__jarvis__tell_workspace ${JSON.stringify({ to: [a], text: 'hi', urgent: false })}`)).ok()).toBe(true);
   await page.waitForTimeout(3500);
   await expect(tab(page, a)).toHaveClass(/drop-before/); // gone if the bar was rebuilt (the badge text would also break tab())
   await page.mouse.up();

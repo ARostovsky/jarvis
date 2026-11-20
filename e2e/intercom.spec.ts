@@ -1,7 +1,7 @@
 import { test, expect, createWs, uniq, tmp, say, events, post, open } from './helpers.ts';
 
 const tell = (to: string[], text: string, urgent?: boolean) =>
-  `tool mcp__jarvis__tell_workspace ${JSON.stringify({ to, text, ...(urgent ? { urgent } : {}) })}`;
+  `tool mcp__jarvis__tell_workspace ${JSON.stringify({ to, text, urgent: !!urgent })}`;
 const mail = (ws: string) => events(ws).filter((e) => e.type === 'intercom');
 const results = (ws: string) => events(ws).filter((e) => e.type === 'result').length;
 
