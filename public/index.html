@@ -814,7 +814,7 @@ const handlers = {
     setStatus(e.agentId, a.agent.status);
     renderTitle();
   },
-  compacted: (e) => log(e.agentId, 'result', `⇣ ${e.trigger === 'auto' ? 'auto-' : ''}compacted ${kTok(e.pre)}${e.post ? ` → ${kTok(e.post)}` : ''}`, undefined, e.at),
+  compacted: (e) => log(e.agentId, 'result', e.trigger === 'reset' ? `⇣ context reset at ${kTok(e.pre)}` : `⇣ ${e.trigger === 'auto' ? 'auto-' : ''}compacted ${kTok(e.pre)}${e.post ? ` → ${kTok(e.post)}` : ''}`, undefined, e.at),
   ask: showAsk,
   answered: (e) => document.querySelector(`[data-req="${CSS.escape(e.reqId)}"]`)?.remove(),
 };

@@ -54,5 +54,48 @@ test('success: same project, notes and arbiter setup, task reaches the new arbit
   assert.equal(old.summary().running, 1); // the old workspace's agent still runs
 });
 
+test('refuses a relative project and leaves no workspace', async () => {
+  const w = addWorkspace('rel');
+  const count = workspaces.size;
+  assert.match(await create(w, { name: 'relchild', task: 't', project: 'some/relative' }), /project must be an absolute path/);
+  assert.equal(workspaces.size, count);
+});
+
+test('at most 3 creates until the user writes again', async () => {
+  const w = addWorkspace('cap');
+  // One user message: every later message from the user would reset the count.
+  const lines = ['one', 'two', 'three', 'four'].map((n) => `tool mcp__jarvis__create_workspace ${JSON.stringify({ name: `cap ${n}`, task: 't' })}\nresult`);
+  const before = log(w.meta.id).length;
+  w.tellArbiter(lines.join('\n'));
+  await until(() => log(w.meta.id).slice(before).some((e) => e.type === 'result' && e.agentId === ARBITER));
+  const texts = log(w.meta.id).slice(before).filter((e) => e.type === 'text').map((e) => e.text as string);
+  assert.equal(texts.filter((t) => t.startsWith('created workspace')).length, 3);
+  assert.match(texts[3], /already created 3 workspaces/);
+  assert.equal([...workspaces.values()].some((x) => x.meta.name === 'cap four'), false);
+});
+
+test('refused while the turn came from another workspace, allowed again after the user writes', async () => {
+  const w = addWorkspace('outside');
+  const turn = async (from: string, name: string) => {
+    const before = log(w.meta.id).length;
+    w.sendToAgent(ARBITER, `tool mcp__jarvis__create_workspace ${JSON.stringify({ name, task: 't' })}\nresult`, from);
+    await until(() => log(w.meta.id).slice(before).some((e) => e.type === 'result' && e.agentId === ARBITER));
+    return log(w.meta.id).slice(before).filter((e) => e.type === 'text').map((e) => e.text as string).join('\n');
+  };
+  assert.match(await turn('workspace:zzz', 'outside child'), /refused while working on a message from another workspace/);
+  assert.equal([...workspaces.values()].some((x) => x.meta.name === 'outside child'), false);
+  assert.match(await turn('user', 'outside child'), /created workspace/);
+});
+
+test('an agent that is not the arbiter has no create_workspace tool', async () => {
+  const w = addWorkspace('agentcreate');
+  const count = workspaces.size;
+  const task = `tool mcp__jarvis__create_workspace ${JSON.stringify({ name: 'agentchild', task: 't' })}\nresult`;
+  w.tellArbiter(`tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'helper', task })}`);
+  await until(() => log(w.meta.id).some((e) => e.type === 'routed' && e.to === ARBITER && /finished/.test(e.text)));
+  assert.equal(workspaces.size, count);
+  assert.match(log(w.meta.id).find((e) => e.type === 'routed' && e.to === ARBITER && /finished/.test(e.text)).text, /no such tool|not found|unknown|Tool/i);
+});
+
 // The fake sessions keep the process alive: end it once the report is out (a failure keeps its exit code).
 after(() => void setTimeout(() => process.exit(process.exitCode), 300));

@@ -7,9 +7,17 @@
 //   write <path> <content>  Write tool: really writes the file (path relative to the session cwd)
 //   bash <command>          Bash tool: really runs the command in the session cwd
 //   tool <name> <json>      calls an in-process MCP tool through an MCP client, e.g. tool mcp__jarvis__notes_message {"message":"x"}
-//   echo                    says the whole message as received, board notes and intercom prefix included
+//   echo                    says the whole message as received, board notes and intercom prefix included; a message containing
+//                           "[context reset]" (the server's seed for a reset arbiter) is echoed without this line
 //   result                  says the text of the last tool command's result, error text included
 //   usage <tokens>          the later assistant messages report this many input tokens
+//   window <tokens>         the context window getContextUsage reports (default 200000)
+//   trailing                a session_state_changed idle message follows this turn's result, as the CLI sends with state events on
+//   fold                    the sends that wait now run inside this turn: one result for several sends
+//   later <ms> <script>     a turn nobody sent starts after <ms> (the SDK runs one on a background task), so a result comes without a push; it opens
+//                           with a system/status requesting message and its first stream message follows 1500 ms later
+//   savedelay <ms> [fold]   later turns that carry the server's save-notes request last <ms> (with fold, sends that arrive meanwhile run inside it)
+//   resetusage <tokens>     the turn on a reset seed starts with this many tokens; shared by all sessions of the process, 0 switches it off
 //   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
@@ -32,6 +40,10 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 type Assistant = SDKAssistantMessage['message'];
 type Usage = Assistant['usage'];
 
+// Shared by all sessions of the process: set by the commands savedelay and resetusage.
+const laterIds = new Set<string>(); // synthetic turns of `later`
+let saveDelay = { ms: 0, fold: false }, resetUsage = 0;
+
 export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   if (typeof prompt === 'string') throw new Error('fake sdk: only streaming input, as the server uses');
   const inbox = prompt;
@@ -50,7 +62,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   let interrupted = false, inTurn = false, wake = () => {};
   let woken = Promise.resolve();
   let n = 0;
-  let tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = 0;
+  let windowSize = 200_000, tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = 0;
   const base = { session_id, parent_tool_use_id: null };
   const assistant = (content: Assistant['content']): SDKAssistantMessage =>
     ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: { input_tokens: usageTokens } as Usage } });
@@ -72,8 +84,20 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     return { text: (out.content as { text?: string }[]).map((c) => c.text ?? '').join('\n'), is_error: !!out.isError };
   }
 
+  // The real SDK reads sends as they come and reports how many still wait: read the inbox eagerly to count them.
+  const waiting: SDKUserMessage[] = [];
+  let arrived = () => {}, inboxDone = false;
+  void (async () => { for await (const m of inbox) (waiting.push(m), arrived()); inboxDone = true; arrived(); })();
+  async function nextMessage() {
+    while (!waiting.length) {
+      if (inboxDone) return undefined;
+      await Promise.race([new Promise<void>((r) => (arrived = r)), aborted]);
+    }
+    return waiting.shift();
+  }
+
   const end = (text: string): SDKResultMessage =>
-    ({ ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', total_cost_usd: costUsd, is_error: false, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] });
+    ({ ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: 'end_turn', total_cost_usd: costUsd, is_error: false, queued_turn_count: waiting.length, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] });
 
   async function* compact(): AsyncGenerator<SDKMessage> {
     const pre = tokens;
@@ -86,6 +110,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     const texts: string[] = [];
     let pace = 0;
     let last = ''; // result of the last `tool` command
+    let trailing = false;
     const sleep = (ms: number) => Promise.race([new Promise((r) => setTimeout(r, ms)), woken, aborted]);
     async function* say(text: string): AsyncGenerator<SDKMessage> {
       texts.push(text);
@@ -102,7 +127,12 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     }
     yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'init', cwd, model: 'claude-fake', tools: [], mcp_servers: [], permissionMode: options.permissionMode ?? 'default', apiKeySource: 'none', claude_code_version: 'fake', slash_commands: [], output_style: 'default', skills: [], plugins: [] };
     if (script.trim() === '/compact') return yield* compact();
-    for (const line of script.split('\n')) {
+    const seed = script.includes('[context reset]');
+    const lines = seed ? ['echo'] : script.split('\n');
+    if (seed && resetUsage) usageTokens = resetUsage;
+    if (saveDelay.ms && script.includes('The server resets your context after this turn')) lines.unshift(`sleep ${saveDelay.ms}`, ...(saveDelay.fold ? ['fold'] : []));
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
       if (interrupted) await new Promise((r) => setTimeout(r, interruptDelay));
       if (interrupted) return interrupted = false, yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'error_during_execution', errors: [], stop_reason: null, total_cost_usd: costUsd, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
       const [, cmd, rest = ''] = /^(\w+)\s*(.*)$/.exec(line.trim()) ?? [];
@@ -119,6 +149,25 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         return yield { ...base, uuid: randomUUID(), type: 'result', subtype, errors: [`fake ${rest}`], stop_reason: null, total_cost_usd: 0, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
       } else if (cmd === 'usage') {
         usageTokens = Number(rest);
+      } else if (cmd === 'trailing') {
+        trailing = true;
+      } else if (cmd === 'fold') {
+        for (const w of waiting.splice(0)) lines.push(...(typeof w.message.content === 'string' ? w.message.content : '').split('\n'));
+      } else if (cmd === 'later') {
+        const [, ms, text = ''] = /^(\d+)\s+(.*)$/.exec(rest) ?? [];
+        setTimeout(() => {
+          const uuid = randomUUID();
+          laterIds.add(uuid);
+          waiting.push({ ...base, uuid, type: 'user', message: { role: 'user', content: text.replace(/\\n/g, '\n') } });
+          arrived();
+        }, Number(ms));
+      } else if (cmd === 'savedelay') {
+        const [ms, fold] = rest.split(/\s+/);
+        saveDelay = { ms: Number(ms), fold: fold === 'fold' };
+      } else if (cmd === 'resetusage') {
+        resetUsage = Number(rest);
+      } else if (cmd === 'window') {
+        windowSize = Number(rest);
       } else if (cmd === 'cost') {
         costUsd = Number(rest);
       } else if (cmd === 'slowinterrupt') {
@@ -167,22 +216,28 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     }
     lastUsage = tokens += 30_000;
     yield end(texts.join('\n'));
+    if (trailing) yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'session_state_changed', state: 'idle' };
   }
 
   async function* run(): AsyncGenerator<SDKMessage, void> {
-    const input = inbox[Symbol.asyncIterator]();
     for (;;) {
-      const next = await Promise.race([input.next(), aborted]);
-      if (next.done) return;
-      const c = next.value.message.content;
+      const next = await nextMessage();
+      if (!next) return;
+      const c = next.message.content;
       interrupted = false, inTurn = true, woken = new Promise<void>((res) => (wake = res));
-      try { yield* turn(typeof c === 'string' ? c : c.map((b) => (b.type === 'text' ? b.text : '')).join('\n')); } finally { inTurn = false; }
+      try {
+        if (next.uuid && laterIds.has(next.uuid)) { // like the real SDK: a status message first, then the model's first output a while later
+          yield { ...base, uuid: randomUUID(), type: 'system', subtype: 'status', status: 'requesting' };
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        yield* turn(typeof c === 'string' ? c : c.map((b) => (b.type === 'text' ? b.text : '')).join('\n'));
+      } finally { inTurn = false; }
     }
   }
 
   // Only what the server calls; the cast stands in for the many other control methods of a real Query.
   const q: Pick<Query, 'getContextUsage' | 'interrupt' | 'setModel' | 'applyFlagSettings'> & AsyncGenerator<SDKMessage, void> = Object.assign(run(), {
-    getContextUsage: async (o?: { detail?: 'summary' | 'full' }) => ({ totalTokens: o?.detail === 'full' ? tokens : lastUsage, maxTokens: 200_000 }) as Awaited<ReturnType<Query['getContextUsage']>>,
+    getContextUsage: async (o?: { detail?: 'summary' | 'full' }) => ({ totalTokens: o?.detail === 'full' ? tokens : lastUsage, maxTokens: windowSize }) as Awaited<ReturnType<Query['getContextUsage']>>,
     interrupt: async () => void (inTurn && ((interrupted = true), wake())),
     setModel: async () => {},
     applyFlagSettings: async () => {},
