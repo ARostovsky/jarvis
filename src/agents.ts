@@ -494,7 +494,7 @@ const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v 
 
 const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`);
 const NOTES_TOOLS = ['notes_message'].map((t) => `mcp__jarvis__${t}`);
-const INTERCOM_TOOLS = ['list_workspaces', 'tell_workspace'].map((t) => `mcp__jarvis__${t}`);
+const INTERCOM_TOOLS = ['list_workspaces', 'tell_workspace', 'create_workspace'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
 // Soft alerts to an agent's parent, once per session each; nothing is stopped. Context counts input + cache creation + cache reads of one
@@ -1045,6 +1045,20 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return { ids: [...hits].map((w) => w.meta.id), downgraded, errors, notWoken };
   }
 
+  // A new workspace for a separate task: same project (unless given), notes folder and arbiter setup. This one is not touched.
+  function createWorkspaceFor(name: string, task: string, project?: string) {
+    name = name.trim();
+    if (!name) throw new Error('name is empty');
+    if (!task.trim()) throw new Error('task is empty');
+    if (task.length > MAIL_CAP) throw new Error(`task is ${task.length} chars, limit is ${MAIL_CAP}: shorten it or put the details in a notes file and give its path`);
+    const same = [...workspaces.values()].find((w) => w.meta.name.toLowerCase() === name.toLowerCase());
+    if (same) throw new Error(`a workspace named "${same.meta.name}" exists (${same.meta.id}): pick another name`);
+    const { model, effort } = agent(ARBITER);
+    const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes);
+    next.sendToAgent(ARBITER, `[task from workspace "${meta.name}" (${meta.id})]\nThis comes from the Jarvis of another workspace, not from the user.\n\n${task}`, `workspace:${meta.id}`);
+    return next.meta;
+  }
+
   const boardTools = (owner: string) => [
     tool('board_post', 'Post a note to the shared board for specific agents or "all": decisions, interfaces, findings others need. Recipients get it with their next message.', {
       to: z.array(z.string()).describe('agent ids or names, or ["all"]'),
@@ -1078,6 +1092,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
             downgraded && 'urgent ignored: you were woken by an urgent message, so this was queued normally',
             notWoken.length && `queued, not woken (not idle: busy, stopped or failed): ${notWoken.join(', ')}`,
             errors.length && `queued, but waking failed: ${errors.join('; ')}`].filter(Boolean).join('\n'));
+        }),
+        tool('create_workspace', 'Create a new workspace (own Jarvis, agents and log) for a separate task, on this project unless you pass project, with the same notes folder and model. It sees only the task text plus the shared notes folder, so the task must be self-contained (paths, context, acceptance criteria). This workspace keeps running. The result gives the new workspace id: use tell_workspace for follow-ups. Task over 12000 chars is rejected.', {
+          name: z.string().describe('name of the new workspace, unique among workspaces'),
+          task: z.string().describe('full self-contained task for the new workspace'),
+          project: z.string().optional().describe('absolute path of its project; default is this one'),
+        }, async ({ name, task, project }) => {
+          const next = createWorkspaceFor(name, task, project);
+          return ok(`created workspace ${next.name} (${next.id}) and sent it the task`);
         }),
       ] : []), ...(owner === ARBITER && meta.notes ? [
         tool('notes_message', 'Set the git commit message for this turn\'s changes to the notes folder: one line in imperative mood saying what you changed and why, e.g. "Record PR #2 approval, fix verification and review gotchas". Call once per turn in which you changed the notes; a later call replaces the earlier one.', {
