@@ -2,6 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { health, current as healthNow } from './health.ts';
 import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
@@ -59,6 +60,13 @@ createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
   } else if (req.method === 'GET' && url.pathname === '/recent') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
+  } else if (req.method === 'GET' && url.pathname === '/health') {
+    // Global (not per workspace) and never persisted: the current state, then each change.
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+    const send = () => res.write(`data: ${JSON.stringify(healthNow)}\n\n`);
+    send();
+    health.on('change', send);
+    req.on('close', () => health.off('change', send));
   } else if (req.method === 'GET' && url.pathname === '/events') {
     const w = workspaces.get(url.searchParams.get('ws') ?? '');
     if (!w) return void res.writeHead(404).end();

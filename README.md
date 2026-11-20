@@ -79,6 +79,10 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 ![A big team: two leads with their helpers out, one folded into +5, and Jarvis hiding 9 idle agents](docs/screenshots/fold.png)
 
+### Anthropic status
+
+The dot at the bottom left, next to the link indicator, shows whether Anthropic's API is up: green all good, amber degraded, red outage, dark red critical, grey unknown (status page unreachable). Hover for the description and open incidents; click to open status.claude.com. It is global, not per workspace, so you can tell "Anthropic is down" from an agent error.
+
 ### Notes folder
 
 - A workspace can point at a persistent markdown folder, shareable between workspaces. Set it in the **+** dialog or the tab's right-click menu.
@@ -120,6 +124,7 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_ARBITER_EFFORT` | `medium` | Jarvis effort |
 | `JARVIS_PERMISSION_MODE` | `auto` | `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Claude Code plugins agents load (comma-separated; empty = none; missing ones are skipped) |
+| `JARVIS_STATUS_URL` | `https://status.claude.com/api/v2/summary.json` | Statuspage JSON behind the status dot (override only for tests) |
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
 
 Data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never in this repo.

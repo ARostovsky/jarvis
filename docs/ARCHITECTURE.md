@@ -43,6 +43,7 @@ flowchart LR
 | Path | What it is |
 |------|------------|
 | `src/agents.ts` | All domain logic: agents, SDK sessions, MCP tools, board, events, persistence, worktrees, workspaces, archive. Over a thousand lines. |
+| `src/health.ts` | Polls the Anthropic Statuspage every 60 s (10 s timeout, `If-None-Match`), derives one level from `status.indicator` and the `Claude API*` component (the worse wins), emits `change` on every poll. Any failure or bad JSON is `unknown`. |
 | `src/server.ts` | HTTP server: serves the page, SSE stream, JSON command table. Under a hundred lines. |
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
@@ -275,6 +276,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `GET /` | | the UI |
 | `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel, arbiterModel}` |
 | `GET /recent` | | `{project: [path], notes: [path]}`: folders used before, newest first, existing only; read when the New workspace dialog opens; seeded once from existing workspaces |
+| `GET /health` | | SSE, global: the current `{level, description, incidents, checked}` (`level`: `ok\|minor\|major\|critical\|unknown`), then one per poll. Not in any event log |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |
@@ -331,6 +333,8 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
 | `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |
+| `JARVIS_STATUS_URL` | `https://status.claude.com/api/v2/summary.json` | Statuspage summary the status dot polls. Tests only: `e2e` points it at a dead port, `e2e/health.spec.ts` at a stub |
+| `JARVIS_STATUS_POLL_MS` | `60000` | Tests only: status poll interval |
 | `JARVIS_FAKE_SDK` | unset | Tests only: path of a module whose `query()` replaces the SDK's (`e2e/fake-sdk.ts`) |
 
 ## Invariants you must keep
