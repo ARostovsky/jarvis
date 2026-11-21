@@ -506,6 +506,7 @@ const CONTEXT_ALERT_TOKENS = 200_000;
 // first calm moment, above hard at its next result. JARVIS_RESET_SOFT_TOKENS=0 turns off the soft bound, JARVIS_RESET_HARD_TOKENS=0 the reset.
 const RESET_SOFT_TOKENS = Number(process.env.JARVIS_RESET_SOFT_TOKENS ?? 150_000);
 const MAX_CREATES = 3; // create_workspace calls of one arbiter between two user messages
+const RESET_SAVE_TIMEOUT_MS = Number(process.env.JARVIS_RESET_SAVE_TIMEOUT_MS ?? 120_000); // longest the RESET button waits for the save turn
 const RESET_MARGIN_TOKENS = 50_000; // a reset session must grow this much beyond its first turn before it can be reset again
 const RESET_HARD_TOKENS = Number(process.env.JARVIS_RESET_HARD_TOKENS ?? CONTEXT_ALERT_TOKENS);
 const BUDGET_ALERT_USD = 10;
@@ -555,7 +556,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   const agents = new Map<string, Agent>();
   let removedUsd = 0; // spend of deleted agents, rebuilt from the log (removed, removed_cost) so it survives restarts
-  type Session = { push: (text: string, track?: boolean) => void; abort: AbortController; q: Query; interrupting?: boolean; timer?: ReturnType<typeof setTimeout>; settle?: ReturnType<typeof setTimeout>; pushSeq: number; seenSeq: number; unsettled: { seq: number; text: string }[]; handled: { text: string; reply: string }[]; born: boolean };
+  type Session = { push: (text: string, track?: boolean) => void; abort: AbortController; q: Query; interrupting?: boolean; timer?: ReturnType<typeof setTimeout>; settle?: ReturnType<typeof setTimeout>; pushSeq: number; seenSeq: number; unsettled: { seq: number; text: string }[]; handled: { text: string; reply: string }[]; born: boolean; force?: boolean; check?: () => void; saveTimer?: ReturnType<typeof setTimeout> };
   const sessions = new Map<string, Session>();
   // Ends a session now and frees its slot, so a message sent after this starts a new one.
   const kill = (id: string, s: Session) => (s.abort.abort(), sessions.get(id) === s && sessions.delete(id));
@@ -607,7 +608,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   const summary = () => {
     const all = [...agents.values()];
     const costUsd = removedUsd + all.reduce((sum, a) => sum + a.costUsd, 0);
-    return { ...meta, running: all.filter((a) => a.status === 'running').length, waiting: pendingAsks.size, costUsd, intercom: mail.filter((m) => m.n > mailSeen).length };
+    return { ...meta, running: all.filter((a) => a.status === 'running').length, waiting: pendingAsks.size, costUsd, intercom: mail.filter((m) => m.n > mailSeen).length, arbiterLive: !!sessions.get(ARBITER) && !sessions.get(ARBITER)!.interrupting };
   };
 
   // Rebuild agents from the event log so a server restart keeps the graph, logs and SDK session ids.
@@ -722,32 +723,40 @@ export function createWorkspace(meta: WorkspaceMeta) {
     // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
     const base = a.costUsd;
     const current = () => !sessions.has(a.id) || sessions.get(a.id) === s; // false once kill() made room for a newer session: this pump must not touch its state
-    let resetPhase = 'none' as ResetPhase, ctx = 0, floor = 0, floorSet = false, blocked = false; // ctx: size of the last top-level call; floor: size of a reset session's first turn
+    let resetPhase = 'none' as ResetPhase, forced = false, ctx = 0, floor = 0, floorSet = false, blocked = false; // ctx: size of the last top-level call; floor: size of a reset session's first turn
     let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
     const bash = new Map<string, () => void>(); // Bash calls in flight that may change notes: tool_use id -> claims the notes files the call changed; key '' is a sub-agent's whole turn
     // One quiet second after an arbiter result (no push, no message from the SDK): nothing is running, so it is safe to ask for the notes or reset.
     const settleCheck = () => {
       if (sessions.get(a.id) !== s || a.status === 'stopped') return;
+      const force = !!s.force; // the RESET button: no size guard, and it acts once
+      if (force) forced = true; // the user ordered this reset: the save turn cannot stop it, see below
       const margin = (bound: number) => (bound > 0 ? Math.max(bound, floor + RESET_MARGIN_TOKENS) : 0); // a fresh session that starts large must not reset again at once
       const raw = { soft: resetLimit(RESET_SOFT_TOKENS, a.context?.max), hard: resetLimit(RESET_HARD_TOKENS, a.context?.max) };
       const bounds = { soft: margin(raw.soft), hard: margin(raw.hard) };
-      if (!blocked && resetPhase === 'none' && ctx > raw.hard && raw.hard > 0 && ctx <= bounds.hard) {
+      if (!force && !blocked && resetPhase === 'none' && ctx > raw.hard && raw.hard > 0 && ctx <= bounds.hard) {
         blocked = true;
         console.warn(`arbiter reset of ${meta.id} skipped: context ${ctx} is within ${RESET_MARGIN_TOKENS} of the size ${floor} this session started with`);
       }
       const calm = ![...agents.values()].some((x) => x.id !== ARBITER && working(x));
-      const step = atResult(resetPhase, ctx, bounds, calm, !!meta.notes);
+      const step = atResult(resetPhase, ctx, bounds, calm, !!meta.notes, force);
       resetPhase = step.phase;
+      if (step.act) s.force = false;
       try {
         if (step.act === 'ask') {
-        const text = `[context ${Math.round(ctx / 1000)}k tokens, over the reset limit] The server resets your context after this turn: a fresh session of this same workspace continues from a short summary of agents and state. Update ${meta.notes}/status.md and your journal now so nothing is lost, then reply in one or two lines. Do not start new work.`;
+        const shared = ` The notes folder may be shared with other workspaces that edit status.md and README.md at the same time: read a file again right before each edit, use small Edit changes, never a whole-file Write, write your running log only to journal/YYYY-MM-DD-${journalKey(meta)}.md, and mark your status.md entries with the workspace name "${meta.name}".`;
+        const text = forced
+          ? `[reset ordered by the user] The user explicitly ordered a reset of your context right now. Do not ask questions and do not argue. The server resets your context after this turn: a fresh session of this same workspace continues from a short summary of agents and state. Save everything important to ${meta.notes}/status.md and your journal now, because what is not saved there is lost, then reply in one or two lines. Do not start new work.${shared}`
+          : `[context ${Math.round(ctx / 1000)}k tokens, over the reset limit] The server resets your context after this turn: a fresh session of this same workspace continues from a short summary of agents and state. Update ${meta.notes}/status.md and your journal now so nothing is lost, then reply in one or two lines. Do not start new work.${shared}`;
           emit('routed', { from: 'system', to: ARBITER, text });
           s.push(text, false); // not deliver(): unread mail and board notes must wait for the seed
+          if (forced) s.saveTimer = setTimeout(settleCheck, RESET_SAVE_TIMEOUT_MS); // a save turn that hangs must not keep the ordered reset waiting
         } else if (step.act === 'reset') resetArbiter(a, s, ctx);
       } catch (e) { // a timer callback: a throw here would be an uncaught exception
         console.warn(`arbiter reset of ${meta.id} failed: ${(e as Error).message}`);
       }
     };
+    s.check = settleCheck;
     try {
       for await (const m of q) {
         // Only a message of a turn cancels the quiet-second timer: notifications that trail a result (session_state_changed idle, background task or hook updates) must not.
@@ -773,6 +782,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
         } else if (m.type === 'system' && m.subtype === 'compact_boundary') {
           ctxAlerted = false;
           resetPhase = 'none';
+          forced = false;
+          clearTimeout(s.saveTimer);
           s.handled = [];
           ctx = m.compact_metadata.post_tokens ?? 0;
           emit('compacted', { agentId: a.id, trigger: m.compact_metadata.trigger, pre: m.compact_metadata.pre_tokens, post: m.compact_metadata.post_tokens });
@@ -836,7 +847,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
             if (resetPhase === 'saving') s.handled.push(...done.map((u) => ({ text: u.text, reply: text })));
             s.unsettled = s.unsettled.filter((u) => u.seq > s.seenSeq);
           }
-          if (a.id === ARBITER && !interrupted && m.subtype === 'success' && a.status !== 'stopped') {
+          if (resetPhase === 'saving') clearTimeout(s.saveTimer); // the timer guards the save turn only: a turn queued behind it resets at its own result
+          // An ordered reset also follows a save turn that ended in an error.
+          if (a.id === ARBITER && !interrupted && (m.subtype === 'success' || (forced && resetPhase === 'saving')) && a.status !== 'stopped') {
             if (s.born && !floorSet) (floor = ctx, floorSet = true);
             if (!m.queued_turn_count) s.settle = setTimeout(settleCheck, 1000); // else another turn is queued: its result arms the timer, a reset must not kill it
           }
@@ -870,14 +883,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Ends the bloated arbiter session and starts a fresh one in the same workspace. Synchronous, so a report arriving now goes to the new session.
   // The empty session id logged here keeps a restart before the new init from resuming the old session (restore resends the seed then).
-  function resetArbiter(a: Agent, s: Session, tokens: number) {
+  function resetArbiter(a: Agent, s: Session | undefined, tokens: number) {
     try {
       needWorkdir(a);
     } catch (e) {
       return void console.warn(`arbiter reset of ${meta.id} skipped: ${(e as Error).message}`);
     }
     const old = a.sessionId, facts = seedFacts(a, s);
-    kill(a.id, s);
+    if (s) kill(a.id, s);
     a.sessionId = undefined;
     emit('session', { agentId: a.id, sessionId: undefined });
     // The lists ride in the log so a restart before the new session starts can rebuild the seed from the current agents.
@@ -1097,6 +1110,17 @@ export function createWorkspace(meta: WorkspaceMeta) {
     session(a).push('/compact');
   }
 
+  // The RESET button. A live session saves its notes first, as the automatic reset does; after a restart there is no session to ask.
+  function resetArbiterNow() {
+    const a = agent(ARBITER);
+    if (working(a)) throw new Error('the arbiter is busy, reset it when it is idle');
+    if (!a.sessionId) throw new Error('the arbiter has no session to reset');
+    const s = sessions.get(a.id);
+    if (!s || s.interrupting) return resetArbiter(a, s, a.context?.tokens ?? 0); // no live session to ask: reset at once
+    s.force = true;
+    s.check!();
+  }
+
   // Frees the worktree and branch of a stopped agent when that loses nothing; the reason it stayed is logged.
   const cleaned = new Set<string>(); // agents whose worktree tidy() freed in this process
   function tidy(a: Agent) {
@@ -1251,7 +1275,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const team = a.id === ARBITER || (!!a.lead && depth(a) < MAX_DEPTH);
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
     const notes = !meta.notes ? '' : a.id === ARBITER
-      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${journalKey(meta)}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
+      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${journalKey(meta)}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Mark your status.md entries with the workspace name, so two workspaces' facts do not overwrite each other. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
       : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
@@ -1459,6 +1483,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     stopAgent,
     cleanup: () => workers().map(tidy).filter((k): k is string => !!k),
     compactAgent,
+    resetArbiterNow,
     deleteAgent,
     stopAll,
     configure,

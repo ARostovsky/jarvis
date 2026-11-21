@@ -93,6 +93,7 @@ The e2e server runs with `JARVIS_FAKE_SDK=e2e/fake-sdk.ts`: `src/agents.ts` then
 | `fold` | the sends that wait now run inside this turn: one result for several sends |
 | `later <ms> <script>` | a turn nobody sent starts after `ms` (the real SDK does this for a background task), so a result comes without a push; it opens with a `system/status` `requesting` message and its first stream message follows 1500 ms later |
 | `savedelay <ms> [fold]` | later turns that carry the save-notes request last `ms`; with `fold`, sends that arrive meanwhile run inside it |
+| `savefail <subtype>` | later turns that carry the save-notes request end with this error result; `off` clears it |
 | `resetusage <tokens>` | the turn on a reset seed starts with this many tokens; shared by all sessions of the process, `0` switches it off |
 | `result` | says the text of the last `tool` command's result, error text included |
 | `option <name>` | says `<name>=<that query option as JSON>`, e.g. `option resume` |
@@ -292,7 +293,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | Method and path | Body | Returns |
 |-----------------|------|---------|
 | `GET /` | | the UI |
-| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd}], archived, settingsModel, arbiterModel}` |
+| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd, arbiterLive}], archived, settingsModel, arbiterModel}` |
 | `GET /recent` | | `{project: [path], notes: [path]}`: folders used before, newest first, existing only; read when the New workspace dialog opens; seeded once from existing workspaces |
 | `GET /health` | | SSE, global: the current `{level, description, incidents, checked}` (`level`: `ok\|minor\|major\|critical\|unknown`), then one per poll. Not in any event log |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
@@ -309,6 +310,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `POST /answer` | `{ws, reqId, allow, answers?, annotations?}` | answer a permission prompt; for `AskUserQuestion`, `answers` (question text -> chosen labels, comma-joined) and `annotations` (question text -> `{preview?, notes?}`) are merged into its input |
 | `POST /stop` | `{ws, id}` | |
 | `POST /compact` | `{ws, id}` sends `/compact` straight into the idle session, bypassing board notes | |
+| `POST /reset` | `{ws}` manual arbiter reset (`resetArbiterNow()`): refused while the arbiter works or has no session. With a live session it sets `s.force` and runs `s.check()` (`settleCheck`), so `atResult(..., force)` treats the context as over the hard bound: save-notes turn, then reset, as in Save-then-reset. Without a live session (restart, stop, crash; also while a stop is interrupting) it resets at once, no save turn, and `s.force` is never left set. The `RESET` button (arbiter only) calls it after `confirm()`, whose text depends on whether the workspace has notes (`wsNotes`, from `GET /workspaces`): a short save-then-reset question (a different text when no live session will save: `arbiterLive` in `GET /workspaces`), or a warning that only a short summary survives and COMPACT keeps detail. Both save requests (automatic and ordered) end with the shared-folder rules: reread before each edit, small Edits, no whole-file Write, own journal only, status.md entries marked with the workspace name. A forced reset is an order: `settleCheck()` remembers it in the pump's `forced`, the save request is the `[reset ordered by the user]` variant (do not ask or argue), and the reset follows the save turn whatever its outcome: an empty reply, an error result (`forced` lets the result arm the timer), or no result within `JARVIS_RESET_SAVE_TIMEOUT_MS` (`s.saveTimer`, default 120000). No token bound, floor guard (`blocked`) or loop guard applies. A busy arbiter is refused, never interrupted | |
 | `POST /stopall` | `{ws}` | |
 | `POST /config` | `{ws, id, model?, effort?}` | |
 | `POST /delete` | `{ws, id, dirty?: 'commit' \| 'discard'}` | 409 if dirty and no choice, with `x-can-commit` |
@@ -350,6 +352,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_ARBITER_EFFORT` | `medium` | Arbiter effort |
 | `JARVIS_RESET_SOFT_TOKENS` | `150000` | Arbiter context that resets at a calm moment; `0` = no soft bound. Capped at 0.6 × window |
 | `JARVIS_RESET_HARD_TOKENS` | `200000` | Arbiter context that resets at its next result; `0` = no automatic reset. Capped at 0.6 × window |
+| `JARVIS_RESET_SAVE_TIMEOUT_MS` | `120000` | Longest the RESET button waits for the save-notes turn before it resets anyway |
 | `JARVIS_PERMISSION_MODE` | `auto` | SDK permission mode: `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLUGINS` | `caveman@caveman,ponytail@ponytail,frontend-design@claude-plugins-official,code-simplifier@claude-plugins-official,code-review@claude-plugins-official,claude-md-management@claude-plugins-official` | Comma-separated user plugin ids (as in `enabledPlugins`) to load into agents. Plugins that are not installed are skipped. Empty = none. |
 | `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |

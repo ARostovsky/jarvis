@@ -231,7 +231,7 @@
 
 <aside id="panel">
   <div id="pgrip" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripT" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripB" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripR" class="grip" title="Drag to resize · double-click to reset"></div>
-  <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="preset" title="Fresh session from the notes and a short summary">RESET</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="log"></div>
   <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button>SEND</button></form>
@@ -241,6 +241,8 @@
 <script>
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
 const wsNames = new Map(); // workspace id -> name, for messages between workspaces
+const wsNotes = new Map(); // workspace id -> notes folder, for the RESET warning
+const wsLive = new Set(); // workspaces whose arbiter has a live session: only then RESET asks it to save first
 const who = (id) => (id === ARBITER ? 'jarvis' : wsNames.get(id) ?? id);
 const nameOf = (id) => (id === ARBITER ? 'Jarvis' : agents.get(id)?.agent.name);
 const $ = (id) => document.getElementById(id);
@@ -484,6 +486,7 @@ const stoppable = (id) => ['running', 'waiting'].includes(agents.get(id)?.agent.
 const syncStop = () => {
   $('pstop').hidden = !stoppable(selected);
   $('pcompact').hidden = stoppable(selected) || !agents.get(selected)?.agent.sessionId; // compact needs an idle session with history
+  $('preset').hidden = selected !== ARBITER || $('pcompact').hidden;
 };
 // Share of the context window used after the last turn; 0 until the first measurement.
 const ctxPct = (ag) => ag.context ? Math.round(100 * ag.context.tokens / ag.context.max) : 0;
@@ -832,7 +835,8 @@ async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel, arbiterModel } = await (await fetch('/workspaces')).json()); } catch { return; }
   wsNames.clear();
-  list.forEach((w) => wsNames.set(w.id, w.name));
+  wsNotes.clear(); wsLive.clear();
+  list.forEach((w) => (wsNames.set(w.id, w.name), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
   renderTitle();
   renderArchived(archived);
   if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
@@ -1086,6 +1090,9 @@ $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if
 $('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); setDraft(); selected = null; markSelected(null); };
 $('pstop').onclick = () => selected && post('/stop', { id: selected });
 $('pcompact').onclick = () => selected && post('/compact', { id: selected });
+$('preset').onclick = () => selected === ARBITER && confirm(wsNotes.has(WS)
+  ? (wsLive.has(WS) ? 'Save state to notes, then reset the arbiter?' : 'The arbiter has no live session, so it cannot save to the notes first. Reset anyway?')
+  : 'No notes folder. Only a short summary survives (agents, last message, pending messages). Decisions from the chat are lost. Use Compact to keep detail. Reset anyway?') && post('/reset', {});
 // Modal with a list of choices; resolves to the chosen value, or '' on cancel.
 function choose(title, text, question, choices) {
   $('choiceTitle').textContent = title;

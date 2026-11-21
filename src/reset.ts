@@ -7,10 +7,10 @@ export type ResetPhase = 'none' | 'saving';
 
 // Called at a successful arbiter result with no message left in the session's queue. Above `hard` it acts at once; above `soft` only
 // when `calm` (no agent of the workspace runs or waits and the SDK queue is empty); neither the queue nor a count of ours can block it. hard 0 disables everything, soft 0 only the soft bound. `saving` is the
-// once-only flag of a session: the save-state turn is asked for once, and its result resets.
-export function atResult(phase: ResetPhase, ctx: number, bounds: { soft: number; hard: number }, calm: boolean, hasNotes: boolean): { phase: ResetPhase; act?: 'ask' | 'reset' } {
+// once-only flag of a session; `force` (the RESET button) counts as over the hard bound, whatever the size or the bounds: the save-state turn is asked for once, and its result resets.
+export function atResult(phase: ResetPhase, ctx: number, bounds: { soft: number; hard: number }, calm: boolean, hasNotes: boolean, force = false): { phase: ResetPhase; act?: 'ask' | 'reset' } {
   if (phase === 'saving') return { phase, act: 'reset' };
-  const over = bounds.hard > 0 && (ctx > bounds.hard || (bounds.soft > 0 && ctx > bounds.soft && calm));
+  const over = force || (bounds.hard > 0 && (ctx > bounds.hard || (bounds.soft > 0 && ctx > bounds.soft && calm)));
   return over ? { phase: 'saving', act: hasNotes ? 'ask' : 'reset' } : { phase };
 }
 

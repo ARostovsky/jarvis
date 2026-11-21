@@ -43,6 +43,7 @@ const commands: Record<string, (b: any) => unknown> = {
   '/send': (b) => ws(b.ws).sendToAgent(String(b.id), String(b.text), 'user'),
   '/stop': (b) => ws(b.ws).stopAgent(String(b.id)),
   '/compact': (b) => ws(b.ws).compactAgent(String(b.id)),
+  '/reset': (b) => ws(b.ws).resetArbiterNow(),
   '/stopall': (b) => ws(b.ws).stopAll(),
   '/config': (b) => ws(b.ws).configure(String(b.id), { model: b.model ? String(b.model) : undefined, effort: b.effort || undefined }),
   '/delete': (b) => ws(b.ws).deleteAgent(String(b.id), b.dirty === 'commit' || b.dirty === 'discard' ? b.dirty : undefined),

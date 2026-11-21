@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PORT as MAIN_PORT } from '../playwright.config.ts';
-import { test, expect, createWs, uniq, tmp, say, events, type Page } from './helpers.ts';
+import { test, expect, createWs, open, post, uniq, tmp, say, events, type Page } from './helpers.ts';
 
 // Default bounds: soft 150k, hard 200k, each at most 60% of the window. The fake reports a 200k window until `window` says otherwise,
 // so a first turn widens it to 1M and waits for the server to know. The reset acts one quiet second after a result.
@@ -197,4 +197,121 @@ test('JARVIS_RESET_HARD_TOKENS=0 disables the reset', async ({ page }) => {
   } finally {
     await server.stop();
   }
+});
+
+// The RESET button: the same reset as the automatic one, started by hand.
+async function selectArbiter(page: Page, notes?: string) {
+  const name = uniq('rstbtn');
+  const id = await createWs(page, name, notes ? { project: tmp('rstbp'), notes } : {});
+  await open(page, name);
+  await say(page, id, 'say warm');
+  await expect.poll(() => arbiter(id, 'result').length).toBe(1);
+  await page.locator('#core').click();
+  await expect.poll(() => page.evaluate(`wsLive.has(${JSON.stringify(id)})`)).toBe(true); // the confirm text follows the polled state
+  return id;
+}
+
+test('RESET button: notes saved once, then a fresh session seeded with the notes folder', async ({ page }) => {
+  const notes = tmp('rstbtnnotes');
+  const ws = await selectArbiter(page, notes);
+  let said = '';
+  page.once('dialog', (d) => (said = d.message(), d.accept()));
+  await page.locator('#preset').click();
+  await expect.poll(() => arbiter(ws, 'session').length, { timeout: 10_000 }).toBe(2);
+  expect(said).toBe('Save state to notes, then reset the arbiter?');
+  expect(saves(ws)).toHaveLength(1);
+  expect(saves(ws)[0].text).toContain('explicitly ordered a reset');
+  expect(saves(ws)[0].text).toContain('never a whole-file Write'); // the notes folder may be shared
+  expect(resets(ws)).toHaveLength(1);
+  await expect.poll(() => echoed(ws)).toContain(notes);
+  await expect(page.locator('#log .result').filter({ hasText: '⇣ context reset' })).toBeVisible();
+});
+
+test('RESET button: the ordered reset still happens when the save turn ends in an error', async ({ page }) => {
+  const ws = await selectArbiter(page, tmp('rstfailnotes'));
+  try {
+    await say(page, ws, 'savefail error_during_execution');
+    await expect.poll(() => arbiter(ws, 'result').length).toBe(2);
+    page.once('dialog', (d) => d.accept());
+    await page.locator('#preset').click();
+    await expect.poll(() => arbiter(ws, 'session').length, { timeout: 10_000 }).toBe(2);
+    expect(saves(ws)).toHaveLength(1);
+    expect(resets(ws)).toHaveLength(1);
+  } finally {
+    await say(page, ws, 'savefail off');
+  }
+});
+
+test('RESET button: a save turn that hangs is cut off by the timeout and the reset happens', async ({ page }) => {
+  const data = tmp('rsthang');
+  const server = await startServer(page, MAIN_PORT + 1100, data, { JARVIS_RESET_SAVE_TIMEOUT_MS: '1500' });
+  try {
+    const headers = { origin: server.url };
+    const ws = (await (await page.request.post(`${server.url}/workspaces`, { headers, data: { name: uniq('rsthang'), notes: tmp('rsthangn') } })).json()).id;
+    await page.request.post(`${server.url}/say`, { headers, data: { ws, text: 'savedelay 20000\nsay warm' } });
+    await expect.poll(() => logOf(data, ws).some((e) => e.text === 'warm')).toBe(true);
+    await expect.poll(async () => (await page.request.post(`${server.url}/reset`, { headers, data: { ws } })).status(), { timeout: 10_000 }).toBe(204);
+    await expect.poll(() => logOf(data, ws).filter((e) => e.type === 'compacted' && e.trigger === 'reset').length, { timeout: 10_000 }).toBe(1);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('RESET button: the save timeout guards the save turn only, a turn queued behind it is not cut off', async ({ page }) => {
+  const data = tmp('rstqueue');
+  const server = await startServer(page, MAIN_PORT + 1100, data, { JARVIS_RESET_SAVE_TIMEOUT_MS: '1500' });
+  try {
+    const headers = { origin: server.url };
+    const say = (ws: string, text: string) => page.request.post(`${server.url}/say`, { headers, data: { ws, text } });
+    const ws = (await (await page.request.post(`${server.url}/workspaces`, { headers, data: { name: uniq('rstq'), notes: tmp('rstqn') } })).json()).id;
+    await say(ws, 'savedelay 1000\nsay warm');
+    await expect.poll(() => logOf(data, ws).some((e) => e.text === 'warm')).toBe(true);
+    await expect.poll(async () => (await page.request.post(`${server.url}/reset`, { headers, data: { ws } })).status(), { timeout: 10_000 }).toBe(204);
+    await expect.poll(() => logOf(data, ws).some((e) => e.type === 'routed' && e.from === 'system')).toBe(true);
+    await say(ws, 'sleep 4000\nsay QUEUED-AFTER-SAVE'); // queued behind the save turn; the 1.5 s timer must not reset during it
+    await expect.poll(() => logOf(data, ws).filter((e) => e.type === 'compacted' && e.trigger === 'reset').length, { timeout: 15_000 }).toBe(1);
+    const log = logOf(data, ws);
+    expect(log.findIndex((e) => e.text === 'QUEUED-AFTER-SAVE')).toBeGreaterThan(-1);
+    expect(log.findIndex((e) => e.text === 'QUEUED-AFTER-SAVE')).toBeLessThan(log.findIndex((e) => e.type === 'compacted' && e.trigger === 'reset'));
+  } finally {
+    await server.stop();
+  }
+});
+
+test('RESET button without a notes folder resets at once, no save turn', async ({ page }) => {
+  const ws = await selectArbiter(page);
+  let said = '';
+  page.once('dialog', (d) => (said = d.message(), d.accept()));
+  await page.locator('#preset').click();
+  await expect.poll(() => arbiter(ws, 'session').length, { timeout: 10_000 }).toBe(2);
+  expect(said).toBe('No notes folder. Only a short summary survives (agents, last message, pending messages). Decisions from the chat are lost. Use Compact to keep detail. Reset anyway?');
+  expect(saves(ws)).toHaveLength(0);
+  expect(resets(ws)).toHaveLength(1);
+});
+
+test('RESET button: dismissed dialog does nothing; busy arbiter hides it and /reset refuses', async ({ page }) => {
+  const ws = await selectArbiter(page);
+  page.once('dialog', (d) => d.dismiss());
+  await page.locator('#preset').click();
+  await new Promise((r) => setTimeout(r, 1500));
+  expect(resets(ws)).toHaveLength(0);
+
+  await say(page, ws, 'sleep 1500');
+  await expect(page.locator('#preset')).toBeHidden();
+  const r = await post(page, '/reset', { ws });
+  expect(r.status()).toBe(400);
+  expect(await r.text()).toContain('is busy');
+  expect(resets(ws)).toHaveLength(0);
+  await expect(page.locator('#preset')).toBeVisible();
+});
+
+test('RESET button is hidden for a sub-agent', async ({ page }) => {
+  const ws = await selectArbiter(page);
+  await say(page, ws, 'tool mcp__jarvis__spawn_agent {"name":"helper","task":"say helper done"}');
+  const node = page.locator('#nodes .node', { hasText: 'helper' });
+  await expect(node.locator('.sub')).toHaveText(/^idle/);
+  await node.press('Enter');
+  await expect(page.locator('#ptitle')).toContainText('helper');
+  await expect(page.locator('#pcompact')).toBeVisible();
+  await expect(page.locator('#preset')).toBeHidden();
 });

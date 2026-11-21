@@ -49,3 +49,11 @@ test('seed names workspace, notes, agents and last text, and is capped', () => {
   assert.match(big, /… and \d+ more/);
   assert.ok(big.includes('zzz') && big.includes('qqq')); // last text and late messages survive many agents
 });
+
+test('force resets or asks whatever the size and the bounds', () => {
+  const b = { soft: 120_000, hard: 150_000 };
+  assert.deepEqual(atResult('none', 1_000, b, false, true, true), { phase: 'saving', act: 'ask' });
+  assert.deepEqual(atResult('none', 1_000, b, false, false, true), { phase: 'saving', act: 'reset' });
+  assert.deepEqual(atResult('none', 1_000, { soft: 0, hard: 0 }, false, true, true), { phase: 'saving', act: 'ask' }); // automatic reset off
+  assert.deepEqual(atResult('saving', 1_000, b, false, true, true), { phase: 'saving', act: 'reset' });
+});

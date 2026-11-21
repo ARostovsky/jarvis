@@ -17,6 +17,7 @@
 //   later <ms> <script>     a turn nobody sent starts after <ms> (the SDK runs one on a background task), so a result comes without a push; it opens
 //                           with a system/status requesting message and its first stream message follows 1500 ms later
 //   savedelay <ms> [fold]   later turns that carry the server's save-notes request last <ms> (with fold, sends that arrive meanwhile run inside it)
+//   savefail <subtype>      later turns that carry the server's save-notes request end with this error result (savefail off clears it)
 //   resetusage <tokens>     the turn on a reset seed starts with this many tokens; shared by all sessions of the process, 0 switches it off
 //   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
@@ -40,9 +41,9 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 type Assistant = SDKAssistantMessage['message'];
 type Usage = Assistant['usage'];
 
-// Shared by all sessions of the process: set by the commands savedelay and resetusage.
+// Shared by all sessions of the process: set by the commands savedelay, savefail and resetusage.
 const laterIds = new Set<string>(); // synthetic turns of `later`
-let saveDelay = { ms: 0, fold: false }, resetUsage = 0;
+let saveDelay = { ms: 0, fold: false }, saveFail = '', resetUsage = 0;
 
 export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   if (typeof prompt === 'string') throw new Error('fake sdk: only streaming input, as the server uses');
@@ -130,7 +131,9 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
     const seed = script.includes('[context reset]');
     const lines = seed ? ['echo'] : script.split('\n');
     if (seed && resetUsage) usageTokens = resetUsage;
-    if (saveDelay.ms && script.includes('The server resets your context after this turn')) lines.unshift(`sleep ${saveDelay.ms}`, ...(saveDelay.fold ? ['fold'] : []));
+    const save = script.includes('The server resets your context after this turn');
+    if (saveDelay.ms && save) lines.unshift(`sleep ${saveDelay.ms}`, ...(saveDelay.fold ? ['fold'] : []));
+    if (saveFail && save) lines.push(`fail ${saveFail}`);
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i];
       if (interrupted) await new Promise((r) => setTimeout(r, interruptDelay));
@@ -164,6 +167,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
       } else if (cmd === 'savedelay') {
         const [ms, fold] = rest.split(/\s+/);
         saveDelay = { ms: Number(ms), fold: fold === 'fold' };
+      } else if (cmd === 'savefail') {
+        saveFail = rest === 'off' ? '' : rest;
       } else if (cmd === 'resetusage') {
         resetUsage = Number(rest);
       } else if (cmd === 'window') {
