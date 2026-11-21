@@ -4,7 +4,7 @@
 
 **One AI manager that runs a team of AI coding agents, and a live map where you watch them work.**
 
-You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK. Jarvis never edits code. Each agent works on its own git branch.
+You describe a goal in plain words. Jarvis splits it into tasks, hands each task to its own [Claude Code](https://claude.com/claude-code) agent, and shows the whole team on screen: who is working, on what, how much it costs, and when someone needs your OK. Jarvis never edits code. Before it hands a hard decision to you, it asks an independent, quick, read-only Opus advisor agent for a second opinion, then decides and tells you both; scope, taste, money, publishing and deleting your work stay yours. Each agent works on its own git branch.
 
 ![Jarvis splits a goal into tasks, hires agents and a lead with its own helpers, and asks for approval when needed](docs/screenshots/demo.webp)
 

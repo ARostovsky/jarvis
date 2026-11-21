@@ -158,7 +158,7 @@ All tools live in one in-process MCP server named `jarvis`, built per agent by `
 
 | Role | Depth | Tools | System prompt append |
 |------|-------|-------|----------------------|
-| Arbiter | 0 | board + team, over all agents, + intercom | `ARBITER_PROMPT` (+ project hint, + notes paragraph) |
+| Arbiter | 0 | board + team, over all agents, + intercom | `ARBITER_PROMPT` (+ project hint, + notes paragraph); it tells the arbiter to get a second opinion from a one-shot read-only `advisor` agent (`spawn_agent`, model opus, effort medium; the arbiter stops it after its report) before handing a decision to the user |
 | Lead agent | 1 | board + team, only over its own children | `LEAD_PROMPT` + `BOARD_PROMPT` (+ notes line) |
 | Plain agent | 1 | board only (spawned without `lead`, the default) | `BOARD_PROMPT` (+ notes line) |
 | Sub-agent | 2 | board only | `BOARD_PROMPT` (+ notes line) |
