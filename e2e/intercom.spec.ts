@@ -75,7 +75,7 @@ test('urgent wakes an idle target; a working one gets it with its next turn', as
   await expect.poll(() => results(ib)).toBe(2); // the busy turn ended without waking again
   expect(events(ib).filter((e) => e.type === 'intercom_seen').length).toBe(1);
   await post(page, '/say', { ws: ib, text: 'echo' });
-  await expect.poll(() => events(ib).some((e) => e.type === 'text' && e.text.includes('- from ' + a + ' (' + ia + '): later'))).toBe(true);
+  await expect.poll(() => events(ib).some((e) => e.type === 'text' && e.text.includes('- from ' + a + ' (' + ia + ') [urgent: reply with tell_workspace urgent true]: later'))).toBe(true);
 });
 
 test('urgent does not wake a stopped arbiter; the message arrives with the next user message', async ({ page }) => {
@@ -89,7 +89,7 @@ test('urgent does not wake a stopped arbiter; the message arrives with the next 
   expect(results(ib)).toBe(turns);
   expect(events(ib).some((e) => e.type === 'intercom_seen')).toBe(false);
   await post(page, '/say', { ws: ib, text: 'echo' });
-  await expect.poll(() => events(ib).some((e) => e.type === 'text' && e.text.includes(`- from ${a} (${ia}): while stopped`))).toBe(true);
+  await expect.poll(() => events(ib).some((e) => e.type === 'text' && e.text.includes(`- from ${a} (${ia}) [urgent: reply with tell_workspace urgent true]: while stopped`))).toBe(true);
 });
 
 test('an urgent send from an urgent-woken turn is queued, not waking the other side', async ({ page }) => {
@@ -109,6 +109,26 @@ test('an urgent send from an urgent-woken turn is queued, not waking the other s
   // as the UI input does
   expect((await post(page, '/send', { ws: ib, id: 'arbiter', text: tell([ia], 'again', true) })).ok()).toBe(true);
   await expect.poll(() => events(ia).some((e) => e.type === 'routed' && e.from === ib && e.to === 'arbiter')).toBe(true);
+});
+
+test('a reply to a workspace that sent urgent mail is urgent even when sent with urgent false', async ({ page }) => {
+  const [a, b] = [uniq('ra'), uniq('rb')];
+  const [ia, ib] = [await createWs(page, a), await createWs(page, b)];
+  await say(page, ib, 'sleep 1500', 'say busy');
+  await expect.poll(() => events(ib).filter((e) => e.type === 'status' && e.agentId === 'arbiter').at(-1)?.status).toBe('running');
+  await say(page, ia, tell([b], 'question', true)); // B is busy: queued, not woken
+  await expect.poll(() => mail(ib).length).toBe(1);
+  expect(mail(ib)[0].urgent).toBe(true);
+  await expect.poll(() => results(ib)).toBe(1);
+  // the user writes to B; the delivered mail is marked urgent and B's non-urgent reply still wakes idle A
+  await post(page, '/say', { ws: ib, text: `echo\n${tell([ia], 'answer', false)}` });
+  await expect.poll(() => events(ib).some((e) => e.type === 'text' && e.text.includes('[urgent: reply with tell_workspace urgent true]'))).toBe(true);
+  await expect.poll(() => events(ia).some((e) => e.type === 'routed' && e.from === ib && e.to === 'arbiter')).toBe(true);
+  expect(mail(ia)[0]).toMatchObject({ text: 'answer', urgent: true });
+  // answered once: a later urgent false stays queued
+  await say(page, ib, tell([ia], 'fyi', false));
+  await expect.poll(() => mail(ia).length).toBe(2);
+  expect(mail(ia)[1].urgent).toBeUndefined();
 });
 
 test('multi-line text is indented so it cannot fake a header', async ({ page }) => {
