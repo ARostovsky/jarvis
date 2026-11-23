@@ -1,10 +1,11 @@
 import { query as sdkQuery, tool, createSdkMcpServer, type SDKUserMessage, type Query, type Options, type EffortLevel } from '@anthropic-ai/claude-agent-sdk';
 import { z } from 'zod';
+import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync, openSync, closeSync, fstatSync, ftruncateSync, unlinkSync, constants } from 'node:fs';
+import { accessSync, existsSync, mkdirSync, readFileSync, appendFileSync, rmSync, writeFileSync, renameSync, readdirSync, lstatSync, statSync, realpathSync, openSync, closeSync, fstatSync, ftruncateSync, unlinkSync, constants } from 'node:fs';
 import { createHash, randomBytes } from 'node:crypto';
-import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
+import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
@@ -69,6 +70,43 @@ export function clampSpawn(parent: Pick<Agent, 'model' | 'effort'>, model: strin
     model: rm >= 0 && rp >= 0 && rm > rp ? (parent.model ?? DEFAULT_AGENT_MODEL) : model, // a model outside MODELS (full id) is kept as asked
     effort: level(want) > cap ? EFFORTS[cap] : want,
   };
+}
+// Claude Code binary for sessions. The SDK bundles one pinned by npm (it never updates itself), so prefer the `claude` on PATH, which the native installer keeps current.
+// JARVIS_CLAUDE_PATH overrides it ('bundled' = the SDK's own). Without an override the PATH one is used only if it is executable and not older than the bundled build; otherwise the bundled one runs.
+// Resolved per session start, so an update applies to the next session. Logged once per change.
+const sdkPackage = () => join(dirname(createRequire(import.meta.url).resolve('@anthropic-ai/claude-agent-sdk')), 'package.json');
+const bundledVersion = (): string => { try { return readJson(sdkPackage()).claudeCodeVersion ?? '0'; } catch { return '0'; } };
+const versionOlder = (a: string, b: string) => {
+  const [x, y] = [a, b].map((v) => v.split('.').map((n) => parseInt(n) || 0));
+  for (let i = 0; i < 3; i++) if ((x[i] ?? 0) !== (y[i] ?? 0)) return (x[i] ?? 0) < (y[i] ?? 0);
+  return false;
+};
+const claudeVersions = new Map<string, string | undefined>(); // realpath of a binary -> its version (undefined: the call failed)
+let claudeLogged: string | undefined;
+export function claudeBinary(): string | undefined {
+  const choose = (path: string | undefined, why: string) => {
+    const note = `claude: ${path ? `using ${path}` : 'using the SDK bundled build'} (${why})`;
+    if (note !== claudeLogged) console.log((claudeLogged = note));
+    return path;
+  };
+  const o = process.env.JARVIS_CLAUDE_PATH;
+  if (process.env.JARVIS_FAKE_SDK) return undefined;
+  if (o === 'bundled') return choose(undefined, 'JARVIS_CLAUDE_PATH=bundled');
+  if (o) return choose(resolve(o), 'JARVIS_CLAUDE_PATH');
+  for (const d of (process.env.PATH ?? '').split(delimiter)) {
+    if (!isAbsolute(d)) continue;
+    const f = join(d, 'claude');
+    try { if (!statSync(f).isFile()) continue; accessSync(f, constants.X_OK); } catch { continue; }
+    const real = realpathSync(f);
+    if (!claudeVersions.has(real)) {
+      try { claudeVersions.set(real, /\d+\.\d+\.\d+/.exec(execFileSync(f, ['--version'], { encoding: 'utf8', timeout: 5000, stdio: 'pipe' }))?.[0]); } catch { claudeVersions.set(real, undefined); }
+    }
+    const v = claudeVersions.get(real);
+    if (!v) return choose(undefined, `${f} --version failed`);
+    if (versionOlder(v, bundledVersion())) return choose(undefined, `${f} is ${v}, older than the bundled ${bundledVersion()}`);
+    return choose(f, `version ${v}`);
+  }
+  return choose(undefined, 'no executable claude on PATH');
 }
 const PERMISSION_MODE = (process.env.JARVIS_PERMISSION_MODE ?? 'auto') as Options['permissionMode'];
 const PLAYWRIGHT = process.env.JARVIS_PLAYWRIGHT ?? '1'; // browser MCP for every session: '1' headless, 'headed' visible windows, '0' off
@@ -667,6 +705,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         cwd: a.cwd,
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
+        pathToClaudeCodeExecutable: claudeBinary(),
         model: a.model ?? (a.id === ARBITER ? ARBITER_MODEL : undefined),
         effort: a.effort ?? (a.id === ARBITER ? DEFAULT_EFFORT.arbiter : DEFAULT_EFFORT.agent),
         plugins: PLUGINS,
