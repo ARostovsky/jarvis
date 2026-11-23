@@ -706,6 +706,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
         pathToClaudeCodeExecutable: claudeBinary(),
+        // Without an explicit override the binary is never older than the SDK's, so it can take MCP config over stdin (keeps env/headers off the command line).
+        mcpServersDelivery: process.env.JARVIS_CLAUDE_PATH && process.env.JARVIS_CLAUDE_PATH !== 'bundled' ? 'argv' : 'initialize',
         model: a.model ?? (a.id === ARBITER ? ARBITER_MODEL : undefined),
         effort: a.effort ?? (a.id === ARBITER ? DEFAULT_EFFORT.arbiter : DEFAULT_EFFORT.agent),
         plugins: PLUGINS,
