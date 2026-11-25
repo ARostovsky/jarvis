@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "name": "example",
+  "kind": "jobs",
+  "description": "Example jobs: state, step and progress, cost refreshed slowly",
+  "command": ["python3", "status_provider_example.py"],
+  "args": ["{ids}"],
+  "cwd": null,
+  "pollS": 60,
+  "timeoutS": 60,
+  "slow_fields": { "cost": "30m" },
+  "idPattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+  "maxIds": 50,
+  "env": { "pass": [], "set": {} },
+  "needs": [],
+  "notify": "any"
+}
