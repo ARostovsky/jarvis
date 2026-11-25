@@ -17,7 +17,7 @@ const a = { name: uniq('nca'), id: '' }, b = { name: uniq('ncb'), id: '' };
 const journal = (w: typeof a) => `journal/${day}-${journalKey(w)}.md`;
 
 // The last commit: subject, body, files with status (-M: a move shows as R).
-// A workspace's first turn also commits its folder; only the tests about that look at it.
+// A workspace's first turn also commits its folder and the index; only the tests about those look at them.
 let layout = false;
 const keep = (l: string) => layout || !/\tworkspaces\//.test(l);
 const last = () => ({ subject: git('log', '-1', '--format=%s'), body: git('log', '-1', '--format=%b'), files: git('show', '-M', '--name-status', '--format=', 'HEAD').split('\n').filter(keep).sort() });
@@ -45,8 +45,8 @@ test('a turn commits its own files with the notes_message subject', async ({ pag
   layout = false;
   expect(c.subject).toBe('Add the A notes');
   expect(c.body).toMatch(new RegExp(`Workspace: ${a.name}$`));
-  // The workspace's own folder and the folder comes with its first commit.
-  expect(c.files).toEqual(['A\ta.md', `A\t${journal(a)}`, `A\tworkspaces/${a.id}/open-items.md`, `A\tworkspaces/${a.id}/status.md`]);
+  // The workspace's own folder and the generated index come with its first commit.
+  expect(c.files).toEqual(['A\ta.md', `A\t${journal(a)}`, 'A\tworkspaces/index.md', `A\tworkspaces/${a.id}/open-items.md`, `A\tworkspaces/${a.id}/status.md`]);
 });
 
 test('the other workspace commits only its files, also while the first one is in a Bash call', async ({ page }) => {
@@ -276,4 +276,18 @@ test('after a rename the live arbiter is told the new journal name once, and a f
   expect((await say(page, w.id, 'echo')).ok()).toBe(true);
   await expect.poll(results).toBe(n + 1);
   expect(told()).toHaveLength(1);
+});
+
+test('a journal in the workspace folder is committed by its owner, and the index lists both workspaces', async ({ page, request }) => {
+  const w = await fresh(request, 'ncq');
+  layout = true;
+  const c = await turn(page, w, `write ${notes}/workspaces/${w.id}/journal/${day}.md first entry`, `write ${notes}/workspaces/${w.id}/status.md Summary: doing the Q thing`, 'tool mcp__jarvis__notes_message {"message":"Log Q"}');
+  layout = false;
+  expect(c.files).toContain(`A\tworkspaces/${w.id}/journal/${day}.md`);
+  expect(c.files.some((f) => f.endsWith('workspaces/index.md'))).toBe(true);
+  const index = readFileSync(join(notes, 'workspaces', 'index.md'), 'utf8');
+  expect(index).toContain(`](${w.id}/status.md): doing the Q thing (open: 0, you: 0)`);
+  expect(index).toContain(`](${a.id}/status.md)`);
+  expect(index).toContain(`](${b.id}/status.md)`);
+  expect(git('status', '--porcelain', '--', `workspaces/${w.id}`, 'workspaces/index.md')).toBe('');
 });

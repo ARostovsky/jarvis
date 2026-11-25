@@ -10,7 +10,7 @@ import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
 import { classify, recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
-import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, workspaceDir } from './notes-layout.ts';
+import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, workspaceDir, writeIndex } from './notes-layout.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -396,9 +396,9 @@ function openPlain(p: string, flags: number) {
   closeSync(fd);
 }
 // Moves the workspace's journals to the name its current name gives (a merge into the file there if one exists), claims the result; commitNotes then commits delete and add as one rename.
-function syncJournals(notes: string, meta: { id: string; name: string }) {
+function syncJournals(notes: string, meta: { id: string; name: string }): boolean {
   const dir = join(notes, 'journal');
-  if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return;
+  if (!lstatSync(dir, { throwIfNoEntry: false })?.isDirectory()) return false;
   const key = journalKey(meta);
   let moved = false;
   try {
@@ -434,11 +434,18 @@ function syncJournals(notes: string, meta: { id: string; name: string }) {
   } finally {
     if (moved) saveNotesOwner();
   }
+  return moved;
 }
 
 export function notesWritten(notes: string, ws: string, file: string) {
   claim(notes, ws, resolve(file));
   saveNotesOwner();
+}
+
+// Regenerates <notes>/workspaces/index.md and claims it for this workspace, so its next commit carries it.
+function refreshIndex(notes: string, ws: string) {
+  const f = writeIndex(notes, (id) => workspaces.get(id)?.meta.name);
+  if (f) notesWritten(notes, ws, f);
 }
 
 // mtime and size of every file under dir; does not follow symlinks or enter .git and embedded repos.
@@ -486,7 +493,7 @@ export function commitNotes(notes: string, id: string, name: string) {
     // Also catches a stale session still writing the old name; a failure here must not block the commit.
     try { syncJournals(notes, { id, name }); } catch (e) { console.warn(`notes: cannot move journals in ${notes}: ${(e as Error).message}`); }
     const mine = [...notesOwner].filter(([f, o]) => o.ws === id && !relative(notes, f).startsWith('..')).map(([f]) => f);
-    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-*${idSuffix(id)}.md`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
+    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-*${idSuffix(id)}.md`, `:(glob)workspaces/${id}/**`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
     // Porcelain paths are relative to the repo root, hence top; -uall lists files, never an untracked folder that may hold other workspaces' files.
     const paths = git(notes, ...at, 'status', '--porcelain', '-z', '--no-renames', '--untracked-files=all', ...spec).split('\0').filter(Boolean).map((l) => l.slice(3));
     // A symlink (agents can plant one) is never committed: it would publish whatever it points at.
@@ -790,7 +797,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (step.act) s.force = false;
       try {
         if (step.act === 'ask') {
-          const text = saveTurnText(forced ? 'forced' : 'auto', meta as WorkspaceMeta & { notes: string }, workspaceDir(meta as { id: string; notes: string }), ctx);
+          const text = saveTurnText(forced ? 'forced' : 'auto', workspaceDir(meta as { id: string; notes: string }), ctx);
           emit('routed', { from: 'system', to: ARBITER, text });
           s.push(text, false); // not deliver(): unread mail and board notes must wait for the seed
           if (forced) s.saveTimer = setTimeout(settleCheck, RESET_SAVE_TIMEOUT_MS); // a save turn that hangs must not keep the ordered reset waiting
@@ -885,7 +892,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
           }
           for (const done of bash.values()) done();
           bash.clear();
-          if (a.id === ARBITER && meta.notes) commitNotes(meta.notes, meta.id, meta.name);
+          if (a.id === ARBITER && meta.notes) {
+            refreshIndex(meta.notes, meta.id);
+            commitNotes(meta.notes, meta.id, meta.name);
+          }
           // Cap what lands in the parent's context; the full text stays available via read_agent.
           const brief = cap(a, text);
           const compacted = compacting.delete(a.id);
@@ -1001,6 +1011,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function ensureOwnNotes() {
     try {
       for (const f of ensureWorkspaceNotes(meta).created) notesWritten(meta.notes!, meta.id, f);
+      refreshIndex(meta.notes!, meta.id);
       if (!layoutPending && !existsSync(toldFile)) {
         layoutPending = true;
         journalNote = [journalNote, migrationNotice(meta as WorkspaceMeta & { notes: string }, workspaceDir(meta as { id: string; notes: string }))].filter(Boolean).join('\n\n');
@@ -1559,7 +1570,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     configure,
     postNote,
     receive,
-    noteJournalMoved: (key: string) => void (journalNote = [journalNote, `[workspace renamed] Your journal files are now named journal/YYYY-MM-DD-${key}.md and the old ones were moved there. Use only the new name.`].filter(Boolean).join('\n\n')),
+    noteJournalMoved: (key: string) => void (journalNote = [journalNote, `[workspace renamed] Your old journal files in ${meta.notes} were renamed to journal/YYYY-MM-DD-${key}.md; do not add to them. New entries go to ${workspaceDir(meta as { id: string; notes: string })}/journal/YYYY-MM-DD.md.`].filter(Boolean).join('\n\n')),
     markNotesTold: () => { try { mkdirSync(dir, { recursive: true }); writeFileSync(toldFile, ''); } catch {} },
     wake,
     notesMessage,
@@ -1641,7 +1652,7 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   const w = createWorkspace(meta);
   if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
-  if (meta.notes) w.markNotesTold();
+  if (meta.notes) { w.markNotesTold(); refreshIndex(meta.notes, meta.id); }
   saveRegistry();
   touchRecent(meta);
   return w;
@@ -1654,8 +1665,8 @@ export function renameWorkspace(id: string, name: string) {
   const was = journalKey(w.meta);
   w.meta.name = name.trim();
   saveRegistry();
-  if (w.meta.notes && journalKey(w.meta) !== was) w.noteJournalMoved(journalKey(w.meta));
-  if (w.meta.notes) try { syncJournals(w.meta.notes, w.meta); } catch (e) { console.warn(`notes: cannot move journals in ${w.meta.notes}: ${(e as Error).message}`); }
+  // Only legacy journal/ files move on a rename (new journals live in the id-named folder), so only then is the arbiter told.
+  if (w.meta.notes) try { if (syncJournals(w.meta.notes, w.meta) && journalKey(w.meta) !== was) w.noteJournalMoved(journalKey(w.meta)); } catch (e) { console.warn(`notes: cannot move journals in ${w.meta.notes}: ${(e as Error).message}`); }
 }
 
 // Takes effect when a session next starts or resumes: agentOptions() is read then. Empty clears.
@@ -1669,6 +1680,7 @@ export function setWorkspaceNotes(id: string, notes?: string) {
     if (!w.meta.notes) w.markNotesTold(); // a re-saved folder of a workspace from before the layout keeps its pending notice
     w.meta.notes = folder;
     for (const f of created) notesWritten(folder, w.meta.id, f);
+    refreshIndex(folder, w.meta.id);
     touchRecent({ notes: folder });
   } else delete w.meta.notes;
   saveRegistry();

@@ -1,9 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, linkSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, saveTurnText, workspaceDir } from '../src/notes-layout.ts';
+import { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, saveTurnText, workspaceDir, writeIndex } from '../src/notes-layout.ts';
 import { resetSeed } from '../src/reset.ts';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'jarvis-layout-'));
@@ -76,21 +76,21 @@ test('the template comment blocks contain no item', () => {
 });
 
 test('format sentence and arbiter notes paragraph', () => {
-  for (const s of ['DD-MM-YYYY', '[~]', '(waiting on user)', '(not verified)', 'verified', 'open-items.md']) assert.ok(OPEN_ITEMS_FORMAT.includes(s), s);
+  for (const s of ['DD-MM-YYYY', '(you)', 'never for routine work', '[~]', '(waiting on user)', '(not verified)', 'verified', 'open-items.md']) assert.ok(OPEN_ITEMS_FORMAT.includes(s), s);
   const m = { ...meta('/n'), notes: '/n' };
   const p = arbiterNotesPrompt(m, '/n/workspaces/my-ws-ab12');
-  for (const s of ['/n/workspaces/my-ws-ab12', 'Summary:', 'DD-MM-YYYY', 'legacy shared files', OPEN_ITEMS_FORMAT, 'journal/YYYY-MM-DD-my-ws-ab12.md', 'notes_message']) assert.ok(p.includes(s), s);
+  for (const s of ['/n/workspaces/my-ws-ab12', 'Summary:', 'DD-MM-YYYY', 'legacy shared files', OPEN_ITEMS_FORMAT, 'journal/YYYY-MM-DD.md', 'index.md', 'notes_message']) assert.ok(p.includes(s), s);
   assert.ok(!p.includes('Mark your status.md entries'));
 });
 
 test('save turn texts name the own files and the format', () => {
   const m = { ...meta('/n'), notes: '/n' };
   for (const kind of ['forced', 'auto'] as const) {
-    const t = saveTurnText(kind, m, '/n/workspaces/my-ws-ab12', 160_000);
-    for (const s of ['/n/workspaces/my-ws-ab12/status.md', '/n/workspaces/my-ws-ab12/open-items.md', OPEN_ITEMS_FORMAT]) assert.ok(t.includes(s), s);
+    const t = saveTurnText(kind, '/n/workspaces/my-ws-ab12', 160_000);
+    for (const s of ['/n/workspaces/my-ws-ab12/status.md', '/n/workspaces/my-ws-ab12/open-items.md', '/n/workspaces/my-ws-ab12/journal/', OPEN_ITEMS_FORMAT]) assert.ok(t.includes(s), s);
   }
-  assert.match(saveTurnText('auto', m, 'w', 160_000), /^\[context 160k tokens/);
-  assert.match(saveTurnText('forced', m, 'w'), /^\[reset ordered by the user\]/);
+  assert.match(saveTurnText('auto', 'w', 160_000), /^\[context 160k tokens/);
+  assert.match(saveTurnText('forced', 'w'), /^\[reset ordered by the user\]/);
 });
 
 test('migration notice and seed point to the workspace folder', () => {
@@ -98,6 +98,51 @@ test('migration notice and seed point to the workspace folder', () => {
   assert.match(migrationNotice(m, '/n/workspaces/x'), /^\[notes layout changed\][^]*\/n\/workspaces\/x[^]*"My WS"/);
   const seed = resetSeed({ workspace: 'W', notes: '/n', wsNotes: '/n/workspaces/x', agents: [], last: '', unhandled: [], handled: [] });
   for (const s of ['/n/workspaces/x/status.md', '/n/workspaces/x/open-items.md', '/n/workspaces/']) assert.ok(seed.includes(s), s);
+});
+
+test('the (you) tag is read on open and parked items and removed from the text', () => {
+  const { items, invalid } = parseOpenItems('- [ ] 25-11-2026 (you) Decide the name\n- [~] 25-11-2026 (you) Push (waiting on user)\n- [ ] 25-11-2026 Run e2e\n- [ ] 25-11-2026 (you)');
+  assert.deepEqual(items.map((i) => [i.you, i.text]), [[true, 'Decide the name'], [true, 'Push (waiting on user)'], [false, 'Run e2e']]);
+  assert.equal(invalid.length, 1); // the tag alone is no item
+});
+
+test('index lists every workspace folder with summary and counts, atomically, and skips symlinks', () => {
+  const notes = tmp(), outside = tmp();
+  ensureWorkspaceNotes({ id: 'a-1111', name: 'A [x]', notes });
+  ensureWorkspaceNotes({ id: 'b-2222', name: 'B', notes });
+  writeFileSync(join(notes, 'workspaces', 'a-1111', 'status.md'), '# S\nSummary: doing A\n');
+  writeFileSync(join(notes, 'workspaces', 'a-1111', 'open-items.md'), '- [ ] 25-11-2026 (you) Decide\n- [~] 25-11-2026 Wait\n- [x] Done verified 25-11-2026: ok\n');
+  symlinkSync(outside, join(notes, 'workspaces', 'evil-3333'));
+  const f = writeIndex(notes, (id) => (id === 'a-1111' ? 'A [x]' : undefined))!;
+  const text = readFileSync(f, 'utf8');
+  assert.ok(text.includes('- [A x](a-1111/status.md): doing A (open: 2, you: 1)'));
+  assert.ok(text.includes('- [b-2222](b-2222/status.md): - (open: 0, you: 0)')); // the template placeholder is no summary
+  assert.ok(!text.includes('evil'));
+  assert.deepEqual(readdirSync(join(notes, 'workspaces')).filter((n) => n.includes('tmp')), []);
+  // a failure (symlinked workspaces folder) is not fatal
+  const bad = tmp();
+  symlinkSync(outside, join(bad, 'workspaces'));
+  assert.equal(writeIndex(bad), undefined);
+  assert.deepEqual(readdirSync(outside), []);
+});
+
+test('the journal folder is created with the workspace folder', () => {
+  const notes = tmp();
+  ensureWorkspaceNotes(meta(notes));
+  assert.ok(existsSync(join(workspaceDir({ id: 'my-ws-ab12', notes }), 'journal')));
+});
+
+test('index never writes through a planted temp name or a linked index.md', () => {
+  const notes = tmp(), other = tmp();
+  ensureWorkspaceNotes(meta(notes));
+  const root = join(notes, 'workspaces');
+  writeFileSync(join(other, 'README.md'), 'precious');
+  linkSync(join(other, 'README.md'), join(root, `.index-${process.pid}.tmp`)); // the old predictable name
+  linkSync(join(other, 'README.md'), join(root, 'index.md'));
+  symlinkSync(join(other, 'README.md'), join(root, '.index-0000.tmp'));
+  assert.ok(writeIndex(notes));
+  assert.equal(readFileSync(join(other, 'README.md'), 'utf8'), 'precious');
+  assert.match(readFileSync(join(root, 'index.md'), 'utf8'), /^# Workspaces/);
 });
 
 test('parser: an unclosed comment opener hides nothing, indented items and impossible dates are invalid', () => {

@@ -83,6 +83,8 @@ test('a new workspace with notes gets its own folder; one without notes creates 
   const dir = join(notes, 'workspaces', w);
   expect(readFileSync(join(dir, 'status.md'), 'utf8')).toContain(`Workspace id: ${w}`);
   expect(readFileSync(join(dir, 'open-items.md'), 'utf8')).toContain('# Open items');
+  expect(lstatSync(join(dir, 'journal')).isDirectory()).toBe(true);
+  expect(readFileSync(join(notes, 'workspaces', 'index.md'), 'utf8')).toContain(`(${w}/status.md)`);
   expect(existsSync(join(notes, 'status.md'))).toBe(false);
   const n = await createWs(page, uniq('layno'), { project: plain });
   expect(n).toBeTruthy();
