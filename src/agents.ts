@@ -1083,10 +1083,14 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (!hits.length) throw new Error(`unknown recipient "${t}". Known: ${[...agents.values()].map((a) => `${a.id} (${a.name})`).join(', ')}`);
       hits.forEach((a) => ids.add(a.id));
     }
-    const note = { n: (board.at(-1)?.n ?? 0) + 1, from, to: [...ids], text };
+    const to2 = [...ids];
+    // An agent that re-posts the same text to the same recipients only adds tokens to every receiver; the user may repeat on purpose.
+    const dup = from !== 'user' && board.find((x) => x.from === from && x.text === text && x.to.length === to2.length && x.to.every((t) => ids.has(t)));
+    if (dup) return { ...dup, duplicate: true as boolean };
+    const note = { n: (board.at(-1)?.n ?? 0) + 1, from, to: to2, text };
     board.push(note);
     emit('board', note);
-    return note;
+    return { ...note, duplicate: false };
   }
 
   // Queued for the arbiter's next turn.
@@ -1308,7 +1312,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     tool('board_post', 'Post a note to the shared board for specific agents or "all": decisions, interfaces, findings others need. Recipients get it with their next message.', {
       to: z.array(z.string()).describe('agent ids or names, or ["all"]'),
       text: z.string(),
-    }, async ({ to, text }) => ok(`posted #${postNote(owner, to, text).n}`)),
+    }, async ({ to, text }) => { const n = postNote(owner, to, text); return ok(n.duplicate ? `not sent: same text to the same recipients as #${n.n}` : `posted #${n.n}`); }),
     tool('board_read', 'Read board notes addressed to you that you have not seen yet.', {}, async () => {
       const a = agents.get(owner)!, notes = unread(a);
       markSeen(a);
