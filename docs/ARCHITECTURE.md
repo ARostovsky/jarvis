@@ -1,6 +1,6 @@
 # Jarvis: technical documentation
 
-This file is for people (and their coding agents) who want to change Jarvis. The [README](../README.md) explains what Jarvis is and how to use it. Here you find how it is built, where each thing lives, and how to extend it without breaking the guarantees it makes.
+This file is for people (and their coding agents) who want to change Jarvis. The [README](../README.md) explains what Jarvis is and the [user guide](GUIDE.md) covers using it in detail. Here you find how it is built, where each thing lives, and how to extend it without breaking the guarantees it makes.
 
 ## Contents
 
@@ -50,7 +50,7 @@ flowchart LR
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
 | `e2e/` | Playwright specs, `helpers.ts`, `fake-sdk.ts` (the scripted stand-in for the SDK) and `fake-voice.ts` (stand-in for the voice sidecar) and `fake-capture.ts` (stand-in for `pw-record`: raw PCM tone; modes `silent`, `exit`) (see [Running and checking](#running-and-checking)). |
-| `docs/` | This file and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
+| `docs/` | This file, `GUIDE.md` (the user guide) and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
 | `tsconfig.json` | Type check only (`noEmit`). Node runs `.ts` directly. |
 
 Inside `src/agents.ts`, top to bottom:
@@ -372,7 +372,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_VOICE_LANGS` | `en,ru` | Sidecar languages |
 | `JARVIS_VOICE_IDLE_S` | `600` | Idle seconds before the sidecar is killed (invalid values fall back to 600) |
 | `JARVIS_VOICE_TIMEOUT_S` | `120` | Per-job limit: a job running longer is failed and the sidecar killed; the next job respawns it |
-| `JARVIS_VOICE_PROMPT` | see README | Sidecar: extra terms appended (`, `) to `DEFAULT_PROMPT`, the Whisper `initial_prompt` (`prompt_from_env`). `stt.py` drops a result equal or near-equal to it, starting like it, or repeating a run of 2+ of its terms (`echoes_prompt`; a prompt under 4 words only when repeated whole), because Whisper can echo the prompt on noise. The default is a plain term list: an echoed sentence would be sent to an agent. Its neighbours are ordered so no two form a phrase said alone ("git commit", "npm test"), which the run-of-terms check would drop; a test guards that |
+| `JARVIS_VOICE_PROMPT` | see `docs/GUIDE.md` | Sidecar: extra terms appended (`, `) to `DEFAULT_PROMPT`, the Whisper `initial_prompt` (`prompt_from_env`). `stt.py` drops a result equal or near-equal to it, starting like it, or repeating a run of 2+ of its terms (`echoes_prompt`; a prompt under 4 words only when repeated whole), because Whisper can echo the prompt on noise. The default is a plain term list: an echoed sentence would be sent to an agent. Its neighbours are ordered so no two form a phrase said alone ("git commit", "npm test"), which the run-of-terms check would drop; a test guards that |
 | `JARVIS_VOICE_PROMPT_DEFAULT` | `1` | Sidecar: `0` leaves `DEFAULT_PROMPT` out (empty prompt when `JARVIS_VOICE_PROMPT` is unset too) |
 | `JARVIS_VOICE_DEBUG_WAV` | unset | Directory; `withDebugDump` in `src/voice.ts` writes each clip to `<dir>/last.wav` (16 kHz mono s16) and the text to `<dir>/last.txt`, overwriting (directory `0700`, files `0600`, written through a temp file and renamed so a symlink at `last.wav` is replaced, not followed). Exception to the no-storage rule, see invariant 9 |
 | `JARVIS_VOICE_MAX_S` | `60` | Recording cap in seconds; capture stops, the samples stay for `/voice/stop` |
