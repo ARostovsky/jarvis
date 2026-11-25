@@ -8,7 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
-import { recordOutcome, setProbe } from './health.ts';
+import { classify, recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
@@ -919,7 +919,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (current()) setStatus(a, 'stopped');
     } catch (e) {
       if (current()) {
-        recordOutcome((e as Error).message, 0);
+        recordOutcome(classify(apiError) ? apiError : (e as Error).message, 0); // a recognized typed error seen before the throw wins over the thrown text
         setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
         emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
       }
@@ -1737,7 +1737,12 @@ setProbe(async (abortController) => {
   const t = Date.now();
   let err: string | undefined;
   const q = query({ prompt: 'Reply with: ok', options: { model: 'haiku', maxTurns: 1, tools: [], persistSession: false, settingSources: [], settings: SETTINGS, pathToClaudeCodeExecutable: claudeBinary(), cwd: tmpdir(), abortController } });
-  for await (const m of q) if (m.type === 'assistant' && m.error) err = m.error === 'unknown' ? m.message.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ') : m.error;
+  try {
+    for await (const m of q) if (m.type === 'assistant' && m.error) err = m.error === 'unknown' ? m.message.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ') : m.error;
+  } catch (e) {
+    // The CLI yields the typed error (authentication_failed) first, then throws a text that classify() may not know: a recognized typed one wins.
+    if (!classify(err)) throw e;
+  }
   if (abortController.signal.aborted) return; // timed out: the caller records that, a clean SDK end must not read as success
   recordOutcome(err, Date.now() - t, t);
 });

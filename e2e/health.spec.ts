@@ -18,7 +18,7 @@ test.afterEach(async () => {
   if (server && server.exitCode === null) { const exit = once(server, 'exit'); server.kill(); await exit; }
 });
 
-test('the status dot follows the Statuspage indicator and the API component, grey when unreachable', async ({ page }) => {
+test('the status dot follows the Claude API and Claude Code components, grey when unreachable', async ({ page }) => {
   let body: object | string = {};
   let version = 0; // the stub's etag, bumped with every body
   let etags = 0;
@@ -27,9 +27,9 @@ test('the status dot follows the Statuspage indicator and the API component, gre
     res.writeHead(200, { 'content-type': 'application/json', etag: `W/"${version}"` }).end(typeof body === 'string' ? body : JSON.stringify(body));
   }).listen(0, '127.0.0.1');
   await once(stub, 'listening');
-  const summary = (indicator: string, api = 'operational', incidents: string[] = []) => ({
+  const summary = (indicator: string, api = 'operational', incidents: string[] = [], code = 'operational') => ({
     status: { indicator, description: `desc ${indicator}` },
-    components: [{ name: 'claude.ai', status: 'operational' }, { name: 'Claude API (api.anthropic.com)', status: api }],
+    components: [{ name: 'claude.ai', status: 'operational' }, { name: 'Claude API (api.anthropic.com)', status: api }, { name: 'Claude Code', status: code }],
     incidents: incidents.map((name) => ({ name })),
   });
   server = spawn(process.execPath, ['src/server.ts'], { env: { ...process.env, PORT: String(PORT), XDG_DATA_HOME: tmp('health'), JARVIS_FAKE_SDK: join(import.meta.dirname, 'fake-sdk.ts'), JARVIS_STATUS_URL: `http://127.0.0.1:${(stub.address() as AddressInfo).port}/`, JARVIS_STATUS_POLL_MS: '200', JARVIS_HEALTH_PROBE: '0', JARVIS_HEALTH_SLOW_MS: '1500' }, stdio: 'ignore' });
@@ -54,10 +54,10 @@ test('the status dot follows the Statuspage indicator and the API component, gre
   await turn(); // a successful run: the dot follows the status page from here on
   const cases: [object | string, string, RegExp?][] = [
     [summary('none'), 'ok', /Anthropic status: desc none/],
-    [summary('minor', 'operational', ['Elevated errors']), 'minor', /Anthropic status: desc minor\nElevated errors\nchecked /],
-    [summary('major'), 'major'],
-    [summary('critical'), 'critical'],
-    [summary('none', 'degraded_performance'), 'minor'], // the API component is worse than the overall indicator
+    [summary('minor', 'operational', ['Elevated errors']), 'ok', /Anthropic status: desc minor\nElevated errors\nchecked /], // an unrelated incident shows in the tooltip but does not color the dot
+    [summary('critical'), 'ok'],
+    [summary('none', 'degraded_performance'), 'minor'],
+    [summary('none', 'operational', [], 'partial_outage'), 'major'],
     [summary('minor', 'major_outage'), 'critical'],
     ['not json', 'ok'], // unreadable status page: the local success stands
   ];
@@ -70,6 +70,11 @@ test('the status dot follows the Statuspage indicator and the API component, gre
   await expect(dot).toHaveClass('ok');
   // The local outcome follows the error type: auth and connection errors are red, rate limit yellow, unrelated errors change nothing.
   await turn('apierror authentication_failed API Error: 401 invalid credentials');
+  await expect(dot).toHaveClass('major');
+  await expect(dot).toHaveAttribute('title', /Your Claude: auth/);
+  await turn();
+  await expect(dot).toHaveClass('ok');
+  await send('/say', { ws, text: 'apithrow authentication_failed' }); // the SDK throws after the typed error: the typed error decides; the session ends, so no mark to wait for
   await expect(dot).toHaveClass('major');
   await expect(dot).toHaveAttribute('title', /Your Claude: auth/);
   await turn();

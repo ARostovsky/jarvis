@@ -27,21 +27,27 @@ export const resetOutcome = () => { local = undefined; lastProbeAt = 0; probing 
 let etag: string | undefined;
 let last: any; // last parsed body, reused on 304
 
-function derive(j: any): Health {
-  const overall = INDICATOR[j?.status?.indicator];
-  if (!overall) throw new Error('bad status JSON');
-  const api = (j.components ?? []).find((c: any) => String(c?.name).startsWith('Claude API'));
-  const apiLevel = COMPONENT[api?.status];
-  const level = apiLevel && RANK.indexOf(apiLevel) > RANK.indexOf(overall) ? apiLevel : overall;
+// The level comes only from the components that carry the user's access (the page-wide indicator is only a fallback when none is found): an incident in claude.ai or an add-in must not turn the dot yellow.
+const ACCESS = ['Claude API', 'Claude Code'];
+export function derive(j: any): Health {
+  if (!INDICATOR[j?.status?.indicator]) throw new Error('bad status JSON');
+  let level: Level | undefined;
+  for (const c of j.components ?? []) {
+    if (!ACCESS.includes(String(c?.name).replace(/\s*\(.*\)\s*$/, '').trim())) continue; // "Claude API (api.anthropic.com)" -> "Claude API"
+    const l = COMPONENT[c?.status];
+    if (l && RANK.indexOf(l) > RANK.indexOf(level ?? 'ok')) level = l;
+    else if (l) level ??= l;
+  }
+  level ??= INDICATOR[j.status.indicator]; // neither component found (renamed?): the page-wide indicator is better than silence
   const incidents = (j.incidents ?? []).map((i: any) => String(i?.name)).filter(Boolean);
-  return { level, description: String(j.status.description ?? ''), incidents, checked: Date.now() };
+  return { level: level!, description: String(j.status.description ?? ''), incidents, checked: Date.now() };
 }
 
 // Error type from the SDK's assistant-message error code, or from the text of an 'unknown' error and of exceptions ("API Error: 503 ...", "Connection error."). Anything else (bad prompt, billing, tool or agent failure, abort) is undefined: it says nothing about the API.
 const CODE = '(?:status|API Error:?|HTTP)\\s*';
 export function classify(err: string | undefined): Kind | undefined {
   if (!err) return undefined;
-  if (new RegExp(`^(authentication_failed|oauth_org_not_allowed|account_on_hold|verification_required|cloud_credential_error)$|${CODE}(401|403)\\b`, 'i').test(err)) return 'auth';
+  if (new RegExp(`^(authentication_failed|oauth_org_not_allowed|account_on_hold|verification_required|cloud_credential_error)$|${CODE}(401|403)\\b|Invalid API key|Fix external API key`, 'i').test(err)) return 'auth';
   if (new RegExp(`^(server_error|overloaded)$|${CODE}5\\d\\d\\b|overloaded_error`, 'i').test(err)) return 'server';
   if (new RegExp(`^rate_limit$|${CODE}429\\b`, 'i').test(err)) return 'rate';
   if (/\b(ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN)\b|fetch failed|Connection error|Request timed out|socket hang up/i.test(err)) return 'network';

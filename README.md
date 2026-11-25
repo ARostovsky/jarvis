@@ -33,7 +33,7 @@ Also `jarvis stop|restart|status|logs`; foreground: `npm start`. Then click **NE
 - **Teams.** Jarvis picks the cheapest fitting model per task; leads hire helpers; big teams fold into `+N` badges.
 - **Costs.** Cost per agent and workspace, COMPACT and RESET for long contexts, nothing stopped automatically.
 - **Notes folder.** Optional shared markdown folder Jarvis keeps current and commits to git.
-- **Claude health dot** (bottom left): from your own agent runs plus Anthropic's status page. Green works, amber slow or incident, red auth, network or server error, grey unknown (no run yet).
+- **Claude health dot** (bottom left): from your own agent runs plus the Claude API and Claude Code components of Anthropic's status page. Green works, amber slow or degraded API, red auth, network or server error, grey unknown (no run yet).
 - **Local only.** Listens on `127.0.0.1`, rejects other origins; every event is on disk, so restarts lose nothing.
 
 Details, screenshots and all behavior: [docs/GUIDE.md](docs/GUIDE.md).

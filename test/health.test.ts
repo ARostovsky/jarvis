@@ -4,10 +4,10 @@ import assert from 'node:assert/strict';
 process.env.JARVIS_STATUS_URL = 'http://127.0.0.1:1/'; // the module polls on import
 process.env.JARVIS_HEALTH_PROBE_TIMEOUT_MS = '100';
 const H = await import('../src/health.ts');
-const { classify, combine, localLevel, recordOutcome, maybeProbe, setProbe, resetOutcome, health } = H;
+const { derive, classify, combine, localLevel, recordOutcome, maybeProbe, setProbe, resetOutcome, health } = H;
 
 test('error types: auth, network and 5xx are red, rate limit yellow, the rest ignored', () => {
-  for (const e of ['authentication_failed', 'API Error: 401 Unauthorized', 'oauth_org_not_allowed']) assert.equal(classify(e), 'auth');
+  for (const e of ['authentication_failed', 'API Error: 401 Unauthorized', 'oauth_org_not_allowed', 'Claude Code returned an error result: Invalid API key · Fix external API key']) assert.equal(classify(e), 'auth');
   for (const e of ['server_error', 'overloaded', 'API Error: 529', 'API Error: 503 upstream']) assert.equal(classify(e), 'server');
   for (const e of ['rate_limit', 'API Error: 429']) assert.equal(classify(e), 'rate');
   for (const e of ['fetch failed ECONNREFUSED', 'API Error: Connection error.', 'ETIMEDOUT: probe timed out', 'API Error: Request timed out.']) assert.equal(classify(e), 'network');
@@ -89,4 +89,23 @@ test('maybeProbe: a timed-out or older probe never overwrites a newer outcome', 
   assert.ok(aborted);
   assert.equal(H.current.local?.kind, 'network', 'the timeout is the outcome, not a late success');
   health.off('change', client);
+});
+
+test('status page: only the Claude API and Claude Code components set the level, the page-wide indicator does not', () => {
+  const page = (indicator: string, comps: Record<string, string>, incidents: string[] = []) => ({
+    status: { indicator, description: `desc ${indicator}` },
+    components: Object.entries(comps).map(([name, status]) => ({ name, status })),
+    incidents: incidents.map((name) => ({ name })),
+  });
+  const ok = { 'Claude API (api.anthropic.com)': 'operational', 'Claude Code': 'operational', 'claude.ai': 'operational' };
+  const wide = derive(page('minor', { ...ok, 'claude.ai': 'degraded_performance' }, ['M365 add-in missing']));
+  assert.equal(wide.level, 'ok');
+  assert.deepEqual(wide.incidents, ['M365 add-in missing']); // still shown, never colored
+  assert.equal(derive(page('critical', ok)).level, 'ok');
+  assert.equal(derive(page('none', { ...ok, 'Claude API (api.anthropic.com)': 'degraded_performance' })).level, 'minor');
+  assert.equal(derive(page('none', { ...ok, 'Claude Code': 'partial_outage' })).level, 'major');
+  assert.equal(derive(page('none', { ...ok, 'Claude API': 'major_outage', 'Claude Code': 'degraded_performance' })).level, 'critical');
+  assert.equal(derive(page('minor', { 'claude.ai': 'operational', 'Claude Platform': 'operational' })).level, 'minor'); // neither component found: the page-wide indicator
+  assert.equal(derive(page('none', {})).level, 'ok');
+  assert.throws(() => derive({ status: {} }));
 });

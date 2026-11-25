@@ -77,7 +77,7 @@ The default model is `large-v3` (float16, beam 5): about 4 GB of VRAM at peak, l
 
 ### Claude health dot
 
-The dot at the bottom left shows whether your Claude access works: green the last agent run succeeded, amber slow, rate limited or an open Anthropic incident, red auth, network or server (5xx) failure, dark red critical outage on the status page, grey unknown (nothing has run yet; the status page alone never turns it green). Bad prompts, tool errors and aborted runs do not change it. With no run for 10 minutes and the page open, Jarvis sends one tiny Haiku request to check. Hover for your last outcome (age, latency, error type) and the Anthropic status page text with open incidents; click to open status.claude.com. It is global, not per workspace.
+The dot at the bottom left shows whether your Claude access works: green the last agent run succeeded, amber slow, rate limited or a degraded Claude API or Claude Code on the status page, red auth (including an invalid API key), network or server (5xx) failure or a partial outage there, dark red a major outage there, grey unknown (nothing has run yet; the status page alone never turns it green). Bad prompts, tool errors and aborted runs do not change it. With no run for 10 minutes and the page open, Jarvis sends one tiny Haiku request to check. Hover for your last outcome (age, latency, error type) and the Anthropic status page text with all open incidents (only the Claude API and Claude Code components color the dot, other incidents are info); click to open status.claude.com. It is global, not per workspace.
 
 ### Notes folder
 

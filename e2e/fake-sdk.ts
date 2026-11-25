@@ -22,6 +22,7 @@
 //   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
 //   apierror <code> [text]  an assistant message with this error code (e.g. authentication_failed, unknown) and text, then an is_error result with that text, as the CLI ends a failed API call
+//   apithrow <code>         an assistant message with this error code, then the query throws an unclassifiable error (no result), as the CLI does for an invalid API key
 //   subapierror <code>      an assistant message with this error code from a sub-agent (parent_tool_use_id set); the turn itself goes on
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
@@ -157,6 +158,9 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         const text = words.join(' ') || code;
         yield { ...assistant([{ type: 'text', text, citations: null } as Assistant['content'][number]]), error: code as SDKAssistantMessage['error'] };
         return yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: null, total_cost_usd: costUsd, is_error: true, queued_turn_count: waiting.length, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
+      } else if (cmd === 'apithrow') {
+        yield { ...assistant([{ type: 'text', text: 'Invalid API key', citations: null } as Assistant['content'][number]]), error: rest as SDKAssistantMessage['error'] };
+        throw new Error('Claude Code returned an error result: odd text');
       } else if (cmd === 'subapierror') {
         yield { ...assistant([{ type: 'text', text: 'sub-agent failed', citations: null } as Assistant['content'][number]]), parent_tool_use_id: 'toolu_sub', error: rest as SDKAssistantMessage['error'] };
       } else if (cmd === 'usage') {
