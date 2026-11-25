@@ -9,7 +9,7 @@ import { join } from 'node:path';
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-notes-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'; // no user hooks or signing; commitNotes supplies the identity
-const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace } = await import('../src/agents.ts');
+const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace, setWorkspaceNotes } = await import('../src/agents.ts');
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' }).trim();
 // What the arbiter's Write tool call does.
@@ -163,4 +163,14 @@ test('claims survive a restart', async () => {
 test('home and folders above it are refused', () => {
   assert.throws(() => prepareNotes(homedir()));
   assert.throws(() => prepareNotes('/'));
+});
+
+test('a refused notes folder never stays in the workspace meta', () => {
+  const w = addWorkspace('refused', undefined, {});
+  const notes = join(tmp, 'refused-notes'), outside = join(tmp, 'refused-outside');
+  mkdirSync(notes);
+  mkdirSync(outside);
+  symlinkSync(outside, join(notes, 'workspaces'));
+  assert.throws(() => setWorkspaceNotes(w.meta.id, notes), /not a plain folder/);
+  assert.equal(w.meta.notes, undefined);
 });

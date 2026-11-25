@@ -1,7 +1,7 @@
-import { existsSync, readFileSync, readdirSync, lstatSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, lstatSync, rmSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
-import { test, expect, createWs, open, tab, tmp, uniq, post, DATA } from './helpers.ts';
+import { test, expect, createWs, open, tab, tmp, uniq, post, say, events, DATA } from './helpers.ts';
 
 test.describe.configure({ mode: 'serial' });
 
@@ -75,4 +75,39 @@ test('an empty answer clears the folder', async ({ page }) => {
   await open(page, name);
   await setNotes(page, ' ');
   await expect.poll(async () => (await meta(page)).notes).toBeUndefined();
+});
+
+test('a new workspace with notes gets its own folder; one without notes creates none', async ({ page }) => {
+  const notes = tmp('layout'), plain = tmp('layoutplain');
+  const w = await createWs(page, uniq('lay'), { notes });
+  const dir = join(notes, 'workspaces', w);
+  expect(readFileSync(join(dir, 'status.md'), 'utf8')).toContain(`Workspace id: ${w}`);
+  expect(readFileSync(join(dir, 'open-items.md'), 'utf8')).toContain('# Open items');
+  expect(existsSync(join(notes, 'status.md'))).toBe(false);
+  const n = await createWs(page, uniq('layno'), { project: plain });
+  expect(n).toBeTruthy();
+  expect(existsSync(join(plain, 'workspaces'))).toBe(false);
+});
+
+test('an existing workspace gets its folder and one notice, not again at the next session start', async ({ page }) => {
+  const notes = tmp('layold');
+  const w = await createWs(page, uniq('layold'), { notes });
+  // As a workspace from before the layout: no folder, no marker, no session yet.
+  rmSync(join(notes, 'workspaces', w), { recursive: true });
+  const marker = join(DATA, 'workspaces', w, 'notes-layout-told');
+  rmSync(marker, { force: true });
+  const told = () => events(w).filter((e) => e.type === 'text' && e.text.includes('[notes layout changed]'));
+  const results = () => events(w).filter((e) => e.type === 'result').length;
+  expect((await say(page, w, 'echo')).ok()).toBe(true);
+  await expect.poll(() => told().length).toBe(1);
+  expect(told()[0].text).toContain(join(notes, 'workspaces', w));
+  expect(existsSync(join(notes, 'workspaces', w, 'status.md'))).toBe(true);
+  await expect.poll(() => existsSync(marker)).toBe(true); // written once the notice is delivered
+  // Stop the arbiter: the next message starts a new session, which reads its options again.
+  const r = results();
+  expect((await post(page, '/stop', { ws: w, id: 'arbiter' })).ok()).toBe(true);
+  expect((await say(page, w, 'option resume', 'echo')).ok()).toBe(true);
+  await expect.poll(results).toBeGreaterThan(r);
+  expect(events(w).some((e) => e.type === 'text' && /^resume=".+"/.test(e.text))).toBe(true); // a new query() that resumed the old session: options were read again
+  expect(told()).toHaveLength(1);
 });

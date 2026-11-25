@@ -28,7 +28,8 @@ test('hard bound: reset with a busy agent, state saved once, child report still 
 
   await expect.poll(() => arbiter(ws, 'session').length, { timeout: 10_000 }).toBe(2); // the new session started
   expect(saves(ws)).toHaveLength(1);
-  expect(saves(ws)[0].text).toContain(`${notes}/status.md`);
+  expect(saves(ws)[0].text).toContain(`${notes}/workspaces/${ws}/status.md`);
+  expect(saves(ws)[0].text).toContain(`${notes}/workspaces/${ws}/open-items.md`);
   expect(resets(ws)[0]).toMatchObject({ agentId: 'arbiter', pre: 210_000 });
   const [old, fresh] = arbiter(ws, 'session').map((e) => e.sessionId);
   expect(old).not.toBe(fresh);
@@ -38,7 +39,7 @@ test('hard bound: reset with a busy agent, state saved once, child report still 
   const helper = events(ws).find((e) => e.type === 'spawned' && e.agent.name === 'slowhelper').agent;
   await expect.poll(() => echoed(ws)).toContain(notes);
   expect(echoed(ws)).toContain(`- ${helper.id} (slowhelper): running`);
-  expect(echoed(ws)).toContain('README.md, CLAUDE.md, status.md');
+  expect(echoed(ws)).toContain(`${notes}/workspaces/${ws}/status.md, ${notes}/workspaces/${ws}/open-items.md`);
 
   // The child ran through the reset; its report reaches the new arbiter.
   await expect.poll(() => arbiter(ws, 'text').some((e) => e.text === 'CHILD-REPORT-OK'), { timeout: 15_000 }).toBe(true);
@@ -221,7 +222,8 @@ test('RESET button: notes saved once, then a fresh session seeded with the notes
   expect(said).toBe('Save state to notes, then reset the arbiter?');
   expect(saves(ws)).toHaveLength(1);
   expect(saves(ws)[0].text).toContain('explicitly ordered a reset');
-  expect(saves(ws)[0].text).toContain('never a whole-file Write'); // the notes folder may be shared
+  expect(saves(ws)[0].text).toContain(`${notes}/workspaces/${ws}/open-items.md`);
+  expect(saves(ws)[0].text).toContain('[ ] <DD-MM-YYYY>');
   expect(resets(ws)).toHaveLength(1);
   await expect.poll(() => echoed(ws)).toContain(notes);
   await expect(page.locator('#log .result').filter({ hasText: '⇣ context reset' })).toBeVisible();

@@ -18,6 +18,7 @@ export type SeedFacts = {
   workspace: string;
   project?: string;
   notes?: string;
+  wsNotes?: string; // this workspace's own folder under notes
   agents: { id: string; name: string; status: string; repo?: string; lastText: string }[];
   last: string; // the arbiter's last assistant text
   unhandled: string[]; // sent to the old session, no result for them yet: the SDK may not have handled them
@@ -33,7 +34,9 @@ export function resetSeed(f: SeedFacts): string {
     `[context reset] Your context grew too large, so the server ended your session and started this new one in the same workspace "${f.workspace}". This is a context reset, not a new workspace: continue the work, and do not tell the user to start a new workspace. Workspace, tab, board, agents (running ones too) and the event log are unchanged; agent reports still reach you.`,
   ];
   if (f.project) out.push(`Project: ${f.project}`);
-  if (f.notes) out.push(`Notes folder: ${f.notes}. Read README.md, CLAUDE.md, status.md and your journal there first to recover the state.`);
+  if (f.notes) out.push(f.wsNotes
+    ? `Notes folder: ${f.notes}. Your own files: ${f.wsNotes}/status.md, ${f.wsNotes}/open-items.md and your journal. Read README.md, CLAUDE.md and those first to recover the state. Other workspaces' state: ${f.notes}/workspaces/.`
+    : `Notes folder: ${f.notes}. Read README.md, CLAUDE.md, status.md and your journal there first to recover the state.`);
   // The agent list gets its own budget, so many agents cannot push the last text and late messages out of the cap.
   const lines: string[] = [];
   let size = 0;

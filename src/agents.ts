@@ -10,6 +10,7 @@ import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
 import { classify, recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
+import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, workspaceDir } from './notes-layout.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -352,7 +353,7 @@ const oneLine = (s: string, max = 100) => (s.trim().split(/\r?\n/)[0] ?? '').tri
 
 // Subject when the arbiter wrote no message: the changed files, journal files folded into "journal", a count when there are many.
 function fallbackSubject(paths: string[]) {
-  const names = [...new Set(paths.map((p) => (p.startsWith('journal/') ? 'journal' : p)))];
+  const names = [...new Set(paths.map((p) => (p.startsWith('journal/') ? 'journal' : p.startsWith('workspaces/') ? 'workspace notes' : p)))];
   return names.length > 3 ? `Update ${names.length} notes files` : `Update ${names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names.at(-1)}` : names[0]}`;
 }
 // after: a Bash diff leaves a file to another workspace that named it in a Write or Edit during the call. A journal belongs to the workspace it is named after.
@@ -560,7 +561,7 @@ Other workspaces have their own arbiters. Use tell_workspace only for things ano
 Pick each agent's model by difficulty with spawn_agent's model parameter: the cheapest one that can do the job well (haiku for mechanical work, sonnet for normal coding, opus only for hard reasoning). Leads coordinate and rarely need opus: give them sonnet unless the coordination itself is hard reasoning.
 Before you hand a decision to the user, and before a hard decision of your own (irreversible, a non-obvious tradeoff, an unfamiliar domain), get an independent second opinion: spawn_agent with model opus, effort medium, name "advisor", no lead. Its task states the problem, the options you see, the constraints and the relevant facts with absolute paths, but not your preference or conclusion. Tell it to answer in one turn from the brief, read files only if the answer truly needs them, change nothing, ask no questions back, and reply in at most 150 words as: recommended option, reasons, main risk. When it reports, call stop_agent on it right away, then decide yourself and tell the user the decision and the advice in one or two lines. Never send an advisor a follow-up: a new question gets a new advisor. Still ask the user for decisions only they can make: scope or goal changes, taste, spending money, pushing or publishing, deleting their work. Skip the advisor for routine choices.
 Split a large review into one reviewer per diff area instead of one reviewer reading everything.
-Every tool call re-reads your whole context, so long sessions get expensive. The server resets your context automatically when it gets large: a fresh session of this same workspace continues from a short summary. Keep status.md and your journal current so the reset loses nothing.
+Every tool call re-reads your whole context, so long sessions get expensive. The server resets your context automatically when it gets large: a fresh session of this same workspace continues from a short summary. Keep your status.md, open-items.md and journal current so the reset loses nothing.
 When an agent reports "[agent <id> context ...]" or "[agent <id> cost ...]", it passed a size or cost limit: restart it with a short summary of its state and the remaining work (spawn a new agent or compact it), instead of letting it continue.
 Agents you spawn cannot spawn sub-agents unless you pass lead=true. For a large goal with several related parts (a feature across backend, frontend and tests), spawn one lead agent (lead=true) per area and tell it to split its area into sub-agents, instead of managing every small task yourself. Small or read-only tasks go to a plain agent without lead.`;
 
@@ -789,10 +790,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (step.act) s.force = false;
       try {
         if (step.act === 'ask') {
-        const shared = ` The notes folder may be shared with other workspaces that edit status.md and README.md at the same time: read a file again right before each edit, use small Edit changes, never a whole-file Write, write your running log only to journal/YYYY-MM-DD-${journalKey(meta)}.md, and mark your status.md entries with the workspace name "${meta.name}".`;
-        const text = forced
-          ? `[reset ordered by the user] The user explicitly ordered a reset of your context right now. Do not ask questions and do not argue. The server resets your context after this turn: a fresh session of this same workspace continues from a short summary of agents and state. Save everything important to ${meta.notes}/status.md and your journal now, because what is not saved there is lost, then reply in one or two lines. Do not start new work.${shared}`
-          : `[context ${Math.round(ctx / 1000)}k tokens, over the reset limit] The server resets your context after this turn: a fresh session of this same workspace continues from a short summary of agents and state. Update ${meta.notes}/status.md and your journal now so nothing is lost, then reply in one or two lines. Do not start new work.${shared}`;
+          const text = saveTurnText(forced ? 'forced' : 'auto', meta as WorkspaceMeta & { notes: string }, workspaceDir(meta as { id: string; notes: string }), ctx);
           emit('routed', { from: 'system', to: ARBITER, text });
           s.push(text, false); // not deliver(): unread mail and board notes must wait for the seed
           if (forced) s.saveTimer = setTimeout(settleCheck, RESET_SAVE_TIMEOUT_MS); // a save turn that hangs must not keep the ordered reset waiting
@@ -934,7 +932,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     }
   }
 
-  const seedFacts = (a: Agent, s?: Session) => ({ workspace: meta.name, project: meta.project, notes: meta.notes, agents: [...agents.values()].filter((x) => x.id !== a.id).map((x) => (restartCut.has(x.id) && x.status === 'idle' ? { ...x, status: 'idle (interrupted by a server restart, no report will come)' } : x)), last: a.lastText, unhandled: s?.unsettled.map((u) => u.text) ?? [], handled: s?.handled ?? [] });
+  const seedFacts = (a: Agent, s?: Session) => ({ workspace: meta.name, project: meta.project, notes: meta.notes, wsNotes: meta.notes && workspaceDir(meta as { id: string; notes: string }), agents: [...agents.values()].filter((x) => x.id !== a.id).map((x) => (restartCut.has(x.id) && x.status === 'idle' ? { ...x, status: 'idle (interrupted by a server restart, no report will come)' } : x)), last: a.lastText, unhandled: s?.unsettled.map((u) => u.text) ?? [], handled: s?.handled ?? [] });
 
   // Ends the bloated arbiter session and starts a fresh one in the same workspace. Synchronous, so a report arriving now goes to the new session.
   // The empty session id logged here keeps a restart before the new init from resuming the old session (restore resends the seed then).
@@ -996,11 +994,26 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Set by a rename: told to the arbiter in its next message, never by a message of its own (that would wake an idle arbiter and spend a turn).
   let journalNote: string | undefined;
+  // The migration notice of a workspace from before the layout is told once: the marker file in its data dir is written after the notice is delivered, so a restart in between tells it again. New workspaces and workspaces given a notes folder get the marker at once.
+  const toldFile = join(dir, 'notes-layout-told');
+  let layoutPending = false;
+  // Creates this workspace's notes folder if it is missing and queues the migration notice for the arbiter's next message. Never throws: a session must start.
+  function ensureOwnNotes() {
+    try {
+      for (const f of ensureWorkspaceNotes(meta).created) notesWritten(meta.notes!, meta.id, f);
+      if (!layoutPending && !existsSync(toldFile)) {
+        layoutPending = true;
+        journalNote = [journalNote, migrationNotice(meta as WorkspaceMeta & { notes: string }, workspaceDir(meta as { id: string; notes: string }))].filter(Boolean).join('\n\n');
+      }
+    } catch (e) { console.warn(`notes: cannot create the folder of ${meta.id}: ${(e as Error).message}`); }
+  }
   // Every message into a session carries the board notes this agent has not seen yet.
   function deliver(a: Agent, text: string) {
+    if (a.id === ARBITER && meta.notes && !sessions.has(a.id)) ensureOwnNotes(); // a new session: the notice must ride on this first message
     if (a.id === ARBITER && journalNote) {
       text = `${journalNote}\n\n${text}`;
       journalNote = undefined;
+      if (layoutPending) try { mkdirSync(dir, { recursive: true }); writeFileSync(toldFile, ''); layoutPending = false; } catch (e) { console.warn(`notes: cannot write ${toldFile}: ${(e as Error).message}`); }
     }
     const msgs = a.id === ARBITER ? mail.filter((m) => m.n > mailSeen) : [];
     if (msgs.length) {
@@ -1251,7 +1264,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (same) throw new Error(`a workspace named "${same.meta.name}" exists (${same.meta.id}): pick another name`);
     const { model, effort } = agent(ARBITER);
     const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes);
-    next.sendToAgent(ARBITER, `[task from workspace "${meta.name}" (${meta.id})]\nThis comes from the Jarvis of another workspace, not from the user.\n\n${task}`, `workspace:${meta.id}`);
+    next.sendToAgent(ARBITER, `[task from workspace "${meta.name}" (${meta.id})]\nThis comes from the Jarvis of another workspace, not from the user.${meta.notes ? `\n${creatorNotesLine(workspaceDir(meta as { id: string; notes: string }))}` : ''}\n\n${task}`, `workspace:${meta.id}`);
     created++;
     return next.meta;
   }
@@ -1290,7 +1303,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
             notWoken.length && `queued, not woken (not idle: busy, stopped or failed): ${notWoken.join(', ')}`,
             errors.length && `queued, but waking failed: ${errors.join('; ')}`].filter(Boolean).join('\n'));
         }),
-        tool('create_workspace', 'Create a new workspace (own Jarvis, agents and log) for a separate task, on this project unless you pass project, with the same notes folder and model. It sees only the task text plus the shared notes folder, so the task must be self-contained (paths, context, acceptance criteria). This workspace keeps running. The result gives the new workspace id: use tell_workspace for follow-ups. Task over 12000 chars is rejected.', {
+        tool('create_workspace', 'Create a new workspace (own Jarvis, agents and log) for a separate task, on this project unless you pass project, with the same notes folder (its own subfolder under workspaces/) and model. It sees only the task text plus the shared notes folder, so the task must be self-contained (paths, context, acceptance criteria). This workspace keeps running. The result gives the new workspace id: use tell_workspace for follow-ups. Task over 12000 chars is rejected.', {
           name: z.string().describe('name of the new workspace, unique among workspaces'),
           task: z.string().describe('full self-contained task for the new workspace'),
           project: z.string().optional().describe('absolute path of its project; default is this one'),
@@ -1329,9 +1342,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
   function agentOptions(a: Agent): Options {
     const team = a.id === ARBITER || (!!a.lead && depth(a) < MAX_DEPTH);
     const project = meta.project ? `\nThis workspace is about the project at ${meta.project}; spawn_agent uses it as repo unless you pass another.` : '';
+    const wsDir = meta.notes ? workspaceDir(meta as { id: string; notes: string }) : '';
+    if (meta.notes && a.id === ARBITER) ensureOwnNotes();
     const notes = !meta.notes ? '' : a.id === ARBITER
-      ? `\nPersistent project notes live at ${meta.notes}; they outlive this workspace and are shared with other workspaces on the same project. At the start of a new goal, read its README.md, CLAUDE.md and status.md if they exist. Keep the notes current yourself: after an agent finishes something meaningful, or after a decision, a finding or a change of plan, update status.md and the relevant files. Use absolute dates (YYYY-MM-DD). Write your own running log to journal/YYYY-MM-DD-${journalKey(meta)}.md, a file only you write: decisions, findings, what agents did, open threads. Shared files (README.md, status.md, others) may be edited at the same time by Jarvis in another workspace: read the file again right before each edit, use small Edit changes, never a whole-file Write. Mark your status.md entries with the workspace name, so two workspaces' facts do not overwrite each other. Keep status.md short: the current state, not history. If the folder is empty, create README.md (an index of the files) and status.md. Never put secret values there. Tell agents the notes path when a task needs that context. When you create or edit ${meta.notes}/CLAUDE.md, follow the claude-md-improver skill (its quality criteria and templates): concise, one line per concept, nothing stale or obvious. Keep that CLAUDE.md about the project and the user's working rules; do not record Jarvis's own mechanics there (journal files, git commits, edit rules). Its file search must run on ${meta.notes}, not on your own folder. When a goal is done, capture this session's learnings (working rules, gotchas, commands, access quirks) into ${meta.notes}/CLAUDE.md the way /revise-claude-md does, but apply them directly without asking: the folder is yours to maintain and git history is the safety net. Jarvis commits the folder to git after each of your turns; do not run git there. In a turn where you changed the notes, call notes_message once with a one-line description of the change for the reader of the history, not a description of the process.`
-      : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes.`;
+      ? arbiterNotesPrompt(meta as WorkspaceMeta & { notes: string }, wsDir)
+      : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes. Each workspace keeps its own files in ${meta.notes}/workspaces/<id>/; do not edit them.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes;
     return {
       ...(meta.notes ? { additionalDirectories: [meta.notes] } : {}),
@@ -1544,7 +1559,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
     configure,
     postNote,
     receive,
-    noteJournalMoved: (key: string) => void (journalNote = `[workspace renamed] Your journal files are now named journal/YYYY-MM-DD-${key}.md and the old ones were moved there. Use only the new name.`),
+    noteJournalMoved: (key: string) => void (journalNote = [journalNote, `[workspace renamed] Your journal files are now named journal/YYYY-MM-DD-${key}.md and the old ones were moved there. Use only the new name.`].filter(Boolean).join('\n\n')),
+    markNotesTold: () => { try { mkdirSync(dir, { recursive: true }); writeFileSync(toldFile, ''); } catch {} },
     wake,
     notesMessage,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
@@ -1616,11 +1632,16 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   // Journals are matched to workspaces by the id suffix: it must differ from every live and archived workspace and from every journal already in the notes folder.
   const taken = new Set([...workspaces.keys(), ...listArchived().map((m) => m.id)].map((id) => id.slice(-4)));
   if (notes) try { for (const f of readdirSync(join(resolve(notes), 'journal'))) { const m = /-([a-z0-9]{4})\.md$/.exec(f); if (m) taken.add(m[1]); } } catch {}
+  if (notes) try { for (const f of readdirSync(join(resolve(notes), 'workspaces'))) { const m = /-([a-z0-9]{4})$/.exec(f); if (m) taken.add(m[1]); } } catch {}
   const suffix = uniqueSuffix(taken);
   const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}) };
+  if (meta.notes) { // its own folder from the first prompt; the files are claimed so the first commit takes them
+    for (const f of ensureWorkspaceNotes(meta).created) notesWritten(meta.notes, meta.id, f);
+  }
   const w = createWorkspace(meta);
   if (arbiter.model || arbiter.effort) w.configure(ARBITER, arbiter);
   workspaces.set(meta.id, w);
+  if (meta.notes) w.markNotesTold();
   saveRegistry();
   touchRecent(meta);
   return w;
@@ -1642,9 +1663,13 @@ export function setWorkspaceNotes(id: string, notes?: string) {
   const w = workspaces.get(id);
   if (!w) throw new Error(`no workspace ${id}`);
   if (notes?.trim()) {
-    prepareNotes(resolve(notes.trim())); // first: a refused folder must not stay in meta
-    w.meta.notes = resolve(notes.trim());
-    touchRecent({ notes: w.meta.notes });
+    const folder = resolve(notes.trim());
+    prepareNotes(folder);
+    const created = ensureWorkspaceNotes({ ...w.meta, notes: folder }).created; // before the assignment: a refused folder must not stay in meta
+    if (!w.meta.notes) w.markNotesTold(); // a re-saved folder of a workspace from before the layout keeps its pending notice
+    w.meta.notes = folder;
+    for (const f of created) notesWritten(folder, w.meta.id, f);
+    touchRecent({ notes: folder });
   } else delete w.meta.notes;
   saveRegistry();
 }

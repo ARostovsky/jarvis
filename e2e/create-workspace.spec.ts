@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test, expect, createWs, uniq, tmp, say, events } from './helpers.ts';
 
 test('create_workspace makes a workspace whose arbiter gets the task', async ({ page }) => {
@@ -13,4 +15,8 @@ test('create_workspace makes a workspace whose arbiter gets the task', async ({ 
   const first = events(next.id).find((e) => e.type === 'routed');
   expect(first.from).toBe(`workspace:${ws}`);
   expect(first.text).toContain('TASK-TEXT');
+  // Its own folder; the creator's stays as it was, and the new arbiter is told where the creator's files are.
+  expect(existsSync(join(notes, 'workspaces', next.id, 'status.md'))).toBe(true);
+  expect(readFileSync(join(notes, 'workspaces', ws, 'status.md'), 'utf8')).toContain(`Workspace id: ${ws}`);
+  expect(first.text).toContain(`The creator's notes: ${join(notes, 'workspaces', ws)}`);
 });

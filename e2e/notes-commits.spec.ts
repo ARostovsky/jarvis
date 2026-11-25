@@ -17,7 +17,10 @@ const a = { name: uniq('nca'), id: '' }, b = { name: uniq('ncb'), id: '' };
 const journal = (w: typeof a) => `journal/${day}-${journalKey(w)}.md`;
 
 // The last commit: subject, body, files with status (-M: a move shows as R).
-const last = () => ({ subject: git('log', '-1', '--format=%s'), body: git('log', '-1', '--format=%b'), files: git('show', '-M', '--name-status', '--format=', 'HEAD').split('\n').sort() });
+// A workspace's first turn also commits its folder; only the tests about that look at it.
+let layout = false;
+const keep = (l: string) => layout || !/\tworkspaces\//.test(l);
+const last = () => ({ subject: git('log', '-1', '--format=%s'), body: git('log', '-1', '--format=%b'), files: git('show', '-M', '--name-status', '--format=', 'HEAD').split('\n').filter(keep).sort() });
 
 // Runs one arbiter turn and returns its commit.
 async function turn(page: import('@playwright/test').Page, w: typeof a, ...lines: string[]) {
@@ -37,10 +40,13 @@ test.beforeAll(async ({ request }) => {
 });
 
 test('a turn commits its own files with the notes_message subject', async ({ page }) => {
+  layout = true;
   const c = await turn(page, a, `write ${notes}/a.md from A`, `write ${notes}/${journal(a)} A was here`, 'tool mcp__jarvis__notes_message {"message":"Add the A notes\\nsecond line is dropped"}');
+  layout = false;
   expect(c.subject).toBe('Add the A notes');
   expect(c.body).toMatch(new RegExp(`Workspace: ${a.name}$`));
-  expect(c.files).toEqual(['A\ta.md', `A\t${journal(a)}`]);
+  // The workspace's own folder and the folder comes with its first commit.
+  expect(c.files).toEqual(['A\ta.md', `A\t${journal(a)}`, `A\tworkspaces/${a.id}/open-items.md`, `A\tworkspaces/${a.id}/status.md`]);
 });
 
 test('the other workspace commits only its files, also while the first one is in a Bash call', async ({ page }) => {
@@ -48,10 +54,12 @@ test('the other workspace commits only its files, also while the first one is in
   const gate = join(tmp('gate'), 'open');
   expect((await say(page, a.id, `write ${notes}/a2.md written before B`, `bash for i in $(seq 400); do [ -e ${gate} ] && break; sleep 0.05; done`)).ok()).toBe(true);
   await expect.poll(() => events(a.id).some((e) => e.type === 'tool' && e.name === 'Bash')).toBe(true);
+  layout = true;
   const c = await turn(page, b, `write ${notes}/b.md from B`, `write ${notes}/${journal(b)} B was here`, 'tool mcp__jarvis__notes_message {"message":"Add the B notes"}');
+  layout = false;
   expect(c.subject).toBe('Add the B notes');
   expect(c.body).toMatch(new RegExp(`Workspace: ${b.name}$`));
-  expect(c.files).toEqual(['A\tb.md', `A\t${journal(b)}`]);
+  expect(c.files).toEqual(['A\tb.md', `A\t${journal(b)}`, `A\tworkspaces/${b.id}/open-items.md`, `A\tworkspaces/${b.id}/status.md`]); // not A's folder
   writeFileSync(gate, '');
   await expect.poll(count).toBe(3);
   expect(last()).toEqual({ subject: 'Update a2.md', body: `Workspace: ${a.name}`, files: ['A\ta2.md'] });
@@ -114,7 +122,7 @@ const rename = async (request: import('@playwright/test').APIRequestContext, w: 
   w.name = name;
 };
 // The files of the last commit with their status, renames shown as a delete and an add.
-const changes = () => git('show', '--no-renames', '--name-status', '--format=', 'HEAD').split('\n').sort();
+const changes = () => git('show', '--no-renames', '--name-status', '--format=', 'HEAD').split('\n').filter(keep).sort();
 
 // Only a sanity check: the real guard is the uniqueSuffix unit test (test/slug.test.ts), as a clash needs two workspaces created 36^4 ms apart.
 test('workspaces never share an id suffix', async ({ request }) => {
