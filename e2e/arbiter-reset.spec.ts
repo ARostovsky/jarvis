@@ -207,7 +207,7 @@ async function selectArbiter(page: Page, notes?: string) {
   await open(page, name);
   await say(page, id, 'say warm');
   await expect.poll(() => arbiter(id, 'result').length).toBe(1);
-  await page.locator('#core').click();
+  await page.locator('#core').click({ force: true }); // the core's arcs spin, so its box changes every frame and it is never stable
   await expect.poll(() => page.evaluate(`wsLive.has(${JSON.stringify(id)})`)).toBe(true); // the confirm text follows the polled state
   return id;
 }
