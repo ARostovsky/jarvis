@@ -68,10 +68,10 @@ The full list (effort, plugins, reset bounds, Claude binary, every voice variabl
 
 `npm run check` (tsc), `npm test`, `npm run e2e` (Playwright with a fake SDK, no API calls). Internals, the HTTP API and recipes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
-## License
-
-[MIT](LICENSE)
-
 ## Token report
 
 `node scripts/token-report.ts [dataDir]` prints tokens, cost and context size per agent from the event logs, to compare consumption before and after a change.
+
+## License
+
+[MIT](LICENSE)

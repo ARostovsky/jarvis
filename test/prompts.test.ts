@@ -47,6 +47,7 @@ test('agentRow has no task and a short lastText', () => {
   assert.equal('task' in row, false);
   assert.equal('cwd' in row, false);
   assert.equal(row.lastText.length, 200);
+  assert.equal(agentRow({ id: 'a2', name: 'n', task: '', cwd: '', status: 'idle', lastText: '', costUsd: 0, parentId: 'arbiter', lead: true, model: 'opus' }).lead, true);
 });
 
 test('readSlice pages a long text with a cut notice and the pages join to the original', () => {
@@ -54,6 +55,7 @@ test('readSlice pages a long text with a cut notice and the pages join to the or
   const first = readSlice('a1', text);
   assert.match(first, /\[cut at 4000 of 10000 chars: call read_agent\("a1", offset=4000\) for the rest\]$/);
   assert.equal(readSlice('a1', 'short'), 'short');
+  assert.equal(readSlice('a1', 'short', 9), 'offset 9 past end (5 chars)');
   let got = '', off = 0;
   for (;;) { const p = readSlice('a1', text, off); const cut = p.indexOf('\n… [cut at'); got += cut < 0 ? p : p.slice(0, cut); if (cut < 0) break; off += 4000; }
   assert.equal(got, text);

@@ -1,11 +1,12 @@
 // Read-only token report from workspace event logs, to compare consumption before/after a change.
+// result.usage is the main loop's tokens of one turn (not cumulative, no sub-agents or helper calls), so turns are summed; costUsd is cumulative, so its max is taken.
 // Usage: node scripts/token-report.ts [dataDir=~/.local/share/jarvis] [--workspace <id>] [--json]
 // Logs written before usage was logged have cost and context size only; the token columns then show "-".
 import { readdirSync, readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 
-type Ev = { type: string; agentId?: string; costUsd?: number; tokens?: number; text?: string; name?: string; input?: unknown; categories?: Record<string, number>;
+type Ev = { type: string; agentId?: string; costUsd?: number; tokens?: number; text?: string; name?: string; input?: unknown; categories?: Record<string, { tokens: number; kind: string }>;
   usage?: { input: number; output: number; cacheRead: number; cacheCreate: number }; agent?: { id: string; parentId?: string; lead?: boolean; task?: string } };
 export type Row = { agent: string; role: string; turns: number; costUsd: number; input?: number; cacheRead?: number; cacheCreate?: number; output?: number; firstContext?: number; maxContext: number; overhead?: Record<string, number> };
 
@@ -22,7 +23,7 @@ export function report(events: Ev[]) {
   const add = (k: string, chars: number) => { const s = (sizes[k] ??= { n: 0, chars: 0 }); s.n++; s.chars += chars; };
   for (const e of events) {
     const id = e.agentId ?? e.agent?.id;
-    if (e.type === 'spawned' && e.agent) rows.set(e.agent.id, { agent: e.agent.id, role: !e.agent.parentId ? 'arbiter' : e.agent.lead ? 'lead' : 'agent', turns: 0, costUsd: 0, maxContext: 0 });
+    if (e.type === 'spawned' && e.agent && !rows.has(e.agent.id)) rows.set(e.agent.id, { agent: e.agent.id, role: !e.agent.parentId ? 'arbiter' : e.agent.lead ? 'lead' : 'agent', turns: 0, costUsd: 0, maxContext: 0 });
     const r = id ? rows.get(id) : undefined;
     if (e.type === 'result' && r) {
       r.turns++;
@@ -31,7 +32,7 @@ export function report(events: Ev[]) {
     } else if (e.type === 'context' && r) {
       r.firstContext ??= e.tokens;
       r.maxContext = Math.max(r.maxContext, e.tokens ?? 0);
-      if (e.categories && !r.overhead) r.overhead = Object.fromEntries(Object.entries(e.categories).filter(([k]) => !/^(messages|free_space|autocompact_buffer|compact_buffer)$/.test(k)));
+      if (e.categories && !r.overhead) r.overhead = Object.fromEntries(Object.entries(e.categories).filter(([k, c]) => c.kind === 'used' && k !== 'messages').map(([k, c]) => [k, c.tokens]));
     } else if (e.type === 'tool') add(`tool:${e.name}`, len(e.input));
     else if (e.type === 'routed' || e.type === 'text') add(e.type, len(e.text));
     else if (e.type === 'board') add('board', len(e.text));

@@ -587,13 +587,14 @@ const tokenUsage = (u: { input_tokens?: number | null; output_tokens?: number | 
   ({ input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheCreate: u.cache_creation_input_tokens ?? 0 });
 
 // What list_agents shows per agent: short fields only, never the spawn task.
-export function agentRow({ id, name, status, repo, costUsd, lastText }: Agent) {
-  return { id, name, status, repo, costUsd, lastText: lastText.slice(0, LIST_TEXT) };
+export function agentRow({ id, name, status, repo, costUsd, lastText, parentId, lead, model, effort }: Agent) {
+  return { id, name, status, parentId, lead, model, effort, repo, costUsd, lastText: lastText.slice(0, LIST_TEXT) };
 }
 
 // One page of an agent's last message for read_agent; a cut page says how to get the next one.
 export function readSlice(id: string, text: string, offset = 0, max = READ_MAX) {
   const end = offset + max;
+  if (offset > 0 && offset >= text.length) return `offset ${offset} past end (${text.length} chars)`;
   return end < text.length ? `${text.slice(offset, end)}\n… [cut at ${end} of ${text.length} chars: call read_agent("${id}", offset=${end}) for the rest]` : text.slice(offset);
 }
 
@@ -943,7 +944,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           q.getContextUsage({ detail: compacted ? 'full' : 'summary' }).then((u) => {
             if (sessions.get(a.id) !== s) return; // a reset replaced this session meanwhile: its size is gone
             a.context = { tokens: u.totalTokens, max: u.maxTokens };
-            emit('context', { agentId: a.id, ...a.context, categories: Object.fromEntries((u.categories ?? []).map((c) => [c.id ?? c.name, c.tokens])) }); // categories: scripts/token-report.ts
+            emit('context', { agentId: a.id, ...a.context, categories: Object.fromEntries((u.categories ?? []).map((c) => [c.id ?? c.name, { tokens: c.tokens, kind: c.kind }])) }); // categories: scripts/token-report.ts
           }, () => {}); // only an indicator: a failed measurement is not worth an error
           if (interrupted && a.status === 'stopped') kill(a.id, s); // the interrupted turn is accounted: end the session
         }
@@ -1084,8 +1085,10 @@ export function createWorkspace(meta: WorkspaceMeta) {
       hits.forEach((a) => ids.add(a.id));
     }
     const to2 = [...ids];
-    // An agent that re-posts the same text to the same recipients only adds tokens to every receiver; the user may repeat on purpose.
-    const dup = from !== 'user' && board.find((x) => x.from === from && x.text === text && x.to.length === to2.length && x.to.every((t) => ids.has(t)));
+    // An agent that re-posts its last note unchanged, before any recipient has read it, only adds a copy to every receiver. After delivery, or from the user, a repeat is posted.
+    const last = board.findLast((x) => x.from === from);
+    const dup = from !== 'user' && last && last.text === text && last.to.length === to2.length && last.to.every((t) => ids.has(t))
+      && [...agents.values()].filter((a) => a.id !== from && (last.to.includes(a.id) || last.to.includes('all'))).every((a) => (boardSeen.get(a.id) ?? 0) < last.n) ? last : undefined;
     if (dup) return { ...dup, duplicate: true as boolean };
     const note = { n: (board.at(-1)?.n ?? 0) + 1, from, to: to2, text };
     board.push(note);
