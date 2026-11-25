@@ -1,0 +1,15 @@
+[project]
+name = "jarvis-voice"
+version = "0.1.0"
+description = "Local speech-to-text sidecar for Jarvis (faster-whisper)"
+# dependency list for reference; setup.sh installs it directly (no package to build)
+requires-python = ">=3.10"
+dependencies = [
+    "faster-whisper>=1.2",
+    "numpy",
+    "nvidia-cublas-cu12",
+    "nvidia-cudnn-cu12==9.*",
+]
+
+[project.optional-dependencies]
+test = ["pytest"]

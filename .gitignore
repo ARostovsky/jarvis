@@ -6,3 +6,5 @@ state/
 .playwright-mcp/
 test-results/
 playwright-report/
+voice/.venv
+voice/__pycache__/
