@@ -2,7 +2,7 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { health, current as healthNow } from './health.ts';
+import { health, current as healthNow, maybeProbe } from './health.ts';
 import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
@@ -72,6 +72,7 @@ createServer(async (req, res) => {
     const send = () => res.write(`data: ${JSON.stringify(healthNow)}\n\n`);
     send();
     health.on('change', send);
+    maybeProbe(); // a client appeared: probe now if nothing ran lately, not at the next poll
     req.on('close', () => health.off('change', send));
   } else if (req.method === 'GET' && url.pathname === '/events') {
     const w = workspaces.get(url.searchParams.get('ws') ?? '');

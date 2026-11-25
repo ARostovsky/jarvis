@@ -21,6 +21,8 @@
 //   resetusage <tokens>     the turn on a reset seed starts with this many tokens; shared by all sessions of the process, 0 switches it off
 //   cost <usd>              the result reports this total_cost_usd
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
+//   apierror <code> [text]  an assistant message with this error code (e.g. authentication_failed, unknown) and text, then an is_error result with that text, as the CLI ends a failed API call
+//   subapierror <code>      an assistant message with this error code from a sub-agent (parent_tool_use_id set); the turn itself goes on
 //   option <name>           says "<name>=<the query option as JSON>", e.g. option resume
 //   perm <name> <json>      asks options.canUseTool for a tool call, as the real SDK does for a call it cannot decide (AskUserQuestion always),
 //                           then says "allow <updated input as JSON>" or "deny <message>"; runs nothing
@@ -150,6 +152,13 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         lastUsage = tokens += 30_000;
         const subtype = rest as SDKResultError['subtype'];
         return yield { ...base, uuid: randomUUID(), type: 'result', subtype, errors: [`fake ${rest}`], stop_reason: null, total_cost_usd: 0, is_error: true, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
+      } else if (cmd === 'apierror') {
+        const [code, ...words] = rest.split(' ');
+        const text = words.join(' ') || code;
+        yield { ...assistant([{ type: 'text', text, citations: null } as Assistant['content'][number]]), error: code as SDKAssistantMessage['error'] };
+        return yield { ...base, uuid: randomUUID(), type: 'result', subtype: 'success', result: text, stop_reason: null, total_cost_usd: costUsd, is_error: true, queued_turn_count: waiting.length, num_turns: 1, duration_ms: 0, duration_api_ms: 0, usage: {} as SDKResultMessage['usage'], modelUsage: {}, permission_denials: [] };
+      } else if (cmd === 'subapierror') {
+        yield { ...assistant([{ type: 'text', text: 'sub-agent failed', citations: null } as Assistant['content'][number]]), parent_tool_use_id: 'toolu_sub', error: rest as SDKAssistantMessage['error'] };
       } else if (cmd === 'usage') {
         usageTokens = Number(rest);
       } else if (cmd === 'trailing') {

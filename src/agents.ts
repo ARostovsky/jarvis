@@ -8,6 +8,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { basename, delimiter, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
+import { recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
@@ -595,7 +596,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   const agents = new Map<string, Agent>();
   let removedUsd = 0; // spend of deleted agents, rebuilt from the log (removed, removed_cost) so it survives restarts
-  type Session = { push: (text: string, track?: boolean) => void; abort: AbortController; q: Query; interrupting?: boolean; timer?: ReturnType<typeof setTimeout>; settle?: ReturnType<typeof setTimeout>; pushSeq: number; seenSeq: number; unsettled: { seq: number; text: string }[]; handled: { text: string; reply: string }[]; born: boolean; force?: boolean; check?: () => void; saveTimer?: ReturnType<typeof setTimeout> };
+  type Session = { push: (text: string, track?: boolean) => void; abort: AbortController; q: Query; interrupting?: boolean; timer?: ReturnType<typeof setTimeout>; settle?: ReturnType<typeof setTimeout>; pushedAt?: number; pushSeq: number; seenSeq: number; unsettled: { seq: number; text: string }[]; handled: { text: string; reply: string }[]; born: boolean; force?: boolean; check?: () => void; saveTimer?: ReturnType<typeof setTimeout> };
   const sessions = new Map<string, Session>();
   // Ends a session now and frees its slot, so a message sent after this starts a new one.
   const kill = (id: string, s: Session) => (s.abort.abort(), sessions.get(id) === s && sessions.delete(id));
@@ -742,6 +743,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         setStatus(a, 'running');
         held.delete(a.id);
         s.pushSeq++;
+        s.pushedAt = Date.now();
         if (track) s.unsettled.push({ seq: s.pushSeq, text }); // until a result with an empty SDK queue, the SDK may still fold this into a turn, run it later or merge it
         const queued = pending.get(a.id); // results of finished children go into this turn, not a later wake
         if (queued) (pending.delete(a.id), text = [...queued, text].join('\n\n'));
@@ -766,6 +768,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const base = a.costUsd;
     const current = () => !sessions.has(a.id) || sessions.get(a.id) === s; // false once kill() made room for a newer session: this pump must not touch its state
     let resetPhase = 'none' as ResetPhase, forced = false, ctx = 0, floor = 0, floorSet = false, blocked = false; // ctx: size of the last top-level call; floor: size of a reset session's first turn
+    let apiError: string | undefined, ttft = 0, ttftFrom = 0, userAt = 0; // health dot: the SDK's error of this turn (the text of an 'unknown' one), the longest wait for a first token, and the send or tool result it was measured from
     let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
     const bash = new Map<string, () => void>(); // Bash calls in flight that may change notes: tool_use id -> claims the notes files the call changed; key '' is a sub-agent's whole turn
     // One quiet second after an arbiter result (no push, no message from the SDK): nothing is running, so it is safe to ask for the notes or reset.
@@ -809,10 +812,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
         if (startsTurn) s.seenSeq = s.pushSeq; // pushes up to here reached the SDK before this turn's result
         if (m.type === 'stream_event') {
           const ev = m.event;
+          const from = Math.max(s.pushedAt ?? 0, userAt); // duration_api_ms is cumulative and counts sub-agents, so time the wait for a first token instead
+          if (m.parent_tool_use_id === null && from > ttftFrom) (ttft = Math.max(ttft, Date.now() - from), ttftFrom = from);
           if (m.parent_tool_use_id === null && ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
             emit('delta', { agentId: a.id, text: ev.delta.text });
           }
         } else if (m.type === 'system' && m.subtype === 'init') {
+          userAt = Date.now(); // CLI start and MCP connect are not the API's wait
           if (m.session_id !== a.sessionId) {
             a.sessionId = m.session_id;
             emit('session', { agentId: a.id, sessionId: m.session_id });
@@ -822,6 +828,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
             emit('runtime', { agentId: a.id, model: m.model });
           }
         } else if (m.type === 'system' && m.subtype === 'compact_boundary') {
+          userAt = Date.now();
           ctxAlerted = false;
           resetPhase = 'none';
           forced = false;
@@ -830,6 +837,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           ctx = m.compact_metadata.post_tokens ?? 0;
           emit('compacted', { agentId: a.id, trigger: m.compact_metadata.trigger, pre: m.compact_metadata.pre_tokens, post: m.compact_metadata.post_tokens });
         } else if (m.type === 'assistant') {
+          if (m.error && m.parent_tool_use_id === null) apiError = m.error === 'unknown' ? m.message.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ') : m.error;
           const u = m.message.usage;
           const used = (u.input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0) + (u.cache_read_input_tokens ?? 0);
           if (m.parent_tool_use_id === null) ctx = used;
@@ -851,9 +859,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
             }
           }
         } else if (m.type === 'user' && Array.isArray(m.message.content)) {
+          userAt = Date.now();
           for (const b of m.message.content) if (b.type === 'tool_result') bash.get(b.tool_use_id)?.(), bash.delete(b.tool_use_id);
         } else if (m.type === 'result') {
           const interrupted = !!s.interrupting; // this result ends a turn that stopAgent interrupted
+          if (!interrupted) recordOutcome(apiError ?? (m.is_error ? (m.subtype === 'success' ? m.result : m.subtype) : undefined), ttft);
+          apiError = undefined;
+          ttft = 0;
           s.interrupting = false;
           clearTimeout(s.timer);
           const spent = base + m.total_cost_usd - a.costUsd;
@@ -907,6 +919,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (current()) setStatus(a, 'stopped');
     } catch (e) {
       if (current()) {
+        recordOutcome((e as Error).message, 0);
         setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
         emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
       }
@@ -1718,3 +1731,13 @@ export function loadWorkspaces() {
   const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? readJson(REGISTRY) : [];
   for (const m of metas) workspaces.set(m.id, createWorkspace(m));
 }
+
+// The health dot's fallback: one Haiku call, no tools, when no real run has finished lately and a browser watches.
+setProbe(async (abortController) => {
+  const t = Date.now();
+  let err: string | undefined;
+  const q = query({ prompt: 'Reply with: ok', options: { model: 'haiku', maxTurns: 1, tools: [], persistSession: false, settingSources: [], settings: SETTINGS, pathToClaudeCodeExecutable: claudeBinary(), cwd: tmpdir(), abortController } });
+  for await (const m of q) if (m.type === 'assistant' && m.error) err = m.error === 'unknown' ? m.message.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ') : m.error;
+  if (abortController.signal.aborted) return; // timed out: the caller records that, a clean SDK end must not read as success
+  recordOutcome(err, Date.now() - t, t);
+});

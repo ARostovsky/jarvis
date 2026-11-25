@@ -13,7 +13,7 @@ The details behind the [README](../README.md): what the screen shows, controls, 
 
 ### The map
 
-Jarvis is in the center, agents around it. Each tab is a separate workspace: its own Jarvis, team and history. The tab bar spans the full width; the dot at the bottom left is the Anthropic status (below).
+Jarvis is in the center, agents around it. Each tab is a separate workspace: its own Jarvis, team and history. The tab bar spans the full width; the dot at the bottom left is the Claude health dot (below).
 
 ![Jarvis in the center, agents around it, Jarvis's chat on the right](screenshots/hero.png)
 
@@ -75,9 +75,9 @@ The recorder never outlives its use: it stops on release, on `Esc`, after 60 s, 
 
 The default model is `large-v3` (float16, beam 5): about 4 GB of VRAM at peak, loaded on the first recording and unloaded after 10 idle minutes. On CPU it falls back to `large-v3-turbo` (int8), which is slower than real time on a short clip. English and Russian are detected per recording. `JARVIS_VOICE_MODEL` picks another model.
 
-### Anthropic status
+### Claude health dot
 
-The dot at the bottom left, next to the link indicator, shows whether Anthropic's API is up: green all good, amber degraded, red outage, dark red critical, grey unknown (status page unreachable). Hover for the description and open incidents; click to open status.claude.com. It is global, not per workspace, so you can tell "Anthropic is down" from an agent error.
+The dot at the bottom left shows whether your Claude access works: green the last agent run succeeded, amber slow, rate limited or an open Anthropic incident, red auth, network or server (5xx) failure, dark red critical outage on the status page, grey unknown (nothing has run yet; the status page alone never turns it green). Bad prompts, tool errors and aborted runs do not change it. With no run for 10 minutes and the page open, Jarvis sends one tiny Haiku request to check. Hover for your last outcome (age, latency, error type) and the Anthropic status page text with open incidents; click to open status.claude.com. It is global, not per workspace.
 
 ### Notes folder
 

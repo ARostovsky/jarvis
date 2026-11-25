@@ -18,7 +18,7 @@ export default defineConfig({
     url: `${ORIGIN}/workspaces`,
     // Nothing listens on port 1: the status poll fails fast and no spec touches the network.
     // Agent sessions run on a scripted fake of the SDK: no API calls, no cost.
-    env: { PORT: String(PORT), XDG_DATA_HOME: DATA_HOME, JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/' },
+    env: { PORT: String(PORT), XDG_DATA_HOME: DATA_HOME, JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_HEALTH_PROBE: '0' },
     reuseExistingServer: false,
   },
 });

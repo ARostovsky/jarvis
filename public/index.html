@@ -184,7 +184,7 @@
 <nav id="tabs" aria-label="Workspaces"></nav>
 <div id="empty"><h2>NO WORKSPACES</h2><p>Create a workspace to start.</p><div><button id="emptyNew">NEW WORKSPACE</button><button id="emptyArchive" hidden>ARCHIVE</button></div></div>
 <div id="menu" role="menu"></div>
-<div id="status"><div id="conn">LINK…</div><a id="health" href="https://status.claude.com" target="_blank" rel="noopener" aria-label="Anthropic status" title="Anthropic status: checking…"></a></div>
+<div id="status"><div id="conn">LINK…</div><a id="health" href="https://status.claude.com" target="_blank" rel="noopener" aria-label="Claude health" title="Claude health: checking…"></a></div>
 <div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
 <svg id="view" viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
   <defs>
@@ -1041,7 +1041,9 @@ $('newwsForm').onsubmit = async (ev) => {
 new EventSource('/health').onmessage = (m) => {
   const h = JSON.parse(m.data);
   $('health').className = h.level;
-  $('health').title = [h.description, ...h.incidents, `checked ${new Date(h.checked).toLocaleTimeString()}`].join('\n');
+  const l = h.local;
+  const mine = l ? `Your Claude: ${l.ok ? 'ok' : l.kind} ${Math.round((Date.now() - l.at) / 60000)} min ago, ${l.latencyMs ? `, ${(l.latencyMs / 1000).toFixed(1)} s` : ''}` : 'Your Claude: no run recorded yet';
+  $('health').title = [mine, `Anthropic status: ${h.description}`, ...h.incidents, `checked ${new Date(h.checked).toLocaleTimeString()}`].join('\n');
 };
 
 function connect() {
