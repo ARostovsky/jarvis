@@ -45,9 +45,11 @@ flowchart LR
 | `src/agents.ts` | All domain logic: agents, SDK sessions, MCP tools, board, events, persistence, worktrees, workspaces, archive. Over a thousand lines. |
 | `src/health.ts` | Polls the Anthropic Statuspage every 60 s (10 s timeout, `If-None-Match`), derives one level from `status.indicator` and the `Claude API*` component (the worse wins), emits `change` on every poll. Any failure or bad JSON is `unknown`. |
 | `src/server.ts` | HTTP server: serves the page, SSE stream, JSON command table. Under a hundred lines. |
+| `src/voice.ts` | Optional voice input, imported by `server.ts` only when `JARVIS_VOICE` is set. Capture: `createRecorder` spawns `pw-record --raw --rate 16000 --channels 1 --format s16 -` (default source, no `--target`; `--raw` because stdout otherwise starts with an AU header), keeps the samples in memory (trimmed to whole s16 samples at stop) and allows one recording at a time; `start` returns an id that `stop`, `cancel` and `level` must pass, so a stale tab cannot touch another tab's recording. `start` resolves with the first audio (3 s without any: failure) and fails with `pw-record not found` or the command's last stderr line. The child dies on stop, cancel, the `JARVIS_VOICE_MAX_S` cap (samples are kept for stop), a lease that every `level()` call renews (`JARVIS_VOICE_LEASE_S`, a vanished page leaves no open microphone), and when Jarvis exits (`exit` hook, plus `setpriv --pdeathsig TERM` for SIGKILL). Preflight (`pw-record` in PATH, then `<python> -I -c "import faster_whisper"`, once; failure logs one line and turns voice off) and the sidecar manager (lazy spawn of `voice/server.py`, one job at a time, idle kill, a crash or a per-job timeout fails one job and the next restarts it). `withDebugDump` wraps the transcriber when `JARVIS_VOICE_DEBUG_WAV` is set. `server.ts` calls `listen` first and runs the preflight afterwards, so a slow preflight never delays the start. The `/voice` routes and `voice` and `voiceMaxS` in `GET /workspaces` appear once it passes. Protocol: stdin frames of 4-byte big-endian length + PCM, stdout one JSON line per frame (`{text}` or `{error}`), stderr logs. |
+| `voice/` | The Python sidecar (faster-whisper, VAD, filters) and `setup.sh` (creates `voice/.venv`, downloads `large-v3` and `large-v3-turbo`). Not touched by `npm ci`. |
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. |
-| `e2e/` | Playwright specs, `helpers.ts` and `fake-sdk.ts`, the scripted stand-in for the SDK (see [Running and checking](#running-and-checking)). |
+| `e2e/` | Playwright specs, `helpers.ts`, `fake-sdk.ts` (the scripted stand-in for the SDK) and `fake-voice.ts` (stand-in for the voice sidecar) and `fake-capture.ts` (stand-in for `pw-record`: raw PCM tone; modes `silent`, `exit`) (see [Running and checking](#running-and-checking)). |
 | `docs/` | This file and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
 | `tsconfig.json` | Type check only (`noEmit`). Node runs `.ts` directly. |
 
@@ -293,10 +295,14 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | Method and path | Body | Returns |
 |-----------------|------|---------|
 | `GET /` | | the UI |
-| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd, arbiterLive}], archived, settingsModel, arbiterModel}` |
+| `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, running, waiting, costUsd, arbiterLive}], archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS?}`; `voice` is true only when voice input is on and its preflight passed; `voiceMaxS` (the recording cap) is then set too, and the UI's auto-stop timer uses it |
 | `GET /recent` | | `{project: [path], notes: [path]}`: folders used before, newest first, existing only; read when the New workspace dialog opens; seeded once from existing workspaces |
 | `GET /health` | | SSE, global: the current `{level, description, incidents, checked}` (`level`: `ok\|minor\|major\|critical\|unknown`), then one per poll. Not in any event log |
 | `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
+| `POST /voice/start` | `{}` | `{id}` once `pw-record` delivers audio; 409 `already recording`; 500 with the reason when it is missing, exits or stays silent. Same Host, Origin and content-type checks as other POSTs (403). The `/voice` routes exist only when voice is on, 404 otherwise |
+| `POST /voice/stop` | `{id}` | `{text}` after transcribing the recording (empty = no speech or no audio); 409 when nothing records or the id is another recording's; 400 with the sidecar's error text |
+| `POST /voice/cancel` | `{id}` | 204; kills the recorder and discards the audio; 409 for another recording's id, a no-op when nothing records |
+| `POST /voice/level` | `{id}` | `{recording, level}`, `level` 0 to 1 (RMS of the last 100 ms, times 4); `recording: false` for an unknown id, so a stale tab learns it lost its recording. A POST, not a GET, because it renews the lease and so gets the Origin and content-type checks. The UI chains one request after each answer (100 ms apart) while held and goes idle with a toast when `recording` is false |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |
 | `POST /workspaces/reorder` | `{ids}` tab order; unknown ids ignored, unlisted ones go last; persisted in `workspaces.json` | 204 |
@@ -359,6 +365,19 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_PLAYWRIGHT` | `1` | Playwright MCP for every session; `headed` = visible windows; `0` = off |
 | `JARVIS_STATUS_URL` | `https://status.claude.com/api/v2/summary.json` | Statuspage summary the status dot polls. Tests only: `e2e` points it at a dead port, `e2e/health.spec.ts` at a stub |
 | `JARVIS_STATUS_POLL_MS` | `60000` | Tests only: status poll interval |
+| `JARVIS_VOICE` | unset | Voice input: `1` on, `cpu` force CPU, unset = off (no route, no process, `voice: false`) |
+| `JARVIS_VOICE_AUTOSEND` | `1` | Voice: `0` inserts the transcript into `#dinput`; otherwise it is posted to `/send` for the agent selected at press time (`{ws, id}` captured then, draft untouched). Reported to the UI as `voiceAutosend` in `GET /workspaces` |
+| `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Interpreter for preflight and sidecar |
+| `JARVIS_VOICE_MODEL` | `large-v3` | Sidecar model (float16, beam 5, about 4 GB VRAM peak; CPU fallback `large-v3-turbo` int8) |
+| `JARVIS_VOICE_LANGS` | `en,ru` | Sidecar languages |
+| `JARVIS_VOICE_IDLE_S` | `600` | Idle seconds before the sidecar is killed (invalid values fall back to 600) |
+| `JARVIS_VOICE_TIMEOUT_S` | `120` | Per-job limit: a job running longer is failed and the sidecar killed; the next job respawns it |
+| `JARVIS_VOICE_PROMPT` | see README | Sidecar: Whisper `initial_prompt` (empty = none). `stt.py` drops a result equal or near-equal to it, starting like it, or repeating a run of 2+ of its terms (`echoes_prompt`; a prompt under 4 words only when repeated whole), because Whisper can echo the prompt on noise. The default is a plain term list: an echoed sentence would be sent to an agent |
+| `JARVIS_VOICE_DEBUG_WAV` | unset | Directory; `withDebugDump` in `src/voice.ts` writes each clip to `<dir>/last.wav` (16 kHz mono s16) and the text to `<dir>/last.txt`, overwriting (directory `0700`, files `0600`, written through a temp file and renamed so a symlink at `last.wav` is replaced, not followed). Exception to the no-storage rule, see invariant 9 |
+| `JARVIS_VOICE_MAX_S` | `60` | Recording cap in seconds; capture stops, the samples stay for `/voice/stop` |
+| `JARVIS_VOICE_LEASE_S` | `4` | A recording whose `/voice/level` is not polled for this long is killed and discarded |
+| `JARVIS_VOICE_CAPTURE_CMD` | `pw-record ...` | Tests only: whole capture command (`node e2e/fake-capture.ts`); it must write raw 16 kHz mono s16le to stdout. Its executable is the one the preflight looks for |
+| `JARVIS_VOICE_CMD` | unset | Tests only: whole spawn command of the sidecar, skips the Python preflight (`node e2e/fake-voice.ts`) |
 | `JARVIS_FAKE_SDK` | unset | Tests only: path of a module whose `query()` replaces the SDK's (`e2e/fake-sdk.ts`) |
 
 ## Invariants you must keep
@@ -371,6 +390,7 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 6. **Depth limit.** `MAX_DEPTH` stops agent trees from growing without bound.
 7. **The server never runs git on config agents can write.** Server-side git takes no hooks or config from a folder agents can write to: it passes an explicit `--git-dir` that lies outside it, derived from trusted state (the Jarvis notes git dir or the enclosing repo for notes, `a.repo` plus the worktree name for agent worktrees), and never looks into repos nested inside it (see Notes folder and Workdirs). Anything there would run in the server process with no permission check.
 8. **A reset only swaps the arbiter's session.** An arbiter context reset never moves or stops agents, the board or the event log.
+9. **Voice is off by default.** Without `JARVIS_VOICE` nothing voice-related loads, runs or is routed. Audio lives in memory only (the server records it; the browser never sees a microphone): never written to disk, never logged to `server.log`, and neither is the transcript. The one exception is the opt-in `JARVIS_VOICE_DEBUG_WAV=<dir>`, which deliberately writes the last clip and its text to disk; the "never stored" rule holds only while it is unset. With autosend (default) the transcript is posted to `/send` like typed text, so it lands in the event log as a user message; `JARVIS_VOICE_AUTOSEND=0` only inserts it into the input box. The UI applies the typing guard (read-only input for agents with a lead) to recording and to the send.
 
 ## Recipes: common changes
 

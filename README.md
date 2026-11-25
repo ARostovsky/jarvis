@@ -80,6 +80,24 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 ![A big team: two leads with their helpers out, one folded into +5, and Jarvis hiding 9 idle agents](docs/screenshots/fold.png)
 
+### Voice input (optional)
+
+Off by default. A mic button next to SEND turns speech into text with a local Whisper model (faster-whisper in a Python sidecar). Jarvis itself records the microphone through PipeWire, so the browser asks for no permission. Audio stays on your machine and is never stored (unless you set `JARVIS_VOICE_DEBUG_WAV`, see the env table); on release the transcript is sent at once to the agent that was selected when you started, like a voice message, and your draft stays as it was. With `JARVIS_VOICE_AUTOSEND=0` it lands in the input box at the caret instead and is never sent by itself. A failed send puts the text into that agent's draft.
+
+To enable it:
+
+1. Linux with PipeWire and `pw-record` (package `pipewire`, or `pipewire-bin` / `pipewire-utils`). Jarvis records the default input of your sound server: the one `wpctl status` marks with `*` under Sources.
+2. Set up Python with `faster-whisper` (`voice/setup.sh` creates `voice/.venv` and fetches the models; Jarvis uses that venv by default), or point `JARVIS_VOICE_PYTHON` at a Python that already has it.
+3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces CPU).
+
+If `pw-record`, Python or `faster-whisper` is missing, Jarvis starts as usual, logs one `voice disabled: ...` line (for example `voice disabled: pw-record not found`) to `server.log` and shows no mic button. The check runs after the server starts, so the mic button appears a moment later (reload the page if it is missing right after a start).
+
+Push-to-talk: hold the mic button, or hold `Ctrl+Space` in the input box or `Alt+V` anywhere, and release to transcribe and send the text to the agent that was selected when you started (`JARVIS_VOICE_AUTOSEND=0` puts it into the input box instead). Voice follows the same guard as typing: for an agent that works for a lead the input is read-only, so recording does not start until you double-click the input to unlock it. While it transcribes the button shows `transcribing…` and ignores presses. A tap shorter than about 0.3 s does nothing. `Esc` while holding cancels (with autosend, so does switching to another window); `Esc` and switching windows are ignored once the button shows `transcribing…`: the text is already on its way and still arrives, and `Esc` never unsends it. Recording stops by itself after 60 s (`JARVIS_VOICE_MAX_S`). If the server ends a recording on its own (it lost track of the page, or restarted), the button goes back to idle and a toast says `Recording stopped`. The button turns red and shows a level meter while it records. Recording starts when Jarvis has the first audio from `pw-record`, about a tenth of a second after the press, so wait for the red button before the first word. If `pw-record` cannot start, a toast says why. A muted microphone records silence and gives `No speech recognized`: check `wpctl status`.
+
+The recorder never outlives its use: it stops on release, on `Esc`, after 60 s, when the page stops reporting for 4 s (tab closed, crash), and when Jarvis exits. Only the tab that started a recording can stop or cancel it.
+
+The default model is `large-v3` (float16, beam 5): about 4 GB of VRAM at peak, loaded on the first recording and unloaded after 10 idle minutes. On CPU it falls back to `large-v3-turbo` (int8), which is slower than real time on a short clip. English and Russian are detected per recording. `JARVIS_VOICE_MODEL` picks another model.
+
 ### Anthropic status
 
 The dot at the bottom left, next to the link indicator, shows whether Anthropic's API is up: green all good, amber degraded, red outage, dark red critical, grey unknown (status page unreachable). Hover for the description and open incidents; click to open status.claude.com. It is global, not per workspace, so you can tell "Anthropic is down" from an agent error.
@@ -132,6 +150,17 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_RESET_SAVE_TIMEOUT_MS` | `120000` | Longest the RESET button waits for Jarvis to save its notes before it resets anyway |
 | `JARVIS_CLAUDE_PATH` | `claude` on `PATH` | Claude Code binary sessions run. Default is the first executable `claude` on `PATH` (the auto-updating install), picked up again at each session start. It falls back to the build bundled in the SDK package when none is found, when `claude --version` fails, or when it is older than the bundled one. `bundled` forces the bundled build (escape hatch); the choice is logged at startup |
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
+| `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces CPU. See Voice input |
+| `JARVIS_VOICE_AUTOSEND` | `1` | On release the transcript is sent at once to the agent that was selected when recording started (like a Telegram voice message); your draft stays untouched. `0` inserts it into the input box instead, without sending |
+| `JARVIS_VOICE_MAX_S` | `60` | Seconds after which the server stops a recording by itself (the audio so far is still transcribed on release) |
+| `JARVIS_VOICE_LEASE_S` | `4` | Seconds without a level poll from the page after which the server discards a recording and closes the microphone |
+| `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Python with `faster-whisper` for the voice sidecar |
+| `JARVIS_VOICE_MODEL` | `large-v3` | Whisper model of the sidecar |
+| `JARVIS_VOICE_LANGS` | `en,ru` | Languages the sidecar picks from |
+| `JARVIS_VOICE_IDLE_S` | `600` | Idle seconds before the sidecar exits and frees VRAM |
+| `JARVIS_VOICE_TIMEOUT_S` | `120` | Seconds one recording may take to transcribe; then the sidecar is killed, the request fails and the next one restarts it |
+| `JARVIS_VOICE_PROMPT` | `Jarvis, arbiter, agent, workspace, Kafka, npm, git diff, pull request, commit, branch` | Whisper initial prompt: biases recognition toward these names and terms. Empty turns it off. Keep it a plain list of terms, not a sentence: a result that equals or nearly equals the prompt, repeats its start, or repeats a run of two or more of its terms is dropped as an echo (a prompt under 4 words only when repeated whole) |
+| `JARVIS_VOICE_DEBUG_WAV` | unset (off) | Directory. **Deliberately writes your audio and its transcript to disk**: every recording overwrites `<dir>/last.wav` (16 kHz mono s16) and `<dir>/last.txt`. For diagnosing recognition quality; leave unset otherwise |
 
 Data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never in this repo.
 
