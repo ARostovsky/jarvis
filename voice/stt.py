@@ -45,9 +45,13 @@ DROP_PHRASES = ("продолжение следует", "спасибо за п
 DOUBT_PHRASES = ("thank you", "спасибо", "you", "до новых встреч")
 DOUBT_NO_SPEECH = 0.3
 DOUBT_VOICED_S = 0.6
-# Bias for names and terms Whisper mishears. JARVIS_VOICE_PROMPT overrides it; an empty value turns it off.
+# Bias for English names and dev terms spoken inside Russian speech, which Whisper otherwise transliterates.
+# JARVIS_VOICE_PROMPT is appended to it; JARVIS_VOICE_PROMPT_DEFAULT=0 leaves it out.
 # A plain list of terms, never a sentence: Whisper echoes parts of the prompt, and an echoed command would be sent to an agent.
-DEFAULT_PROMPT = "Jarvis, arbiter, agent, workspace, Kafka, npm, git diff, pull request, commit, branch"
+# Neighbours are ordered so no two form a phrase someone says alone ("git commit", "npm test"): a run of 2 terms is an echo.
+DEFAULT_PROMPT = ("Jarvis, workspace, Claude, worktree, arbiter, Kafka, Opus, agent, TypeScript, spawn, Python, board, "
+                  "Docker, notes, git, API, commit, Sonnet, branch, CI, rebase, bug, merge, e2e, push, refactor, "
+                  "pull request, deploy, PR, fix, main, diff, npm, review, test")
 PROMPT_ECHO = 0.8  # similarity at which a result counts as the prompt echoed back (Whisper does that on noise)
 VAD_PAD_S = 0.4  # context kept around the speech, as faster-whisper pads by default
 
@@ -169,7 +173,8 @@ class ArtifactFilter:
 
 
 def prompt_from_env() -> str:
-    return os.environ.get("JARVIS_VOICE_PROMPT", DEFAULT_PROMPT).strip()
+    base = "" if os.environ.get("JARVIS_VOICE_PROMPT_DEFAULT", "").strip() == "0" else DEFAULT_PROMPT
+    return ", ".join(p for p in (base, os.environ.get("JARVIS_VOICE_PROMPT", "").strip()) if p)
 
 
 def echoes_prompt(text: str, prompt: str) -> bool:

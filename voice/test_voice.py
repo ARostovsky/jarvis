@@ -251,11 +251,39 @@ def fake_transcriber(texts, prompt):
 
 def test_prompt_from_env(monkeypatch):
     monkeypatch.delenv("JARVIS_VOICE_PROMPT", raising=False)
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT_DEFAULT", raising=False)
     assert stt.prompt_from_env() == stt.DEFAULT_PROMPT
     monkeypatch.setenv("JARVIS_VOICE_PROMPT", "")
-    assert stt.prompt_from_env() == ""
+    assert stt.prompt_from_env() == stt.DEFAULT_PROMPT
     monkeypatch.setenv("JARVIS_VOICE_PROMPT", " Foo, bar ")
+    assert stt.prompt_from_env() == stt.DEFAULT_PROMPT + ", Foo, bar"
+    monkeypatch.setenv("JARVIS_VOICE_PROMPT_DEFAULT", "0")
     assert stt.prompt_from_env() == "Foo, bar"
+    monkeypatch.setenv("JARVIS_VOICE_PROMPT", "")
+    assert stt.prompt_from_env() == ""
+
+
+def test_default_prompt_reaches_the_model_when_env_unset(monkeypatch):
+    import faster_whisper
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT", raising=False)
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT_DEFAULT", raising=False)
+    calls = []
+
+    def transcribe(audio, **kw):
+        calls.append(kw)
+        return [], SimpleNamespace(language="en", all_language_probs=None)
+
+    monkeypatch.setattr(faster_whisper, "WhisperModel", lambda *a, **k: SimpleNamespace(transcribe=transcribe))
+    stt.Transcriber(device="cpu").transcribe(np.zeros(16000, np.float32))
+    assert calls and all(kw["initial_prompt"] == stt.DEFAULT_PROMPT for kw in calls)
+
+
+def test_default_prompt_terms_are_short_and_never_pair_into_common_phrases():
+    assert len(stt.DEFAULT_PROMPT.split()) < 60  # Whisper keeps only ~224 prompt tokens
+    for phrase in ("git commit", "git push", "git rebase", "git merge", "git diff", "npm test", "e2e test",
+                   "code review", "main branch", "fix bug", "bug fix", "merge main", "Claude Opus", "Claude Sonnet",
+                   "PR review", "spawn agent", "Kafka test"):
+        assert not stt.echoes_prompt(phrase, stt.DEFAULT_PROMPT), phrase
 
 
 def test_prompt_is_passed_to_whisper_unless_empty():
@@ -277,8 +305,8 @@ def test_prompt_echo_is_dropped_but_real_speech_survives():
     audio = np.zeros(16000, np.float32)
     assert fake_transcriber([p], p)[0].transcribe(audio) == ""
     assert fake_transcriber([p[:50], p[50:]], p)[0].transcribe(audio) == ""  # echoed across two segments
-    assert fake_transcriber(["git diff, pull request, commit, branch."], p)[0].transcribe(audio) == ""  # the tail
-    assert fake_transcriber(["Pull request, commit"], p)[0].transcribe(audio) == ""  # a run of terms
+    assert fake_transcriber(["main, diff, npm, review, test."], p)[0].transcribe(audio) == ""  # the tail
+    assert fake_transcriber(["Push, refactor, pull request"], p)[0].transcribe(audio) == ""  # a run of terms
     assert fake_transcriber(["npm"], p)[0].transcribe(audio) == "npm"
     assert fake_transcriber(["git diff"], p)[0].transcribe(audio) == "git diff"
     assert fake_transcriber(["npm test"], p)[0].transcribe(audio) == "npm test"
