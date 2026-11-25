@@ -82,7 +82,8 @@ test.describe('voice on (autosend off)', () => {
   test('releasing the pointer outside the button still ends the recording', async ({ page }) => {
     await setup(page);
     await hold(page);
-    await page.mouse.move(5, 5);
+    const b = (await page.locator('#mic').boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y - 30); // outside the button, inside the 60 px band
     await expect(page.locator('#mic')).toHaveClass('rec');
     await page.mouse.up();
     await expect(page.locator('#dinput')).toHaveValue('hello from voice');
@@ -159,17 +160,91 @@ test.describe('voice on (autosend off)', () => {
     await expect(page.locator('#dinput')).toHaveValue('hello from voice');
   });
 
-  test('Escape while transcribing does not abort it: the text still arrives', async ({ page }) => {
+  test('Escape while transcribing discards the text, the sidecar still finishes', async ({ page }) => {
     await setup(page);
     await page.route('**/voice/stop', async (r) => { await new Promise((ok) => setTimeout(ok, 700)); await r.continue(); });
     await hold(page, 400);
     await page.mouse.up();
     await expect(page.locator('#mic')).toHaveClass('busy');
+    await expect(page.locator('#recbar')).toHaveText('transcribing… Esc to discard');
     await page.keyboard.press('Escape');
     await page.evaluate(() => dispatchEvent(new Event('blur')));
     await expect(page.locator('#mic')).toHaveClass('busy');
+    await expect(page.locator('#mic')).not.toHaveClass(/busy/); // the answer arrived...
+    await expect(page.locator('#direct')).not.toHaveClass(/vbar/);
+    expect(await page.locator('#dinput').inputValue()).toBe(''); // ...and was dropped
+    await page.unroute('**/voice/stop');
+    await hold(page, 400); // not stuck: the next hold works
+    await page.mouse.up();
     await expect(page.locator('#dinput')).toHaveValue('hello from voice');
+  });
+
+  test('while recording a strip replaces SEND and shows the timer and the hints', async ({ page }) => {
+    await setup(page);
+    await expect(page.locator('#send')).toBeVisible();
+    await hold(page, 1200);
+    await expect(page.locator('#send')).toBeHidden();
+    await expect(page.locator('#recbar')).toHaveText(/^● 0:0[1-9] · release to send · Esc \/ drag away to cancel$/);
+    await page.mouse.up();
+    await expect(page.locator('#send')).toBeVisible();
+  });
+
+  test('a short press (under 400 ms) cancels: no stop request, nothing inserted', async ({ page }) => {
+    await setup(page);
+    const n = posts(page), cancels = { count: 0 };
+    page.on('request', (r) => r.url().endsWith('/voice/cancel') && cancels.count++);
+    await page.focus('#dinput');
+    await page.keyboard.down('Alt'); await page.keyboard.down('KeyV'); // keyboard hold
+    await expect(page.locator('#mic')).toHaveClass('rec');
+    await page.keyboard.up('KeyV'); await page.keyboard.up('Alt');
+    await expect.poll(() => cancels.count).toBe(1);
+    await page.locator('#mic').hover(); // button hold
+    await page.mouse.down();
+    await expect(page.locator('#mic')).toHaveClass('rec');
+    await page.mouse.up();
+    await expect.poll(() => cancels.count).toBe(2);
     await expect(page.locator('#mic')).not.toHaveClass(/rec|busy/);
+    await page.waitForTimeout(300);
+    expect(n.count).toBe(0);
+    expect(await page.locator('#dinput').inputValue()).toBe('');
+  });
+
+  test('Escape while holding the keys cancels, the later key release sends nothing, and the panel stays open', async ({ page }) => {
+    await setup(page);
+    const n = posts(page);
+    await page.focus('#dinput');
+    await page.keyboard.down('Alt'); await page.keyboard.down('KeyV');
+    await expect(page.locator('#mic')).toHaveClass('rec');
+    await page.waitForTimeout(500);
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mic')).not.toHaveClass(/rec/);
+    await page.keyboard.up('KeyV'); await page.keyboard.up('Alt');
+    await page.waitForTimeout(300);
+    expect(n.count).toBe(0);
+    await expect(page.locator('#panel')).toHaveClass(/open/); // Esc did not also close the panel
+    expect(await page.locator('#dinput').inputValue()).toBe('');
+  });
+
+  test('dragging away from the button enters the cancel state, moving back re-arms, releasing away cancels', async ({ page }) => {
+    await setup(page);
+    const n = posts(page), cancels = { count: 0 };
+    page.on('request', (r) => r.url().endsWith('/voice/cancel') && cancels.count++);
+    await hold(page, 500);
+    const b = (await page.locator('#mic').boundingBox())!;
+    await page.mouse.move(b.x + b.width / 2, b.y - 120);
+    await expect(page.locator('#mic')).toHaveClass(/away/);
+    await expect(page.locator('#recbar')).toContainText('release to cancel');
+    await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); // back: re-armed
+    await expect(page.locator('#mic')).not.toHaveClass(/away/);
+    await expect(page.locator('#recbar')).toContainText('release to send');
+    await page.mouse.move(b.x + b.width / 2, b.y - 120);
+    await expect(page.locator('#mic')).toHaveClass(/away/);
+    await page.mouse.up();
+    await expect(page.locator('#mic')).not.toHaveClass(/rec|busy/);
+    await expect.poll(() => cancels.count).toBe(1);
+    await page.waitForTimeout(300);
+    expect(n.count).toBe(0);
+    expect(await page.locator('#dinput').inputValue()).toBe('');
   });
 
   test('the level poll is one request at a time and stops after release', async ({ page }) => {
@@ -399,6 +474,18 @@ test.describe('voice autosend', () => {
     expect(await page.locator('#dinput').inputValue()).toBe('');
   });
 
+  test('Escape while transcribing: the transcript is not sent', async ({ page }) => {
+    await setup(page);
+    const l = sends(page);
+    await page.route('**/voice/stop', async (r) => { await new Promise((ok) => setTimeout(ok, 600)); await r.continue(); });
+    await hold(page);
+    await expect(page.locator('#mic')).toHaveClass('busy');
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#mic')).not.toHaveClass(/busy/);
+    await page.waitForTimeout(300);
+    expect(l.length).toBe(0);
+  });
+
   test('a failed send keeps the text in the draft', async ({ page }) => {
     await setup(page);
     await page.route('**/send', (r) => r.fulfill({ status: 400, body: 'boom' }));
@@ -448,16 +535,18 @@ test.describe('voice autosend', () => {
     page.on('request', (r) => r.url().endsWith('/voice/start') && starts.count++);
     await page.locator('#nodes .node', { hasText: 'sub1' }).press('Enter');
     await expect(page.locator('#dinput')).toHaveJSProperty('readOnly', true);
-    await page.locator('#mic').hover();
-    await page.mouse.down();
-    await page.mouse.up();
-    await expect(page.locator('#toastText')).toContainText('double-click the input to unlock');
+    for (const sel of ['#send', '#mic']) { // the mic looks and acts disabled like SEND
+      await expect(page.locator(sel)).toHaveCSS('opacity', '0.4');
+      await expect(page.locator(sel)).toHaveCSS('pointer-events', 'none');
+    }
     await page.keyboard.down('Alt'); await page.keyboard.down('KeyV'); await page.keyboard.up('KeyV'); await page.keyboard.up('Alt');
+    await expect(page.locator('#toastText')).toContainText('double-click the input to unlock'); // the shortcut guard stays
     await page.waitForTimeout(300);
     expect(starts.count).toBe(0);
     expect(l.length + n.count).toBe(0);
     await page.locator('#dinput').dblclick();
     await expect(page.locator('#dinput')).toHaveJSProperty('readOnly', false);
+    await expect(page.locator('#mic')).toHaveCSS('opacity', '1');
     await hold(page);
     await expect.poll(() => l.length).toBe(1);
     expect(l[0]).toMatchObject({ id: 'sub1', text: 'hello from voice' });
