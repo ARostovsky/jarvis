@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listProviders, listProviderFiles, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -36,6 +36,7 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/reorder': (b) => reorderWorkspaces(Array.isArray(b.ids) ? b.ids.map(String) : []),
   '/workspaces/notes': (b) => setWorkspaceNotes(String(b.ws), b.notes ? String(b.notes) : undefined),
+  '/workspaces/providers': (b) => setWorkspaceProviders(String(b.ws), b.providers),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
   '/workspaces/archived/info': (b) => archivedInfo(String(b.id)),
@@ -49,6 +50,9 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/stopall': (b) => ws(b.ws).stopAll(),
   '/config': (b) => ws(b.ws).configure(String(b.id), { model: b.model ? String(b.model) : undefined, effort: b.effort || undefined }),
   '/delete': (b) => ws(b.ws).deleteAgent(String(b.id), b.dirty === 'commit' || b.dirty === 'discard' ? b.dirty : undefined),
+  '/providers/approve': (b) => approveProvider(String(b.name), String(b.hash)),
+  '/providers/reject': (b) => rejectProvider(String(b.name), String(b.hash), b.reason ? String(b.reason) : undefined),
+  '/panels/action': ({ ws: id, panelId, action, ...args }) => ws(id).panels.runAction(String(panelId), String(action), args),
   '/board': (b) => void ws(b.ws).postNote('user', Array.isArray(b.to) ? b.to.map(String) : ['all'], String(b.text)),
 };
 
@@ -64,6 +68,16 @@ createServer(async (req, res) => {
   } else if (req.method === 'GET' && url.pathname === '/workspaces') {
     const body = { workspaces: [...workspaces.values()].map((w) => w.summary()), archived: listArchived(), settingsModel: SETTINGS_MODEL, voice: !!voice, voiceAutosend: process.env.JARVIS_VOICE_AUTOSEND !== '0', voiceMaxS: voice?.maxS, arbiterModel: ARBITER_MODEL };
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+  } else if (req.method === 'GET' && url.pathname === '/panels') {
+    const w = workspaces.get(url.searchParams.get('ws') ?? '');
+    if (!w) return void res.writeHead(404).end();
+    w.refreshOpenItems(); // re-read the file: the watcher may lag
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(w.panels.panels()));
+  } else if (req.method === 'GET' && (url.pathname === '/providers' || url.pathname === '/providers/files')) {
+    try {
+      const out = url.pathname === '/providers' ? listProviders() : listProviderFiles(url.searchParams.get('name') ?? '', url.searchParams.get('hash') ?? '');
+      res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
+    } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
   } else if (req.method === 'GET' && url.pathname === '/recent') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
   } else if (req.method === 'GET' && url.pathname === '/health') {

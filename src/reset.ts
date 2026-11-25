@@ -1,4 +1,5 @@
 // Automatic arbiter context reset: when to act and what the fresh session is told. Pure, so the logic is unit-tested without a session.
+import { openItemsSeed } from './openitems-wiring.ts';
 
 // A configured bound lowered to 60% of the model window once that is known; the plain bound until then. 0 stays 0 (off).
 export const resetLimit = (bound: number, max?: number) => (bound > 0 ? (max ? Math.min(bound, 0.6 * max) : bound) : 0);
@@ -20,6 +21,7 @@ export type SeedFacts = {
   notes?: string;
   wsNotes?: string; // this workspace's own folder under notes
   agents: { id: string; name: string; status: string; repo?: string; lastText: string }[];
+  openItems?: string[]; // texts of the open and parked items of the panel (only with notes)
   last: string; // the arbiter's last assistant text
   unhandled: string[]; // sent to the old session, no result for them yet: the SDK may not have handled them
   handled: { text: string; reply: string }[]; // sent while it was asked to save, answered by the old session
@@ -37,6 +39,8 @@ export function resetSeed(f: SeedFacts): string {
   if (f.notes) out.push(f.wsNotes
     ? `Notes folder: ${f.notes}. Your own files: ${f.wsNotes}/status.md, ${f.wsNotes}/open-items.md and your journal. Read README.md, CLAUDE.md and those first to recover the state. Other workspaces' state: ${f.notes}/workspaces/.`
     : `Notes folder: ${f.notes}. Read README.md, CLAUDE.md, status.md and your journal there first to recover the state.`);
+  const oi = f.notes ? openItemsSeed(f.openItems ?? []) : '';
+  if (oi) out.push(oi);
   // The agent list gets its own budget, so many agents cannot push the last text and late messages out of the cap.
   const lines: string[] = [];
   let size = 0;
