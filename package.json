@@ -4,7 +4,7 @@
   "description": "One AI arbiter that spawns, steers and watches a team of Claude Code agents, with a live web map.",
   "scripts": {
     "check": "tsc",
-    "test": "JARVIS_STATUS_URL=http://127.0.0.1:1/ node --test test/*.test.ts",
+    "test": "d=$(mktemp -d); JARVIS_PROVIDERS_DIR=$d JARVIS_STATUS_URL=http://127.0.0.1:1/ node --test test/*.test.ts; s=$?; rm -rf $d; exit $s",
     "start": "node src/server.ts",
     "e2e": "playwright test"
   },
