@@ -276,7 +276,7 @@ test.describe('voice on (autosend off)', () => {
     expect(await page.locator('#dinput').inputValue()).toBe('');
     await page.unroute('**/voice/level');
     await rpc(URL, '/voice/cancel', { id }); // the real recorder was never told
-    await hold(page, 300); // and a new hold works
+    await hold(page); // and a new hold works (longer than the 400 ms tap threshold, which counts from the press, not from the recorder opening)
     await page.mouse.up();
     await expect(page.locator('#dinput')).toHaveValue('hello from voice');
   });
