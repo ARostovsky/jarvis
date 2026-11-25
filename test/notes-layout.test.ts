@@ -174,6 +174,21 @@ test('restore moves workspaces/_archive/<id> back, never over an existing folder
   assert.equal(readFileSync(join(notes, 'workspaces', '_archive', m.id, 'status.md'), 'utf8'), 'archived');
 });
 
+test('restore refuses a symlinked _archive and logs a warning on collision', (t) => {
+  const notes = tmp(), outside = tmp(), m = meta(notes);
+  mkdirSync(join(outside, m.id));
+  mkdirSync(join(notes, 'workspaces'));
+  symlinkSync(outside, join(notes, 'workspaces', '_archive'));
+  assert.throws(() => restoreArchivedNotes(m), /not a plain folder/);
+  assert.ok(existsSync(join(outside, m.id)));
+  const n2 = tmp();
+  for (const d of [join(n2, 'workspaces', '_archive', m.id), join(n2, 'workspaces', m.id)]) mkdirSync(d, { recursive: true });
+  const warn = t.mock.method(console, 'warn', () => {});
+  assert.equal(restoreArchivedNotes(meta(n2)), 'collision');
+  assert.equal(warn.mock.calls.length, 1);
+  assert.match(String(warn.mock.calls[0].arguments[0]), /not restoring .*exists/);
+});
+
 test('the index ignores workspaces/_archive', () => {
   const notes = tmp();
   ensureWorkspaceNotes(meta(notes));

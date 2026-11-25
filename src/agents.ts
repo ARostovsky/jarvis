@@ -493,7 +493,7 @@ export function commitNotes(notes: string, id: string, name: string) {
     // Also catches a stale session still writing the old name; a failure here must not block the commit.
     try { syncJournals(notes, { id, name }); } catch (e) { console.warn(`notes: cannot move journals in ${notes}: ${(e as Error).message}`); }
     const mine = [...notesOwner].filter(([f, o]) => o.ws === id && !relative(notes, f).startsWith('..')).map(([f]) => f);
-    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-*${idSuffix(id)}.md`, `:(glob)workspaces/${id}/**`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
+    const spec = ['--', ...mine.map((f) => `:(literal)${f}`), `:(glob)journal/????-??-??-*${idSuffix(id)}.md`, `:(glob)workspaces/${id}/**`, `:(glob)workspaces/_archive/${id}/**`, ...embeddedRepos(notes).map((d) => `:(exclude)${d}`)];
     // Porcelain paths are relative to the repo root, hence top; -uall lists files, never an untracked folder that may hold other workspaces' files.
     const paths = git(notes, ...at, 'status', '--porcelain', '-z', '--no-renames', '--untracked-files=all', ...spec).split('\0').filter(Boolean).map((l) => l.slice(3));
     // A symlink (agents can plant one) is never committed: it would publish whatever it points at.
@@ -1765,7 +1765,7 @@ export function restoreWorkspace(id: string) {
   }
   workspaces.set(id, w);
   saveRegistry();
-  if (meta.notes) try { restoreArchivedNotes(meta); } catch (e) { console.warn(`notes: cannot restore the notes folder of ${id}: ${(e as Error).message}`); }
+  if (meta.notes) try { if (restoreArchivedNotes(meta) === 'moved') refreshIndex(meta.notes, id); } catch (e) { console.warn(`notes: cannot restore the notes folder of ${id}: ${(e as Error).message}`); }
   rmSync(join(to, 'meta.json')); // only now: after a crash before saveRegistry() its name and folders are still on disk
   touchRecent(meta);
   return meta as WorkspaceMeta;

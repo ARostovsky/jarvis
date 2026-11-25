@@ -190,3 +190,16 @@ test('archive leaves the notes folder in place; restore brings it back from work
   assert.doesNotThrow(() => restoreWorkspace(w.meta.id));
   assert.ok(existsSync(join(dir, 'status.md')) && existsSync(parked));
 });
+
+test('a restore move is committed with the deletion of the old _archive path', () => {
+  const notes = join(tmp, 'move-notes');
+  prepareNotes(notes);
+  const own = git(notes, 'rev-parse', '--absolute-git-dir');
+  mkdirSync(join(notes, 'workspaces', '_archive', 'mv-1'), { recursive: true });
+  write(notes, 'mv-1', 'workspaces/_archive/mv-1/status.md', 'v1\n');
+  commitNotes(notes, 'mv-1', 'mv');
+  renameSync(join(notes, 'workspaces', '_archive', 'mv-1'), join(notes, 'workspaces', 'mv-1'));
+  commitNotes(notes, 'mv-1', 'mv');
+  assert.equal(git(tmp, '--git-dir', own, 'show', 'HEAD:workspaces/mv-1/status.md'), 'v1');
+  assert.equal(git(tmp, '--git-dir', own, 'ls-tree', '-r', 'HEAD', 'workspaces/_archive'), '');
+});

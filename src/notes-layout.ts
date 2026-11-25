@@ -71,6 +71,7 @@ export function restoreArchivedNotes(meta: Meta): 'moved' | 'collision' | 'none'
     return 'collision';
   }
   plainDir(root);
+  plainDir(join(root, '_archive'));
   renameSync(from, to);
   return 'moved';
 }
