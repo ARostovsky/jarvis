@@ -580,6 +580,10 @@ const LEAD_PROMPT = `You can delegate with spawn_agent; sub-agents work in the s
 const BOARD_PROMPT = `There is a shared board with other agents. Notes addressed to you arrive at the top of your messages as "[board notes for you]"; board_read fetches new ones mid-task. Use board_post only for things another agent actually needs (an interface you defined, a decision, a blocker), addressed to those agents.
 Before you finish, check your work against the task's acceptance criteria (run the tests or checks it names), and against the repo CLAUDE.md rules. If a check fails and you can fix it, fix it and check again; stop after 3 rounds. Start your final message with exactly one line: \`VERDICT: verified\`, \`VERDICT: partial\` or \`VERDICT: failed\`. Then give at most 5 lines: first anything still open or unverified, then what changed (paths, branch) and the reason for partial or failed. Do not re-run a check whose result is already in your brief or this turn, unless the brief asks you to verify it or you changed code since.`;
 
+// Token counts of one turn's main loop, kept in the log for scripts/token-report.ts.
+const tokenUsage = (u: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }) =>
+  ({ input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheCreate: u.cache_creation_input_tokens ?? 0 });
+
 export function capReport(id: string, text: string) {
   return text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [TRUNCATED at ${REPORT_CAP} of ${text.length} chars, open items and caveats may be cut: call read_agent("${id}") before you rely on this report]` : text;
 }
@@ -892,7 +896,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           const waitsForChildren = !!a.parentId && !interrupted && m.subtype === 'success' && children(a.id).some(working); // the arbiter is never held: urgent mail, /compact and the running count need its real status
           if (waitsForChildren) held.add(a.id); // stays running: a child's result starts its next turn
           else if (!interrupted) setStatus(a, m.subtype === 'success' ? 'idle' : 'error'); // an interrupted turn is neither done nor failed: status is stopped, or running when a message is queued
-          emit('result', { agentId: a.id, text, costUsd: a.costUsd });
+          emit('result', { agentId: a.id, text, costUsd: a.costUsd, usage: tokenUsage(m.usage) });
           if (a.parentId && !budgetAlerted && a.costUsd > BUDGET_ALERT_USD) {
             budgetAlerted = true;
             report(a, `[agent ${a.id} cost $${a.costUsd.toFixed(2)}, over $${BUDGET_ALERT_USD}]\nSoft limit, nothing was stopped. Check whether the work still justifies the spend; consider restarting it with a summary.`);
@@ -926,7 +930,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           q.getContextUsage({ detail: compacted ? 'full' : 'summary' }).then((u) => {
             if (sessions.get(a.id) !== s) return; // a reset replaced this session meanwhile: its size is gone
             a.context = { tokens: u.totalTokens, max: u.maxTokens };
-            emit('context', { agentId: a.id, ...a.context });
+            emit('context', { agentId: a.id, ...a.context, categories: Object.fromEntries((u.categories ?? []).map((c) => [c.id ?? c.name, c.tokens])) }); // categories: scripts/token-report.ts
           }, () => {}); // only an indicator: a failed measurement is not worth an error
           if (interrupted && a.status === 'stopped') kill(a.id, s); // the interrupted turn is accounted: end the session
         }

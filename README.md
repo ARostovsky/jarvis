@@ -71,3 +71,7 @@ The full list (effort, plugins, reset bounds, Claude binary, every voice variabl
 ## License
 
 [MIT](LICENSE)
+
+## Token report
+
+`node scripts/token-report.ts [dataDir]` prints tokens, cost and context size per agent from the event logs, to compare consumption before and after a change.
