@@ -6,7 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'jarvis-prompts-test-')); // read when agents.ts loads
-const { ARBITER_PROMPT, capReport } = await import('../src/agents.ts');
+const { ARBITER_PROMPT, capReport, agentRow, readSlice } = await import('../src/agents.ts');
 const { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, saveTurnText } = await import('../src/notes-layout.ts');
 
 test('arbiter prompt: verify claims, read truncated reports, check evidence before done', () => {
@@ -40,4 +40,21 @@ test('notes paragraph, save turn and agent report prompt carry the verification 
     'Do not re-check a verified fact that cannot change (a sha is in origin/main, a branch is deleted). Re-check a fact that can change (push state, worktrees, a running service) before you report it.',
   ]) assert.ok(p.includes(s), s);
   for (const kind of ['forced', 'auto'] as const) assert.ok(saveTurnText(kind, wsDir, 160_000).includes(OPEN_ITEMS_FORMAT));
+});
+
+test('agentRow has no task and a short lastText', () => {
+  const row = agentRow({ id: 'a1', name: 'n', task: 'T'.repeat(5000), cwd: '/x', status: 'idle', lastText: 'y'.repeat(900), costUsd: 1 });
+  assert.equal('task' in row, false);
+  assert.equal('cwd' in row, false);
+  assert.equal(row.lastText.length, 200);
+});
+
+test('readSlice pages a long text with a cut notice and the pages join to the original', () => {
+  const text = 'abcdefghij'.repeat(1000);
+  const first = readSlice('a1', text);
+  assert.match(first, /\[cut at 4000 of 10000 chars: call read_agent\("a1", offset=4000\) for the rest\]$/);
+  assert.equal(readSlice('a1', 'short'), 'short');
+  let got = '', off = 0;
+  for (;;) { const p = readSlice('a1', text, off); const cut = p.indexOf('\n… [cut at'); got += cut < 0 ? p : p.slice(0, cut); if (cut < 0) break; off += 4000; }
+  assert.equal(got, text);
 });

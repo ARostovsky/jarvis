@@ -53,6 +53,8 @@ const TRANSIENT = new Set(['delta', 'ask', 'answered']);
 
 export const ARBITER = 'arbiter';
 const REPORT_CAP = 1000;
+const LIST_TEXT = 200; // list_agents: chars of an agent's last message
+const READ_MAX = 4000; // read_agent: default page size in chars
 const MAIL_CAP = 12000; // longest tell_workspace message; over it the call is rejected, never truncated
 // auto: a classifier approves safe calls and only escalates to the UI what it can't decide.
 export const MODELS = ['haiku', 'sonnet', 'opus'] as const;
@@ -583,6 +585,17 @@ Before you finish, check your work against the task's acceptance criteria (run t
 // Token counts of one turn's main loop, kept in the log for scripts/token-report.ts.
 const tokenUsage = (u: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null }) =>
   ({ input: u.input_tokens ?? 0, output: u.output_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0, cacheCreate: u.cache_creation_input_tokens ?? 0 });
+
+// What list_agents shows per agent: short fields only, never the spawn task.
+export function agentRow({ id, name, status, repo, costUsd, lastText }: Agent) {
+  return { id, name, status, repo, costUsd, lastText: lastText.slice(0, LIST_TEXT) };
+}
+
+// One page of an agent's last message for read_agent; a cut page says how to get the next one.
+export function readSlice(id: string, text: string, offset = 0, max = READ_MAX) {
+  const end = offset + max;
+  return end < text.length ? `${text.slice(offset, end)}\n… [cut at ${end} of ${text.length} chars: call read_agent("${id}", offset=${end}) for the rest]` : text.slice(offset);
+}
 
 export function capReport(id: string, text: string) {
   return text.length > REPORT_CAP ? `${text.slice(0, REPORT_CAP)}\n… [TRUNCATED at ${REPORT_CAP} of ${text.length} chars, open items and caveats may be cut: call read_agent("${id}") before you rely on this report]` : text;
@@ -1353,9 +1366,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
           id: z.string(),
           message: z.string(),
         }, async ({ id, message }) => (sendToAgent(mine(id), message, owner), ok('sent'))),
-        tool('list_agents', 'List agents you manage: id, status, task, cost and the start of the last message.', {}, async () =>
-          ok((owner === ARBITER ? [...agents.values()] : children(owner)).map(({ lastText, ...a }) => ({ ...a, lastText: lastText.slice(0, 300) })))),
-        tool('read_agent', 'Full last message of an agent.', { id: z.string() }, async ({ id }) => ok(agents.get(mine(id))?.lastText ?? 'no such agent')),
+        tool('list_agents', `List agents you manage: id, name, status, repo, cost and the first ${LIST_TEXT} chars of the last message. Not the task text. Use read_agent for the full message.`, {}, async () =>
+          ok((owner === ARBITER ? [...agents.values()] : children(owner)).map(agentRow))),
+        tool('read_agent', `Last message of an agent, ${READ_MAX} chars per call by default. A cut message ends with a notice that gives the offset of the rest.`, {
+          id: z.string(),
+          offset: z.number().int().min(0).optional().describe('start at this char; use the offset from the cut notice'),
+          max: z.number().int().min(1).optional().describe(`chars to return, default ${READ_MAX}`),
+        }, async ({ id, offset, max }) => ok(readSlice(id, agents.get(mine(id))?.lastText ?? 'no such agent', offset, max))),
         tool('stop_agent', 'Stop an agent session. Its worktree and branch are removed when merged or empty and clean, else kept.', { id: z.string() }, async ({ id }) => (stopAgent(mine(id)), ok('stopped'))),
       ] : [])],
     });
