@@ -177,6 +177,93 @@
   body.empty #view, body.empty #hint, body.empty #asks { display: none; }
   #status { position: fixed; bottom: 16px; left: 16px; display: flex; align-items: center; gap: 10px; }
   #conn { font-size: 12px; letter-spacing: .2em; color: var(--cyan-dim); }
+
+  /* Panels: live blocks pinned under the arbiter's header. The one memorable element is the state edge, a thin bar of light down the left of each row. */
+  #panels { flex: none; display: flex; flex-direction: column; max-height: 40%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--cyan-dim) var(--line); border-bottom: 1px solid var(--line); container-type: inline-size; }
+  #panels[hidden] { display: none; }
+  .pn { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .pn.collapsed { flex: none; } /* a folded block is its header row and never shrinks under the cap */
+  .pn + .pn { border-top: 1px solid var(--line); }
+  .pn.stale { box-shadow: inset 0 1px 0 var(--amber); }
+  .pn-h { flex: none; min-height: 28px; display: flex; align-items: center; gap: 6px; padding-right: 8px; background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .06)); clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); }
+  #panels button { border-left: 0; letter-spacing: normal; }
+  #panels button:focus-visible, #panels a:focus-visible { outline: 1px solid var(--cyan); outline-offset: -1px; }
+  .pn-tog { flex: 1; min-width: 0; display: flex; align-items: baseline; gap: 8px; padding: 4px 8px 4px 12px; text-align: left; overflow: hidden; color: var(--text); font: 600 14px Rajdhani, sans-serif; letter-spacing: .08em !important; }
+  .pn-tog .chev::before { content: '▸'; display: inline-block; font-size: 11px; transition: transform .16s ease-out; }
+  .pn:not(.collapsed) .pn-tog .chev::before { transform: rotate(90deg); }
+  .pn-title { flex: none; }
+  .pn-sum { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 400; letter-spacing: 0; opacity: .75; }
+  .pn-sep { flex: none; opacity: .5; margin-left: -2px; }
+  .sc-running { color: var(--cyan); } .sc-open { color: var(--amber); } .sc-failed { color: var(--red); }
+  .pn-meta { flex: none; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; opacity: .75; white-space: nowrap; }
+  .pn.stale .pn-meta { color: var(--amber); opacity: 1; }
+  .pn.stale .pn-sum { color: var(--amber); opacity: 1; }
+  .pn-btn { flex: none; border: 1px solid var(--line) !important; padding: 1px 8px; font-size: 11px; letter-spacing: .1em !important; text-transform: uppercase; line-height: 16px; }
+  .pn-wrap { flex: 0 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); transition: grid-template-rows .16s ease-out; }
+  .pn:not(.collapsed) { min-height: 104px; } /* header 28 + two rows (76): an expanded panel is never squeezed below this by its neighbour; in a short panel the stack scrolls instead of clipping a header */
+  .pn:not(.collapsed) .pn-wrap { min-height: 76px; }
+  .pn.collapsed .pn-wrap { grid-template-rows: 0fr; }
+  .pn-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
+  .pn.collapsed .pn-body { visibility: hidden; overflow: hidden; transition: visibility 0s .16s; } /* a folded body must not stay in the tab order */
+  .pn-note { padding: 4px 12px; font-size: 13px; color: var(--amber); overflow-wrap: anywhere; }
+  .pn-note button { border: 1px solid var(--line) !important; margin-left: 8px; padding: 0 8px; font-size: 11px; letter-spacing: .1em !important; }
+  .pn-list { list-style: none; margin: 0; padding: 4px 12px 6px; }
+  .jr, .ci { --e: var(--gray); position: relative; padding: 3px 4px 3px 18px; margin-bottom: 6px; line-height: 1.35; font: 400 14px/1.35 Rajdhani, sans-serif; }
+  .jr::before, .ci::before { content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; background: var(--e); }
+  .jr.st-running { --e: var(--cyan); } .jr.st-running::before, .jr.st-failed::before { box-shadow: 0 0 6px var(--e); }
+  .jr.st-queued, .jr.st-waiting, .ci.st-open, .ci.st-parked { --e: var(--amber); }
+  .jr.st-done, .ci.st-done { --e: var(--cyan-dim); }
+  .jr.st-failed { --e: var(--red); }
+  .jr.st-unknown::before { background: repeating-linear-gradient(180deg, var(--e) 0 4px, transparent 4px 7px); }
+  .jr.st-done > * { opacity: .7; } .jr.st-stopped > *, .jr.st-unknown > * { opacity: .6; } .jr.stale > * { opacity: .55; }
+  .jr.hot::before { width: 5px; box-shadow: 0 0 10px 1px var(--red); animation: pnhot 1.6s ease-in-out infinite; } /* failed under a manual order: the edge pulses until the row is dragged or its state changes (static and bright under reduced motion) */
+  .jr .dgrip { position: absolute; left: 4px; top: 4px; z-index: 0; cursor: grab; opacity: .35; font-size: 10px; line-height: 1; letter-spacing: -2px; user-select: none; }
+  .jr:hover .dgrip, .jr:focus-within .dgrip { opacity: .9; }
+  .jr .l1, .jr .l2 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+  .jr .l2 { flex-wrap: wrap; gap: 2px 10px; margin-top: 2px; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
+  .jr .lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .jr .prov { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
+  .jr .dur { flex: none; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; opacity: .85; }
+  .jr .x { flex: none; align-self: center; min-width: 28px; height: 22px; padding: 0 6px; color: var(--text); opacity: .6; font-size: 16px; line-height: 1; }
+  .jr .x:hover, .jr .x:focus-visible { opacity: 1; }
+  .jr .l2 a { color: var(--cyan); }
+  .jr .det { min-width: 0; overflow-wrap: anywhere; }
+  .jr.st-failed .det, .jr .err { color: var(--red); }
+  .jr .prog { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; } /* bar and count wrap together */
+  .jr .bar { display: inline-flex; gap: 2px; } .jr .bar i { width: 6px; height: 3px; background: var(--line); } .jr .bar i.on { background: var(--e); }
+  .jr .cost .asof { opacity: .6; }
+  .jr.drop-before { box-shadow: inset 0 2px 0 var(--cyan); } .jr.drop-after { box-shadow: inset 0 -2px 0 var(--cyan); }
+  @container (max-width: 639px) { .jr .cost { flex-basis: 100%; } } /* narrow: the cost takes its own line */
+  @container (min-width: 640px) { /* one line per job, columns: label, provider, id, step, detail, progress, duration, cost, x */
+    .jr { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; }
+    .jr .l1, .jr .l2 { display: contents; }
+    .jr .lab { order: 1; flex: 0 1 220px; } .jr .prov { order: 2; } .jr .l2 > .id, .jr .l2 > a { order: 3; } .jr .step { order: 4; }
+    .jr .det { order: 5; flex: 1; } .jr .det.sw, .jr .err { order: 5; flex: 0 1 auto; } .jr .prog { order: 6; }
+    .jr .dur { order: 8; min-width: 5ch; text-align: right; } .jr .cost { order: 9; flex: none; } .jr .x { order: 10; }
+  }
+  .ci { display: flex; align-items: baseline; gap: 8px; padding-top: 4px; padding-bottom: 4px; margin-bottom: 2px; }
+  .ci .mk { flex: none; width: 16px; text-align: center; color: var(--e); font: 400 14px 'JetBrains Mono', monospace; }
+  .ci .you { flex: none; border: 1px solid var(--cyan); color: var(--cyan); font: 600 11px/16px Rajdhani, sans-serif; letter-spacing: .06em; padding: 0 6px; }
+  .ci .txt { min-width: 0; overflow-wrap: anywhere; }
+  .ci .why { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
+  .ci.st-done .txt, .ci.st-done .mk { text-decoration: line-through; opacity: .55; }
+  .ci.st-parked > * { opacity: .6; }
+  .jr.new { animation: pnin .12s ease-out; }
+  .jr.chg::before { animation: pnpulse .6s ease-out; }
+  .jr.st-waiting.chg::before { animation: blink .8s 1; }
+  @keyframes pnin { from { opacity: 0; } }
+  @keyframes pnhot { 50% { box-shadow: 0 0 3px var(--red); } }
+  @keyframes pnpulse { 40% { box-shadow: 0 0 12px 2px var(--e); } }
+  @media (prefers-reduced-motion: reduce) { #panels, #panels *, #panels *::before { animation: none !important; transition: none !important; } }
+  .pbadge { font-size: 11px; line-height: 1.3; margin-left: 6px; padding: 0 5px; border: 1px solid currentColor; letter-spacing: 0; }
+  .pbadge.active { color: var(--cyan); } .pbadge.ok { color: var(--cyan-dim); } .pbadge.warn { color: var(--amber); } .pbadge.error { color: var(--red); }
+  .ask.prov .warn { color: var(--red); } .ask.prov small { display: block; opacity: .7; margin: 4px 0; }
+  .ask.prov .pf { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } .ask.prov .pf button { margin: 0; padding: 2px 8px; font-size: 12px; letter-spacing: 0; }
+  .ask.prov input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; margin: 6px 0; }
+  #providers { border-color: var(--cyan); min-width: 480px; }
+  #provList > div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #provList .pi { flex: 1; min-width: 0; } #provList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
+  #provList label { cursor: pointer; } #provList input { width: auto; flex: none; accent-color: var(--cyan); padding: 0; margin-right: 8px; }
 </style>
 </head>
 <body>
@@ -234,10 +321,17 @@
   <form method="dialog"><button value="">CLOSE</button></form>
 </dialog>
 
+<dialog id="providers">
+  <h3 id="provTitle" style="color:var(--cyan)">JOB PROVIDERS</h3>
+  <div id="provList"></div>
+  <form method="dialog"><button id="provSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
+</dialog>
+
 <aside id="panel">
   <div id="pgrip" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripT" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripB" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripR" class="grip" title="Drag to resize · double-click to reset"></div>
   <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="preset" title="Fresh session from the notes and a short summary">RESET</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
+  <div id="panels" hidden></div>
   <div id="log"></div>
   <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button id="send">SEND</button><div id="recbar" aria-live="polite"></div><button type="button" id="mic" hidden title="Hold to talk (or hold Ctrl+Space / Alt+V), release to send, a tap, Esc or dragging away cancels" aria-label="Hold to talk">MIC<i id="micLvl"></i></button></form>
 </aside>
@@ -640,6 +734,7 @@ function select(id) {
   $('pdelete').hidden = id === ARBITER;
   syncStop();
   applyView();
+  renderPanels();
   $('viewMenu').classList.remove('open');
   $('log').replaceChildren();
   if (a.agent.task) appendLog('meta', `task: ${a.agent.task}`);
@@ -841,6 +936,7 @@ async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
   $('mic').hidden = !voice;
+  if (Date.now() - provAt > 30000) loadProviders(); // the server hashes every provider folder per call: not on each 2 s poll
   wsNames.clear();
   wsNotes.clear(); wsLive.clear();
   list.forEach((w) => (wsNames.set(w.id, w.name), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
@@ -858,7 +954,7 @@ async function refreshTabs() {
   document.body.classList.toggle('empty', !list.length);
   $('emptyArchive').hidden = !archived.length;
   // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
-  const sig = JSON.stringify([WS, list, archived.length]);
+  const sig = JSON.stringify([WS, list, archived.length, provList.map((p) => [p.name, p.status])]);
   if (sig === tabsSig || dragId) return; // a rebuild mid-drag would drop the dragged tab; ondragend catches up
   tabsSig = sig;
   const keepScroll = $('tabs').scrollLeft; // replaceChildren clamps scrollLeft to 0
@@ -870,6 +966,7 @@ async function refreshTabs() {
     if (w.waiting) b.append(Object.assign(document.createElement('span'), { className: 'dot wait', title: `${w.waiting} waiting for you` }));
     else if (w.running) b.append(Object.assign(document.createElement('span'), { className: 'dot run', title: `${w.running} running` }));
     if (w.intercom) b.append(Object.assign(document.createElement('span'), { className: 'mail', textContent: w.intercom, title: `${w.intercom} unread message(s) from other workspaces` }));
+    for (const p of w.panels ?? []) if (p.badge?.text) b.append(Object.assign(document.createElement('span'), { className: `pbadge ${p.badge.level}`, textContent: p.badge.text, title: `${p.panelId === 'jobs' ? 'Jobs' : p.panelId}: ${p.badge.text}` }));
     b.onclick = () => switchTo(w.id);
     b.draggable = true;
     b.ondragstart = (ev) => { ev.dataTransfer.setData('text/plain', w.id); ev.dataTransfer.effectAllowed = 'move'; dragId = w.id; };
@@ -892,12 +989,15 @@ async function refreshTabs() {
     b.oncontextmenu = (ev) => menu(ev, [
       ['Rename', () => renameWs(w)],
       ['Notes folder…', () => notesWs(w)],
+      ...(provList.length ? [['Job providers…', () => openProviders(w)]] : []),
       ['Stop all agents', () => stopAllWs(w.id)],
       ['Archive workspace', () => archiveWs(w), true],
     ]);
     return b;
   }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
-  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []));
+  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []),
+  ...(provList.length || pendingProps().length ? [Object.assign(document.createElement('button'), { textContent: `PROVIDERS${pendingProps().length ? ` (${pendingProps().length})` : ''}`, title: pendingProps().length ? `Job providers, ${pendingProps().length} waiting for approval` : 'Job providers', onclick: () => openProviders() })] : []));
+  if ($('providers').open) renderProviders();
   $('tabs').scrollLeft = keepScroll;
   if (shownWs !== WS) $('tabs').querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   shownWs = WS;
@@ -1048,6 +1148,7 @@ new EventSource('/health').onmessage = (m) => {
 
 function connect() {
   es?.close();
+  panelMap.clear(); panelStatus.clear(); rowSeen.clear(); hotRows.clear(); $('panels').replaceChildren(); $('asks').replaceChildren(); // the old workspace's blocks must not show until the new snapshot arrives
   es = new EventSource(`/events?ws=${encodeURIComponent(WS)}`);
   es.onopen = () => {
     $('conn').textContent = 'LINK ONLINE';
@@ -1055,6 +1156,7 @@ function connect() {
     agents.forEach((a, id) => { if (id !== ARBITER) { a.g.remove(); a.link.remove(); } });
     agents.clear();
     $('asks').replaceChildren();
+    panelMap.clear(); panelStatus.clear(); rowSeen.clear(); hotRows.clear(); $('panels').replaceChildren();
     replaying = true;
   };
   es.onmessage = (m) => { const e = JSON.parse(m.data); handlers[e.type]?.(e); };
@@ -1447,10 +1549,335 @@ function renderViewMenu() {
   const setDefault = id === ARBITER
     ? [Object.assign(document.createElement('button'), { textContent: same ? '✓ DEFAULT FOR ALL WORKSPACES' : 'USE AS DEFAULT FOR ALL WORKSPACES', disabled: same, style: `border:1px solid var(--line);padding:4px 10px;margin-top:6px;${same ? 'opacity:.5' : ''}`, onclick: () => { saveJson(VIEW_DEFAULT, Object.fromEntries(VIEW.map(([k]) => [k, shown(id, k)]))); renderViewMenu(); } })]
     : [];
-  $('viewMenu').replaceChildren(head, ...rows, ...reset, ...setDefault);
+  const pr = id === ARBITER && panelMap.size ? [h('div', '', 'Panels', ), ...[...panelMap.values()].map((p) => {
+    const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: !loadJson(panelUiKey())[p.panel.panelId]?.hidden });
+    c.onchange = () => { setPanelUi(p.panel.panelId, { hidden: !c.checked }); renderPanels(); };
+    return h('label', '', c, p.panel.title);
+  })] : [];
+  if (pr.length) pr[0].style.cssText = 'font-size:12px;letter-spacing:.15em;color:var(--cyan-dim);padding:6px 0 0';
+  $('viewMenu').replaceChildren(head, ...rows, ...pr, ...reset, ...setDefault);
 }
 $('pview').onclick = () => { renderViewMenu(); $('viewMenu').classList.toggle('open'); };
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pview')) $('viewMenu').classList.remove('open'); });
+
+// ---- panels: live blocks pinned at the top of the arbiter chat. A kind is one PANEL_KINDS entry; the server seam knows nothing of kinds. ----
+// Kind: { rank, summary(data, status) -> string, render(el, data, status, act, ctx), buttons?, collapsed?, stale? }. act(action, args) posts /panels/action. All text goes through textContent.
+const panelMap = new Map(), panelStatus = new Map(); // panelId -> { panel, status, el, ... } / latest panel_status
+const rowSeen = new Map(), hotRows = new Set(); // job row key -> { state, t, fresh, turned } (last state change); `key@changeTime` of rows that failed live under a manual order
+let pdrag = null; // job row being dragged: re-rendering mid-drag would drop it
+let provList = [], provAt = 0; // approved, changed and pending providers from /providers, and when they were fetched
+let provTimer = 0;
+const provSoon = () => { provTimer ||= setTimeout(() => { provTimer = 0; loadProviders(); }, Math.max(0, 2000 - (Date.now() - provAt))); }; // a row the server cannot poll means a provider changed or lost approval: no event says so, look now
+async function loadProviders() {
+  provAt = Date.now();
+  try {
+    const r = await fetch('/providers'); if (!r.ok) return;
+    const j = await r.json(); provList = (Array.isArray(j) ? j : j.providers ?? []).filter((p) => p?.name);
+  } catch { return; }
+  if ($('providers').open) renderProviders();
+  schedulePanels();
+}
+const panelUiKey = () => `jarvis.panels.${WS}`; // { [panelId]: { collapsed?, hidden?, order? } }, a browser preference like folded agents
+function setPanelUi(id, patch) {
+  const all = loadJson(panelUiKey()), v = { ...all[id], ...patch };
+  for (const k in v) if (v[k] === undefined || (k === 'hidden' && !v[k])) delete v[k];
+  all[id] = v;
+  saveJson(panelUiKey(), all);
+}
+const h = (tag, cls, ...kids) => { const e = document.createElement(tag); if (cls) e.className = cls; e.append(...kids.filter((k) => k != null && k !== false)); return e; };
+const hm = (iso) => { const t = typeof iso === 'number' ? iso : Date.parse(iso); return Number.isFinite(t) ? fmtTs(t) : ''; };
+const fmtDur = (ms) => { const m = Math.max(0, Math.floor(ms / 60000)); return `${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`; };
+const tickDur = (s) => { const a = Date.parse(s.dataset.s), b = s.dataset.f ? Date.parse(s.dataset.f) : Date.now(); if (Number.isFinite(a) && Number.isFinite(b)) s.textContent = fmtDur(b - a); };
+setInterval(() => document.querySelectorAll('#panels .dur').forEach(tickDur), 30000);
+const pnBtn = (label, fn, aria = label) => { const b = h('button', 'pn-btn', label); b.type = 'button'; b.setAttribute('aria-label', aria); b.dataset.fk = `b:${aria}`; b.onclick = fn; return b; };
+
+const JOB_END = new Set(['done', 'failed', 'stopped']), JOB_STATES = new Set(['queued', 'running', 'waiting', 'done', 'failed', 'stopped', 'unknown']);
+const jobRows = (data) => (Array.isArray(data?.rows) ? data.rows : []);
+const jobKey = (r) => `${r.provider}:${r.id}`;
+// Providers that cannot be trusted right now: a failed poll, or files changed since approval. Rows of those are dimmed and sort as "needs attention".
+function jobStale(data, status) {
+  const det = Array.isArray(status?.detail) ? status.detail : [], bad = new Map(det.filter((d) => d?.ok === false).map((d) => [d.provider, d]));
+  const used = new Set(jobRows(data).map((r) => r.provider));
+  const changed = new Set(provList.filter((p) => p.status === 'changed' && used.has(p.name)).map((p) => p.name));
+  const marked = new Map(jobRows(data).filter((r) => r.stale && !bad.has(r.provider) && !changed.has(r.provider)).map((r) => [r.provider, r.stale])); // the server marks rows it cannot poll (disabled, not approved)
+  return { bad, changed, marked, all: status?.ok === false && !bad.size };
+}
+const jobSev = (r, st) => (r.state === 'failed' ? 0 : r.pending ? 2 : st.all || r.stale || st.bad.has(r.provider) || st.changed.has(r.provider) || r.error || r.state === 'waiting' || r.state === 'unknown' ? 1 : r.state === 'running' || r.state === 'queued' ? 2 : 3);
+function jobChangeTime(r) {
+  const k = jobKey(r);
+  let s = rowSeen.get(k);
+  if (!s || s.state !== r.state) rowSeen.set(k, s = { turned: !!s, state: r.state, t: Date.parse(r.changedAt) || (replaying ? Date.parse(r.finishedAt) || Date.parse(r.startedAt) || 0 : Date.now()), fresh: !replaying });
+  return Date.parse(r.changedAt) || s.t;
+}
+// Severity sort, newest change first, stable between polls (the time is kept per state, a tick of the clock moves nothing). A manual order wins; rows not in it go on top.
+function jobOrder(rows, st, order) {
+  const sev = [...rows].sort((a, b) => jobSev(a, st) - jobSev(b, st) || jobChangeTime(b) - jobChangeTime(a) || (jobKey(a) < jobKey(b) ? -1 : 1));
+  if (!order?.length) return sev;
+  const idx = new Map(order.map((k, i) => [k, i]));
+  return [...sev.filter((r) => !idx.has(jobKey(r))), ...rows.filter((r) => idx.has(jobKey(r))).sort((a, b) => idx.get(jobKey(a)) - idx.get(jobKey(b)))];
+}
+function jobRow(r, o) {
+  const state = JOB_STATES.has(r.state) ? r.state : 'unknown', end = JOB_END.has(state), t = jobChangeTime(r);
+  const li = h('li', `jr st-${state}${o.stale ? ' stale' : ''}${o.hot ? ' hot' : ''}${rowSeen.get(o.key)?.fresh && Date.now() - t < 1500 ? ' chg' : ''}`);
+  li.dataset.key = o.key; li.draggable = true;
+  li.title = [state, Date.parse(r.startedAt) ? `started ${fmtTs(Date.parse(r.startedAt))}` : ''].filter(Boolean).join(' · ');
+  const sid = r.id.length > 12 ? r.id.slice(0, 8) : r.id; // the id shows once: under the label, or as the label when there is none
+  let idEl;
+  if (/^https?:\/\//i.test(r.link ?? '')) { idEl = h('a', '', sid); Object.assign(idEl, { href: r.link, target: '_blank', rel: 'noopener noreferrer' }); idEl.dataset.fk = `a:${o.key}`; }
+  else idEl = h('span', 'id', sid);
+  idEl.title = r.id;
+  const l1 = h('div', 'l1', h('span', 'lab', r.label || idEl), o.multi && h('span', 'prov', r.provider));
+  if (Date.parse(r.startedAt) && (!end || Date.parse(r.finishedAt))) {
+    const d = h('span', 'dur'); d.dataset.s = r.startedAt; if (end) d.dataset.f = r.finishedAt; tickDur(d); l1.append(d);
+  }
+  if (end) { const x = h('button', 'x', '×'); x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.label || r.id}`); x.dataset.fk = `x:${o.key}`; x.onclick = () => o.act('unwatch', { ids: [r.id], provider: r.provider }); l1.append(x); }
+  const l2 = h('div', 'l2');
+  if (r.label) l2.append(idEl);
+  if (r.step) l2.append(h('span', 'step', r.step));
+  if (r.detail) l2.append(h('span', 'det', r.detail));
+  const pr = r.progress;
+  if (pr && Number.isFinite(pr.done)) {
+    if (Number.isFinite(pr.total) && pr.total > 0) {
+      const n = pr.total <= 20 ? pr.total : 20, on = pr.total <= 20 ? pr.done : Math.round((pr.done / pr.total) * 20);
+      const bar = h('span', 'bar', ...Array.from({ length: n }, (_, i) => h('i', i < on ? 'on' : '')));
+      bar.setAttribute('role', 'progressbar'); bar.setAttribute('aria-valuenow', pr.done); bar.setAttribute('aria-valuemax', pr.total); bar.setAttribute('aria-label', 'Progress');
+      l2.append(h('span', 'prog', bar, h('span', 'cnt', `${pr.done}/${pr.total}`)));
+    } else l2.append(h('span', 'prog', h('span', 'cnt', String(pr.done))));
+  }
+  if (Number.isFinite(r.costUsd)) {
+    const at = typeof r.asOf === 'string' ? r.asOf : r.asOf?.costUsd ?? r.asOf?.cost;
+    l2.append(h('span', 'cost', `$${r.costUsd.toFixed(2)}`, hm(at) && h('span', 'asof', ` (as of ${hm(at)})`)));
+  }
+  if (r.error) l2.append(h('span', 'err', r.error));
+  if (r.stale) l2.append(h('span', 'det sw', r.stale));
+  li.append(h('span', 'dgrip', '⋮⋮'), l1, l2);
+  li.querySelector('.dgrip').setAttribute('aria-hidden', 'true');
+  return li;
+}
+
+const PANEL_KINDS = {
+  jobs: {
+    rank: 10,
+    summary(data, status) {
+      const rows = jobRows(data), n = (f) => rows.filter(f).length, st = jobStale(data, status);
+      const parts = [[n((r) => r.state === 'running' || r.state === 'queued'), 'running'], [n((r) => r.state === 'waiting'), 'waiting'], [n((r) => r.state === 'failed'), 'failed'], [n((r) => r.pending), 'checking'], [n((r) => r.state === 'unknown' && !r.pending), 'unknown'], [n((r) => r.state === 'done' || r.state === 'stopped'), 'done']].filter(([c]) => c).map(([c, l]) => `${c} ${l}`);
+      if (st.bad.size || st.all || st.changed.size || st.marked.size) parts.push('stale');
+      return parts.join(' · ') || 'no jobs';
+    },
+    meta(data, status) { // provider name (when exactly one) and the last check time, shown while expanded
+      const names = new Set([...jobRows(data).map((r) => r.provider), ...(Array.isArray(status?.detail) ? status.detail.map((d) => d?.provider) : [])].filter(Boolean));
+      return [names.size === 1 && [...names][0], hm(status?.at) && `checked ${hm(status.at)}`].filter(Boolean).join(' · ');
+    },
+    collapsed: (data) => !jobRows(data).some((r) => !JOB_END.has(r.state) || r.state === 'failed'), // anything running, waiting or failed keeps it open
+    stale(data, status) { const s = jobStale(data, status); return !!(s.bad.size || s.all || s.changed.size || s.marked.size); },
+    buttons(data, status, act, ctx) {
+      return [
+        !ctx.collapsed && ctx.ui.order?.length && pnBtn('Reset order', () => { hotRows.clear(); ctx.setUi({ order: undefined }); ctx.rerender(); }),
+        pnBtn('↻', () => act('refresh'), 'Check now'),
+        !ctx.collapsed && jobRows(data).some((r) => JOB_END.has(r.state)) && pnBtn('Clear done', () => act('clear')),
+      ].filter(Boolean);
+    },
+    render(el, data, status, act, ctx) {
+      const rows = jobRows(data), st = jobStale(data, status), multi = new Set(rows.map((r) => r.provider)).size > 1;
+      const notes = [];
+      for (const [name, d] of st.bad) {
+        const needs = [].concat(provList.find((p) => p.name === name)?.needs ?? []).filter(Boolean);
+        notes.push(h('div', 'pn-note', `${name} stale since ${hm(d.at)}${d.error ? `: ${d.error}.` : '.'}${needs.length && ['auth', 'network'].includes(d.errorKind) ? ` Needs: ${needs.join(', ')}.` : ''}`));
+      }
+      for (const [name, why] of st.marked) notes.push(h('div', 'pn-note', `${name}: ${why}`));
+      if (st.all) notes.push(h('div', 'pn-note', `Check failed${status.error ? `: ${status.error}` : ''}`));
+      for (const name of st.changed) { const n = h('div', 'pn-note', `${name} files changed.`); n.append(pnBtn('Approve again', () => openProviders())); notes.push(n); }
+      if (!status && !replaying && rows.length) notes.push(h('div', 'pn-note', 'Not checked since restart'));
+      const keys = () => ordered.map(jobKey), ordered = jobOrder(rows, st, ctx.ui.order);
+      const ul = h('ul', 'pn-list');
+      const clear = () => ul.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
+      for (const r of ordered) {
+        const key = jobKey(r), manual = !!ctx.ui.order?.length, sn = (jobChangeTime(r), rowSeen.get(key));
+        if (sn.turned) { sn.turned = false; if (manual && r.state === 'failed' && sn.fresh) hotRows.add(`${key}@${sn.t}`); } // only a live turn to failed, not an old failure seen after a reload
+        const li = jobRow(r, { key, multi, act, stale: st.bad.has(r.provider) || st.changed.has(r.provider) || st.marked.has(r.provider) || st.all, hot: manual && r.state === 'failed' && hotRows.has(`${key}@${sn.t}`) });
+        if (!rowSeen.get(key)?.shown) { rowSeen.get(key).shown = true; if (!replaying && rowSeen.get(key).fresh) li.classList.add('new'); }
+        li.ondragstart = (ev) => { if (ev.target !== li) return; pdrag = { key, panelId: ctx.panelId }; ev.dataTransfer.setData('text/plain', key); ev.dataTransfer.effectAllowed = 'move'; };
+        li.ondragover = (ev) => {
+          if (!pdrag || pdrag.panelId !== ctx.panelId || pdrag.key === key) return;
+          ev.preventDefault(); clear();
+          li.classList.add(ev.clientY > li.getBoundingClientRect().top + li.offsetHeight / 2 ? 'drop-after' : 'drop-before');
+        };
+        li.ondrop = (ev) => {
+          ev.preventDefault();
+          if (!pdrag || pdrag.key === key) return;
+          const from = pdrag.key, ks = keys().filter((k) => k !== from), after = ev.clientY > li.getBoundingClientRect().top + li.offsetHeight / 2;
+          ks.splice(ks.indexOf(key) + (after ? 1 : 0), 0, from);
+          for (const k of [...hotRows]) if (k.startsWith(`${from}@`)) hotRows.delete(k); // only the dragged row's highlight ends
+          pdrag = null;
+          ctx.setUi({ order: ks });
+          ctx.rerender();
+        };
+        li.ondragend = () => { pdrag = null; clear(); ctx.rerender(); };
+        ul.append(li);
+      }
+      el.append(...notes, ul);
+    },
+  },
+  checklist: {
+    rank: 20,
+    summary(data) {
+      const it = Array.isArray(data?.items) ? data.items : [], open = it.filter((i) => i.kind !== 'done'), you = open.filter((i) => i.you).length;
+      return open.length ? `${open.length} open${you ? ` · ${you} for you` : ''}` : `all done (${it.length})`;
+    },
+    collapsed: (data) => !(Array.isArray(data?.items) ? data.items : []).some((i) => i.kind !== 'done'),
+    render(el, data) {
+      const it = (Array.isArray(data?.items) ? data.items : []).map((i, n) => [i, n]).sort(([a, x], [b, y]) => ((a.kind === 'done') - (b.kind === 'done')) || (!!b.you && a.kind !== 'done') - (!!a.you && b.kind !== 'done') || x - y).map(([i]) => i);
+      const ul = h('ul', 'pn-list');
+      ul.setAttribute('aria-label', 'Open items');
+      const MARK = { done: ['✓', 'done'], parked: ['~', 'parked'] };
+      for (const i of it) {
+        const [mk, word] = MARK[i.kind] ?? ['☐', 'open'], li = h('li', `ci st-${i.kind}`);
+        const m = h('span', 'mk', mk); m.setAttribute('role', 'img'); m.setAttribute('aria-label', word);
+        li.setAttribute('aria-label', `${i.text}${i.you ? ' (for you)' : ''}`);
+        if (i.check) li.title = i.check;
+        li.append(...[m, i.you && h('span', 'you', 'you'), h('span', 'txt', i.text), i.reason && h('span', 'why', i.reason)].filter(Boolean));
+        ul.append(li);
+      }
+      el.append(ul);
+    },
+  },
+};
+const UNKNOWN_KIND = { rank: 90, summary: () => '', render: (el) => el.append(h('div', 'pn-note', 'This Jarvis version cannot show this panel')) };
+const kindOf = (p) => PANEL_KINDS[p.panel.kind] ?? UNKNOWN_KIND;
+const statusSig = (s) => s && [s.ok, s.error, s.at && fmtTs(s.at), s.detail?.map?.((d) => [d.provider, d.ok, d.error, d.errorKind, d.at && fmtTs(d.at)])];
+
+// Counts in colour as in the mockup: running and open counts, and the whole failed part. The text stays the plain summary.
+function sumParts(sum) {
+  return sum.split(' · ').flatMap((t, i) => {
+    const m = /^(\d+)( running| failed| open)(.*)$/.exec(t), n = m?.[2].trim();
+    return [i ? ' · ' : null, !m ? t : n === 'failed' ? h('span', 'sc-failed', t) : [h('span', `sc-${n}`, m[1]), m[2] + m[3]]].flat();
+  });
+}
+function updateBlock(p, ui) {
+  const { panelId, title, data } = p.panel, kind = kindOf(p), status = panelStatus.get(panelId);
+  const collapsed = ui.collapsed ?? kind.collapsed?.(data, status) ?? false;
+  const sig = JSON.stringify([p.panel, statusSig(status), ui, collapsed, replaying, provList.map((x) => [x.name, x.status])]);
+  if (sig === p.sig) return;
+  p.sig = sig;
+  if (!p.el) {
+    p.el = h('section', 'pn'); p.el.dataset.panel = panelId; p.el.dataset.kind = p.panel.kind;
+    p.head = h('div', 'pn-h'); p.body = h('div', 'pn-body'); p.body.id = `pnb-${panelId}`;
+    p.body.setAttribute('role', 'region');
+    p.el.append(p.head, h('div', 'pn-wrap', p.body));
+  }
+  const fk = p.el.contains(document.activeElement) ? document.activeElement.dataset?.fk : null, top = p.body.scrollTop;
+  p.el.classList.toggle('collapsed', collapsed);
+  p.el.classList.toggle('stale', !!kind.stale?.(data, status));
+  p.body.setAttribute('aria-label', title);
+  const act = (action, args) => post('/panels/action', { panelId, action, ...args });
+  const ctx = { panelId, ui, collapsed, setUi: (patch) => setPanelUi(panelId, patch), rerender: () => { p.sig = ''; renderPanels(); } };
+  const sum = kind.summary(data, status), meta = kind.meta?.(data, status), tog = h('button', 'pn-tog', h('i', 'chev'), h('span', 'pn-title', title), sum && h('span', 'pn-sep', '·'), h('span', 'pn-sum', ...sumParts(sum)), !collapsed && meta && h('span', 'pn-meta', meta));
+  tog.type = 'button'; tog.dataset.fk = 'tog'; tog.title = sum;
+  tog.setAttribute('aria-expanded', String(!collapsed)); tog.setAttribute('aria-controls', p.body.id);
+  tog.onclick = () => { setPanelUi(panelId, { collapsed: !collapsed }); ctx.rerender(); };
+  p.head.replaceChildren(tog, ...(kind.buttons?.(data, status, act, ctx) ?? []));
+  p.body.replaceChildren();
+  kind.render(p.body, data, status, act, ctx);
+  p.body.scrollTop = top;
+  if (fk) [...p.el.querySelectorAll('[data-fk]')].find((e) => e.dataset.fk === fk)?.focus();
+}
+// Shown only with the arbiter selected and at least one panel not hidden by hand.
+function renderPanels() {
+  const box = $('panels'), all = loadJson(panelUiKey());
+  const vis = selected === ARBITER ? [...panelMap.values()].filter((p) => !all[p.panel.panelId]?.hidden) : [];
+  vis.sort((a, b) => kindOf(a).rank - kindOf(b).rank || (a.panel.panelId < b.panel.panelId ? -1 : 1));
+  box.hidden = !vis.length;
+  if (pdrag) return;
+  for (const p of vis) updateBlock(p, all[p.panel.panelId] ?? {});
+  [...box.children].filter((c) => !vis.some((p) => p.el === c)).forEach((c) => c.remove());
+  vis.forEach((p, i) => { if (box.children[i] !== p.el) box.insertBefore(p.el, box.children[i] ?? null); });
+}
+let panelTimer = 0; // replay delivers many events at once: render after the burst
+const schedulePanels = () => { panelTimer ||= setTimeout(() => { panelTimer = 0; renderPanels(); }, 0); };
+Object.assign(handlers, {
+  panel: (e) => { if (!replaying && (jobRows(e.data).some((r) => r.stale) || provList.some((p) => p.status === 'changed'))) provSoon(); const old = panelMap.get(e.panelId); panelMap.set(e.panelId, { panel: { panelId: e.panelId, kind: e.kind, title: e.title, data: e.data, badge: e.badge }, el: old?.el, head: old?.head, body: old?.body, sig: '' }); schedulePanels(); },
+  panel_removed: (e) => { panelMap.get(e.panelId)?.el?.remove(); panelMap.delete(e.panelId); schedulePanels(); },
+  panel_status: (e) => { if (!replaying && Array.isArray(e.detail) && e.detail.some((d) => d?.ok === false)) provSoon(); panelStatus.set(e.panelId, e); schedulePanels(); },
+  provider_proposed: (e) => { showProposal(e); provSoon(); },
+  provider_decided: (e) => { document.querySelector(`[data-prov="${CSS.escape(e.name)}"]${e.hash ? `[data-hash="${CSS.escape(e.hash)}"]` : ''}`)?.remove(); provSoon(); },
+});
+const ready = handlers.ready;
+handlers.ready = (e) => { ready(e); schedulePanels(); };
+
+// ---- job providers: approval card, providers dialog, per-workspace choice ----
+const pendingProps = () => [...document.querySelectorAll('#asks [data-prov]')].map((c) => c.dataset.prov);
+// Fetch a provider's files into a <pre>; resolves true once shown. Approving stays off until then.
+async function loadProvFiles(name, hash, view) {
+  try {
+    const r = await fetch(`/providers/files?name=${encodeURIComponent(name)}&hash=${encodeURIComponent(hash ?? '')}`);
+    if (!r.ok) { view.textContent = `files failed: ${(await r.text()) || r.status}`; return false; }
+    const j = await r.json(), list = Array.isArray(j) ? j : Array.isArray(j.files) ? j.files : Object.entries(j).map(([path, text]) => ({ path, text }));
+    view.textContent = list.map((x) => `── ${x.path ?? x.name}${x.truncated ? ' (cut)' : ''}\n${x.binary ? '(binary file, not shown)' : x.text ?? x.content ?? ''}`).join('\n\n');
+    view.hidden = false; return list.length > 0;
+  } catch { view.textContent = 'files failed'; return false; }
+}
+function showProposal(e) {
+  document.querySelector(`[data-prov="${CSS.escape(e.name)}"]`)?.remove();
+  const m = e.manifest ?? {}, poll = m.pollS ?? m.poll_s ?? m.pollSeconds, card = h('div', 'ask prov');
+  card.dataset.prov = e.name; card.dataset.hash = e.hash ?? '';
+  const files = (Array.isArray(e.files) ? e.files : []).map((f) => (typeof f === 'string' ? { path: f } : f));
+  const view = h('pre'); view.textContent = 'Loading files…';
+  const reason = Object.assign(document.createElement('input'), { placeholder: 'Reason (optional)' });
+  const decide = (ok) => post(ok ? '/providers/approve' : '/providers/reject', { name: e.name, hash: e.hash, ...(ok ? {} : { reason: reason.value.trim() || undefined }) });
+  const approve = h('button', '', 'Approve'), reject = h('button', 'deny', 'Reject');
+  const click = async (ok) => { approve.disabled = reject.disabled = true; if (!(await decide(ok))) approve.disabled = reject.disabled = false; }; // one decision per card: a second click would race the first
+  approve.onclick = () => click(true); reject.onclick = () => click(false);
+  approve.disabled = true; // the files must be on screen before Approve works
+  loadProvFiles(e.name, e.hash, view).then((ok) => { approve.disabled = !ok; });
+  card.append(...[
+    h('div', '', `New job provider: ${e.name}`), h('small', '', [m.kind ?? 'jobs', m.description].filter(Boolean).join(' · ')), e.note && h('small', '', e.note),
+    ...(e.warnings ?? []).map((w) => h('div', 'warn', String(w))),
+    h('div', 'warn', `Runs${poll ? ` every ${poll} s` : ' on a timer'} with your rights, outside any sandbox.`),
+    m.cwd && h('div', 'warn', `Runs in ${m.cwd}`),
+    m.needs && h('small', '', `Needs: ${[].concat(m.needs).join(', ')}`),
+    h('pre', '', JSON.stringify(m, null, 2)),
+    e.hash && h('small', 'hash', `Folder hash ${String(e.hash).slice(0, 12)}`),
+    h('small', '', files.length ? `Files: ${files.map((f) => f.path ?? f.name).join(', ')}` : 'Files'), view,
+    e.report && h('pre', '', typeof e.report === 'string' ? e.report : JSON.stringify(e.report, null, 2)),
+    reason, approve, reject].filter(Boolean));
+  $('asks').append(card);
+  if ($('providers').open) renderProviders();
+}
+const provSel = new Map(), provSeen = new Map(); // unsaved checkbox choices and provider hashes whose files were shown; they survive re-renders
+let provFor = null; // workspace summary while choosing its providers, else null (manage list)
+function renderProviders() {
+  const w = provFor, list = provList.filter((p) => p.name);
+  $('provTitle').textContent = w ? `JOB PROVIDERS FOR ${w.name.toUpperCase()}` : 'JOB PROVIDERS';
+  $('provSave').hidden = !w;
+  const boxes = [], pend = pendingProps().filter((n) => !list.some((p) => p.name === n && p.status === 'approved'));
+  $('provList').replaceChildren(...(pend.length ? [h('p', 'warn', `${pend.length} waiting for approval: ${pend.join(', ')} (see the cards above the chat)`)] : []), ...(list.length ? list.map((p) => {
+    const row = h('div'), info = h('span', 'pi', p.name, h('small', '', [p.status, p.description, p.error].filter(Boolean).join(' · ')));
+    if (w) {
+      const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: provSel.get(p.name) ?? (!w.providers?.length || w.providers.includes(p.name)), disabled: p.status !== 'approved' });
+      c.dataset.name = p.name; c.onchange = () => provSel.set(p.name, c.checked); boxes.push(c);
+      row.append(h('label', '', c, info));
+    } else {
+      row.append(info);
+      if (p.status === 'not-approved' || p.status === 'changed') {
+        const b = h('button', '', p.status === 'changed' ? 'APPROVE AGAIN' : 'APPROVE'); b.type = 'button';
+        const view = h('pre'); view.hidden = !provSeen.has(p.hash);
+        const show = h('button', '', 'FILES'); show.type = 'button';
+        const load = async () => { const ok = await loadProvFiles(p.name, p.hash, view); b.disabled = !ok; if (ok) provSeen.set(p.hash, true); };
+        show.onclick = load; b.disabled = !provSeen.has(p.hash); if (provSeen.has(p.hash)) load();
+        b.onclick = async () => { if (await post('/providers/approve', { name: p.name, hash: p.hash })) { await loadProviders(); refreshTabs(); } };
+        row.append(show, b, view);
+      }
+    }
+    return row;
+  }) : [h('p', '', 'No providers yet.')]));
+  $('provSave').onclick = async (ev) => {
+    ev.preventDefault();
+    const on = boxes.filter((c) => c.checked && !c.disabled).map((c) => c.dataset.name);
+    if (!on.length) return toast('Pick at least one provider');
+    if (await post('/workspaces/providers', { ws: w.id, providers: on.length === boxes.filter((c) => !c.disabled).length ? [] : on })) { $('providers').close(); refreshTabs(); }
+  };
+}
+function openProviders(w = null) { if (!$('providers').open) provSel.clear(); provFor = w; renderProviders(); if (!$('providers').open) $('providers').showModal(); loadProviders(); }
 
 // Vertical wheel scrolls the tab strip sideways.
 $('tabs').addEventListener('wheel', (ev) => { if (!ev.deltaY) return; ev.preventDefault(); $('tabs').scrollLeft += ev.deltaY; }, { passive: false });
