@@ -33,6 +33,8 @@ Also `jarvis stop|restart|status|logs`; foreground: `npm start`. Then click **NE
 - **Teams.** Jarvis picks the cheapest fitting model per task; leads hire helpers; big teams fold into `+N` badges.
 - **Costs.** Cost per agent and workspace, COMPACT and RESET for long contexts, nothing stopped automatically.
 - **Notes folder.** Optional shared markdown folder Jarvis keeps current and commits to git.
+- **Jobs panel.** Long jobs (CI, training, deploys) show above Jarvis's chat, polled by small approved scripts called status providers: no agent and no tokens per poll. Jarvis hears about state changes in one batched message. See [docs/STATUS-PROVIDERS.md](docs/STATUS-PROVIDERS.md).
+- **Open items panel.** With a notes folder, the workspace's `open-items.md` shows above the chat; it is read-only: tell Jarvis in chat that something is done and it edits the file.
 - **Claude health dot** (bottom left): from your own agent runs plus the Claude API and Claude Code components of Anthropic's status page. Green works, amber slow or degraded API, red auth, network or server error, grey unknown (no run yet).
 - **Local only.** Listens on `127.0.0.1`, rejects other origins; every event is on disk, so restarts lose nothing.
 
@@ -61,8 +63,10 @@ All optional, set as environment variables before `jarvis` or `npm start`. Data 
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
 | `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces CPU |
 | `JARVIS_VOICE_AUTOSEND` | `1` | `0` inserts the transcript into the input box instead of sending it |
+| `JARVIS_JOBS` | `1` | `0` turns off the Jobs panel, its tools and prompt text |
+| `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |
 
-The full list (effort, plugins, reset bounds, Claude binary, every voice variable) is in [docs/GUIDE.md](docs/GUIDE.md#settings).
+The full list (effort, plugins, reset bounds, Claude binary, providers folder, every voice variable) is in [docs/GUIDE.md](docs/GUIDE.md#settings).
 
 ## Develop
 

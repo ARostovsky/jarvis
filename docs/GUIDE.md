@@ -4,7 +4,7 @@ The details behind the [README](../README.md): what the screen shows, controls, 
 
 ## Contents
 
-- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input, status dot, notes folder
+- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input, status dot, notes folder, panels and jobs, open items
 - [Safety](#safety)
 - [Costs](#costs)
 - [Settings](#settings)
@@ -90,6 +90,30 @@ The dot at the bottom left shows whether your Claude access works: green the las
 - Workspaces that had a notes folder before this layout get their folder at the next start of their Jarvis session and one message asking it to copy its own entries from the shared `status.md` and `open-items.md`. Those shared files and the old `journal/` folder stay as they are; the server moves or deletes nothing.
 - Jarvis commits the folder to git after each turn. Each workspace commits only the files its own agents changed (Jarvis and helpers); your own edits there stay uncommitted. Each commit has a short description of the change written by Jarvis, and ends with `Workspace: <name>`. Details: [docs/ARCHITECTURE.md](ARCHITECTURE.md).
 
+### Panels and jobs
+
+Panels are pinned blocks above Jarvis's chat. They show only while Jarvis (the center circle) is selected and at least one panel has something to show.
+
+- **Jobs** lists long jobs: CI runs, training, deploys. A job is a row with a state edge (failed red, waiting amber, running cyan, done dim), its label, id (a link when the provider gives one), step, progress, time running and, when the provider has it, the cost as `$12.40 (as of 14:05)`. A field the provider does not return is not shown at all, never as a placeholder.
+- Rows sort by severity: failed first, then stale, waiting and needing attention, then running, then done; the most recent change first. Drag a row to put it where you want; the order is kept per workspace and **Reset order** brings the sort back. A failed row stays highlighted even under your own order.
+- A finished row stays until you press **×** on it or **Clear done**. **↻** checks now. Rows that Jarvis cannot refresh (provider failed, disabled or changed) are dimmed with a note.
+- Each panel has a header with a summary (`2 running · 1 failed`), and a fold arrow. Folding and hiding are kept per workspace in your browser. Hide or show a panel in **VIEW**, group **Panels**. A Jobs panel with nothing running or failed starts folded.
+- The tab shows a badge for Jobs: `✕2` failed, `⚠` stale, `◐1` waiting, `▶3` running. With nothing failed, stale, waiting or running there is no badge.
+- **Who watches.** Jarvis puts a job on the panel with `watch_jobs` right after it starts the job, then Jarvis polls it with a status provider every minute or so. Nothing asks a model: a poll costs no tokens. Jarvis gets one message per poll that lists every job that changed state, and a stopped Jarvis gets it with your next message. Cost and other slow numbers are fetched less often (default every 30 minutes).
+- **Status providers** are small scripts that you approve once. When a job has no provider and someone keeps checking it by hand, and the workspace has a notes folder, Jarvis offers to build one (it asks once per kind of job and records your answer in `status-providers.md` in the notes folder). A new provider appears as an approval card with its manifest, files and test report; **Approve** stays off until the files are shown on the card, and pins those exact files, so a later change stops the provider until you approve again. Without a notes folder Jarvis cannot build providers and tells you to set one. **PROVIDERS** (top bar, shown once any provider or proposal exists, with the number of proposals waiting) lists all providers, their state and **Approve** for a folder you placed by hand (press **Files** first: Approve stays off until the files are shown); the tab menu **Job providers…** picks which providers one workspace may use. Unsaved ticks survive a refresh, and ticking every provider saves an empty list, which means all approved providers. Contract, safety rules and how to write one: [STATUS-PROVIDERS.md](STATUS-PROVIDERS.md).
+- A provider runs on your machine with your rights, outside the agent permission checks. Approve only what you read.
+- Turn it all off with `JARVIS_JOBS=0` (see Settings).
+
+### Open items
+
+With a notes folder, the **Open items** panel shows `workspaces/<workspace id>/open-items.md` (the file Jarvis keeps, see Notes folder). The header reads `N open · M for you`. The panel is gone while the file has no items.
+
+- Open and parked (`[~]`) items count as open. Items with `(you)` come first and carry a **you** badge; parked ones show their reason dimmed; done items are struck through.
+- The panel is read-only. Tell Jarvis in chat that an item is done; it removes it from the file, and the panel follows within a second. Edit the file by hand and the panel follows too.
+- Lines that do not parse are left untouched in the file, and not shown.
+- After a context reset Jarvis gets the first 20 open items in its seed, so it does not raise them again.
+- Turn it off with `JARVIS_OPEN_ITEMS=0` (see Settings).
+
 ### Code blocks
 
 - Every fenced code block in the chat has a **Copy** button at its top right (shown on hover or keyboard focus, always on touch screens). One click copies the whole block.
@@ -131,6 +155,10 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_RESET_SAVE_TIMEOUT_MS` | `120000` | Longest the RESET button waits for Jarvis to save its notes before it resets anyway |
 | `JARVIS_CLAUDE_PATH` | `claude` on `PATH` | Claude Code binary sessions run. Default is the first executable `claude` on `PATH` (the auto-updating install), picked up again at each session start. It falls back to the build bundled in the SDK package when none is found, when `claude --version` fails, or when it is older than the bundled one. `bundled` forces the bundled build (escape hatch); the choice is logged at startup |
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
+| `JARVIS_JOBS` | `1` | `0` turns off the Jobs panel: no polling, no jobs tools or prompt text for Jarvis |
+| `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |
+| `JARVIS_PROVIDERS_DIR` | `$XDG_CONFIG_HOME/jarvis/status-providers` (`~/.config/...`) | Folder with status providers, one subfolder each |
+| `JARVIS_JOBS_MIN_POLL_S` | unset | Tests only: lowers the minimum poll, slow-field interval and `timeoutS` (normally 15 s, 15 min and 5 s) to this many seconds |
 | `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces CPU. See Voice input |
 | `JARVIS_VOICE_AUTOSEND` | `1` | On release the transcript is sent at once to the agent that was selected when recording started (like a Telegram voice message); your draft stays untouched. `0` inserts it into the input box instead, without sending |
 | `JARVIS_VOICE_MAX_S` | `60` | Seconds after which the server stops a recording by itself (the audio so far is still transcribed on release) |
