@@ -9,7 +9,7 @@ import { join } from 'node:path';
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-notes-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'; // no user hooks or signing; commitNotes supplies the identity
-const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace, setWorkspaceNotes } = await import('../src/agents.ts');
+const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace } = await import('../src/agents.ts');
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' }).trim();
 // What the arbiter's Write tool call does.
@@ -173,4 +173,20 @@ test('a refused notes folder never stays in the workspace meta', () => {
   symlinkSync(outside, join(notes, 'workspaces'));
   assert.throws(() => setWorkspaceNotes(w.meta.id, notes), /not a plain folder/);
   assert.equal(w.meta.notes, undefined);
+});
+
+test('archive leaves the notes folder in place; restore brings it back from workspaces/_archive', () => {
+  const notes = join(tmp, 'arch-notes');
+  const w = addWorkspace('archnotes', undefined, {}, notes);
+  const dir = join(notes, 'workspaces', w.meta.id), parked = join(notes, 'workspaces', '_archive', w.meta.id);
+  archiveWorkspace(w.meta.id);
+  assert.ok(existsSync(join(dir, 'status.md')) && !existsSync(parked)); // archiving moves nothing
+  mkdirSync(join(notes, 'workspaces', '_archive'), { recursive: true });
+  renameSync(dir, parked); // the user filed it away
+  restoreWorkspace(w.meta.id);
+  assert.ok(existsSync(join(dir, 'status.md')) && !existsSync(parked));
+  archiveWorkspace(w.meta.id);
+  mkdirSync(parked, { recursive: true }); // collision: a folder at both places
+  assert.doesNotThrow(() => restoreWorkspace(w.meta.id));
+  assert.ok(existsSync(join(dir, 'status.md')) && existsSync(parked));
 });

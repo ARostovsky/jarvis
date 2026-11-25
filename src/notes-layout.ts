@@ -60,6 +60,21 @@ export function ensureWorkspaceNotes(meta: Meta): { created: string[] } {
   return { created };
 }
 
+// Restore from the archive: a folder the user moved to workspaces/_archive/<id> goes back to workspaces/<id>. Archiving moves nothing. An existing workspaces/<id> is never overwritten: both stay and a warning is logged.
+export function restoreArchivedNotes(meta: Meta): 'moved' | 'collision' | 'none' {
+  if (!meta.notes || !/^[a-z0-9-]+$/.test(meta.id)) return 'none';
+  const root = join(meta.notes, 'workspaces'), from = join(root, '_archive', meta.id), to = join(root, meta.id);
+  const st = lstatSync(from, { throwIfNoEntry: false });
+  if (!st?.isDirectory()) return 'none'; // missing, a symlink or a file
+  if (lstatSync(to, { throwIfNoEntry: false })) {
+    console.warn(`notes: not restoring ${from}: ${to} exists`);
+    return 'collision';
+  }
+  plainDir(root);
+  renameSync(from, to);
+  return 'moved';
+}
+
 export type OpenItem = { kind: 'open' | 'parked' | 'done'; date: string; text: string; you: boolean; check?: string };
 const DATE = '(\\d{2}-\\d{2}-\\d{4}|\\d{4}-\\d{2}-\\d{2})'; // DD-MM-YYYY as written by the prompts; YYYY-MM-DD tolerated
 const OPEN_RE = new RegExp(`^- \\[( |~)\\] ${DATE} (\\(you\\) )?(?!\\(you\\)$)(\\S.*)$`);

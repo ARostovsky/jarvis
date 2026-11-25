@@ -10,7 +10,7 @@ import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
 import { classify, recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
-import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, workspaceDir, writeIndex } from './notes-layout.ts';
+import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, restoreArchivedNotes, workspaceDir, writeIndex } from './notes-layout.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -1765,6 +1765,7 @@ export function restoreWorkspace(id: string) {
   }
   workspaces.set(id, w);
   saveRegistry();
+  if (meta.notes) try { restoreArchivedNotes(meta); } catch (e) { console.warn(`notes: cannot restore the notes folder of ${id}: ${(e as Error).message}`); }
   rmSync(join(to, 'meta.json')); // only now: after a crash before saveRegistry() its name and folders are still on disk
   touchRecent(meta);
   return meta as WorkspaceMeta;

@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, linkSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, saveTurnText, workspaceDir, writeIndex } from '../src/notes-layout.ts';
+import { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, restoreArchivedNotes, saveTurnText, workspaceDir, writeIndex } from '../src/notes-layout.ts';
 import { resetSeed } from '../src/reset.ts';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'jarvis-layout-'));
@@ -155,4 +155,30 @@ test('parser: an unclosed comment opener hides nothing, indented items and impos
   const { items, invalid } = parseOpenItems('  - [ ] 25-11-2026 indented\n- [ ] 99-99-9999 nonsense\n- [ ] 31-02-2026 no such day\n- [ ] 2026-13-01 no such month\n- [x] x verified 40-01-2026: y\n- [ ] 29-02-2028 leap day');
   assert.deepEqual(items.map((i) => i.text), ['leap day']);
   assert.equal(invalid.length, 5);
+});
+
+test('restore moves workspaces/_archive/<id> back, never over an existing folder', () => {
+  const notes = tmp();
+  const m = meta(notes);
+  assert.equal(restoreArchivedNotes(m), 'none');
+  mkdirSync(join(notes, 'workspaces', '_archive', m.id), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', '_archive', m.id, 'status.md'), 'old');
+  assert.equal(restoreArchivedNotes(m), 'moved');
+  assert.equal(readFileSync(join(notes, 'workspaces', m.id, 'status.md'), 'utf8'), 'old');
+  assert.ok(!existsSync(join(notes, 'workspaces', '_archive', m.id)));
+  // collision: both stay, nothing thrown
+  mkdirSync(join(notes, 'workspaces', '_archive', m.id), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', '_archive', m.id, 'status.md'), 'archived');
+  assert.equal(restoreArchivedNotes(m), 'collision');
+  assert.equal(readFileSync(join(notes, 'workspaces', m.id, 'status.md'), 'utf8'), 'old');
+  assert.equal(readFileSync(join(notes, 'workspaces', '_archive', m.id, 'status.md'), 'utf8'), 'archived');
+});
+
+test('the index ignores workspaces/_archive', () => {
+  const notes = tmp();
+  ensureWorkspaceNotes(meta(notes));
+  mkdirSync(join(notes, 'workspaces', '_archive', 'gone-1111'), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', '_archive', 'gone-1111', 'status.md'), 'Summary: archived\n');
+  const text = readFileSync(writeIndex(notes)!, 'utf8');
+  assert.ok(text.includes('(my-ws-ab12/status.md)') && !text.includes('gone-1111') && !text.includes('_archive'));
 });
