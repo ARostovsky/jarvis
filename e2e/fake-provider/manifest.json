@@ -1,0 +1,10 @@
+{
+  "schema": 1,
+  "name": "fake-jobs",
+  "description": "Deterministic test provider: prints the row in FAKE_JOBS_DIR/<id>.json for each id",
+  "command": ["node", "fake.ts"],
+  "args": ["{ids}"],
+  "pollS": 1,
+  "timeoutS": 5,
+  "env": { "set": { "FAKE_JOBS_DIR": "/set/by/the/spec" } }
+}
