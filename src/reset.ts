@@ -46,7 +46,7 @@ export function resetSeed(f: SeedFacts): string {
     lines.push(line);
   }
   out.push(f.agents.length ? `Agents:\n${lines.join('\n')}${f.agents.length > lines.length ? `\n… and ${f.agents.length - lines.length} more (list_agents)` : ''}` : 'Agents: none yet.');
-  if (f.last) out.push(`Your last message before the reset:\n${clip(f.last, 1500)}`);
+  if (f.last) out.push(`Your last message before the reset (may be stale: do not repeat its open items or "on you" lists without re-verifying them):\n${clip(f.last, 1500)}${f.wsNotes ? `\nTreat every '- [ ]' item as not verified: keep its '[ ]' state, and check it before you claim its state. Never drop an item you did not verify, unless the user says it is done. Do not re-check a verified fact that cannot change. Open items are '- [ ]' lines, parked ones '- [~]' lines, done and verified ones '- [x] ... verified <DD-MM-YYYY>' lines of ${f.wsNotes}/open-items.md.` : ''}`);
   if (f.handled.length) out.push(`Already handled by your old session after it was asked to save, with its final reply; do not redo them, they may be missing from the notes:\n${f.handled.slice(-8).map((h) => `${clip(h.text, 400)}\n=> ${clip(h.reply, 300)}`).join('\n---\n')}`);
   if (f.unhandled.length) out.push(`Sent to your old session but possibly not handled yet; handle them now:\n${f.unhandled.slice(-8).map((t) => clip(t, 600)).join('\n---\n')}`);
   return clip(out.join('\n\n'), SEED_CAP);

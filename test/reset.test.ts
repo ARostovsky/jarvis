@@ -38,9 +38,17 @@ test('seed carries unhandled messages as work and handled ones as done, after th
   assert.match(seed, /handle them now:\nQUEUED-ONE/);
 });
 
+test('seed without a workspace notes folder warns about staleness but names no open-items file', () => {
+  const seed = resetSeed({ workspace: 'W', agents: [], last: 'LAST', unhandled: [], handled: [] });
+  assert.match(seed, /may be stale/);
+  assert.ok(!seed.includes('open-items.md') && !seed.includes("Treat every '- [ ]'"));
+});
+
 test('seed names workspace, notes, agents and last text, and is capped', () => {
   const agents = [{ id: 'a-1', name: 'A', status: 'running', repo: '/r', lastText: 'x'.repeat(500) }, { id: 'b-2', name: 'B', status: 'idle', lastText: '' }];
-  const seed = resetSeed({ workspace: 'W', project: '/p', notes: '/n', agents, last: 'LAST', unhandled: ['REPORT'], handled: [] });
+  const seed = resetSeed({ workspace: 'W', project: '/p', notes: '/n', wsNotes: '/n/workspaces/w-1', agents, last: 'LAST', unhandled: ['REPORT'], handled: [] });
+  assert.match(seed, /may be stale/);
+  assert.match(seed, /Treat every '- \[ \]' item as not verified: keep its '\[ \]' state, and check it before you claim its state\. Never drop an item you did not verify, unless the user says it is done\./);
   for (const s of ['[context reset]', 'same workspace "W"', 'do not tell the user to start a new workspace', '/n', 'status.md', '- a-1 (A): running, repo /r, branch jarvis/a-1', '- b-2 (B): idle', 'LAST', 'REPORT']) assert.ok(seed.includes(s), s);
   assert.ok(!seed.includes('x'.repeat(301)));
   const many = Array.from({ length: 100 }, (_, i) => ({ id: `i${i}`, name: 'n', status: 'idle', lastText: 'y'.repeat(400) }));
