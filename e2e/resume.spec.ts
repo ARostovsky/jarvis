@@ -22,7 +22,7 @@ async function stop() {
   await exit;
 }
 test.afterEach(stop);
-test.use({ baseURL: URL });
+test.use({ baseURL: URL, cutStream: true }); // the test stops the server under the open page
 
 const send = async (page: import('@playwright/test').Page, text: string) => {
   await page.fill('#dinput', text);

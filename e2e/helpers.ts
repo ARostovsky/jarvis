@@ -8,12 +8,14 @@ export { expect, ORIGIN, type Page };
 export const DATA = join(DATA_HOME, 'jarvis');
 
 // Every test fails on an uncaught page error or a console error.
-export const test = base.extend<{ errors: string[] }>({
-  errors: [async ({ page }, use) => {
+export const test = base.extend<{ errors: string[]; cutStream: boolean }>({
+  // A spec that stops its server on purpose while the page is open (resume.spec) sets `test.use({ cutStream: true })`: the browser then logs the cut event stream.
+  cutStream: [false, { option: true }],
+  errors: [async ({ page, cutStream }, use) => {
     const errors: string[] = [];
     page.on('pageerror', (e) => errors.push(`pageerror: ${e.message}`));
     // The browser logs every refused (4xx) request itself (and a host network change, which is not the app); the app shows it as a toast, which the tests check.
-    page.on('console', (m) => { if (m.type() === 'error' && !/status of 4\d\d|ERR_NETWORK_CHANGED/.test(m.text())) errors.push(`console: ${m.text()}`); });
+    page.on('console', (m) => { if (m.type() === 'error' && !/status of 4\d\d|ERR_NETWORK_CHANGED/.test(m.text()) && !(cutStream && /ERR_INCOMPLETE_CHUNKED_ENCODING/.test(m.text()))) errors.push(`console: ${m.text()}`); });
     await use(errors);
     expect(errors).toEqual([]);
   }, { auto: true }],
@@ -41,11 +43,13 @@ export async function createWs(page: Page, name: string, extra: object = {}): Pr
 
 export const tab = (page: Page, name: string) => page.locator('#tabs button').filter({ hasText: new RegExp(`^${name}$`) });
 
-// Opens the page on workspace `name` and waits until its tab is the active one.
+// Opens the page on workspace `name` and waits until its tab is the active one and its event log is replayed.
 export async function open(page: Page, name: string) {
   await page.goto('/');
   await tab(page, name).click();
   await expect(tab(page, name)).toHaveClass('active');
+  // A stream that opens late clears and rebuilds the agent nodes; acting on a node before that loses the click or key press.
+  await page.waitForFunction('es.readyState === 1 && !replaying');
 }
 
 // The SDK is never started: a second selectable agent is written into an archived log, which restore replays.
