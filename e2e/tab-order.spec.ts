@@ -24,7 +24,9 @@ test('the active tab stays visible in a scrolled tab bar and a poll keeps the sc
   await expect(tab(page, last)).toHaveClass(/active/);
   const inView = () => page.evaluate((name) => {
     const bar = document.getElementById('tabs')!.getBoundingClientRect();
-    const r = [...document.querySelectorAll('#tabs button')].find((b) => b.firstChild?.textContent === name)!.getBoundingClientRect();
+    const btn = [...document.querySelectorAll('#tabs button')].find((b) => b.firstChild?.textContent === name);
+    if (!btn) return false; // right after a reload the tabs are not drawn yet
+    const r = btn.getBoundingClientRect();
     return r.left >= bar.left && r.right <= bar.right - 28; // clear of the right-edge fade
   }, last);
   await page.waitForTimeout(2500); // next poll

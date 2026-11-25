@@ -581,6 +581,7 @@ test.describe('voice autosend guard', () => {
     await page.locator('#mic').hover();
     await page.mouse.down();
     await expect(page.locator('#mic')).toHaveClass('rec');
+    await expect.poll(() => page.locator('#mic').evaluate((b) => getComputedStyle(b).getPropertyValue('--lvl'))).not.toBe(''); // the recorder is open: a release now ends it instead of cancelling a start
     await page.waitForTimeout(400);
     await page.evaluate("select('arbiter')"); // unlocking is per selection: coming back to sub1 would be guarded again
     await page.evaluate("select('sub1')");
