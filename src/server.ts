@@ -7,6 +7,8 @@ import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspa
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+// Voice input is opt-in: voice.ts is not even loaded unless JARVIS_VOICE is set. The /voice routes and `voice` in /workspaces appear once its preflight passed (after listen, so a slow preflight never delays the start).
+let voice: { maxS: number } | undefined;
 const PAGE = resolve(import.meta.dirname, '..', 'public', 'index.html');
 
 async function body(req: IncomingMessage): Promise<any> {
@@ -29,7 +31,7 @@ const replyOf = (b: any): AskReply | undefined =>
   b.answers ? { answers: strings(b.answers), annotations: Object.fromEntries(Object.entries(obj(b.annotations)).map(([q, x]) => [q, strings(x, ['preview', 'notes'])])) } : undefined;
 
 // Each returns a JSON-able value or nothing (204).
-const commands: Record<string, (b: any) => unknown> = {
+const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }, b.notes ? String(b.notes) : undefined).meta,
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/reorder': (b) => reorderWorkspaces(Array.isArray(b.ids) ? b.ids.map(String) : []),
@@ -50,6 +52,9 @@ const commands: Record<string, (b: any) => unknown> = {
   '/board': (b) => void ws(b.ws).postNote('user', Array.isArray(b.to) ? b.to.map(String) : ['all'], String(b.text)),
 };
 
+// Voice errors carry their own status (409 busy, 500 no pw-record); anything else is a 400.
+const statusOf = (e: unknown) => { const s = (e as any)?.status; return Number.isInteger(s) && s >= 400 && s < 600 ? s : 400; };
+
 createServer(async (req, res) => {
   const url = new URL(req.url ?? '/', `http://127.0.0.1:${PORT}`);
   // DNS rebinding: a foreign site resolved to 127.0.0.1 sends its own name as Host, and could otherwise read /workspaces and /events.
@@ -57,7 +62,7 @@ createServer(async (req, res) => {
   if (req.method === 'GET' && url.pathname === '/') {
     res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' }).end(readFileSync(PAGE));
   } else if (req.method === 'GET' && url.pathname === '/workspaces') {
-    const body = { workspaces: [...workspaces.values()].map((w) => w.summary()), archived: listArchived(), settingsModel: SETTINGS_MODEL, arbiterModel: ARBITER_MODEL };
+    const body = { workspaces: [...workspaces.values()].map((w) => w.summary()), archived: listArchived(), settingsModel: SETTINGS_MODEL, voice: !!voice, voiceAutosend: process.env.JARVIS_VOICE_AUTOSEND !== '0', voiceMaxS: voice?.maxS, arbiterModel: ARBITER_MODEL };
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
   } else if (req.method === 'GET' && url.pathname === '/recent') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
@@ -84,14 +89,14 @@ createServer(async (req, res) => {
       return;
     }
     try {
-      const out = commands[url.pathname](await body(req));
+      const out = await commands[url.pathname](await body(req));
       if (out === undefined) res.writeHead(204).end();
       else res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
     } catch (e) {
       // stderr goes to server.log; never the body, it may hold user content.
       console.error(`${new Date().toISOString()} ${req.method} ${url.pathname}: ${JSON.stringify((e as Error).message)}`);
       if (e instanceof DirtyWorktree) res.writeHead(409, { 'x-can-commit': String(e.canCommit) }).end(e.message);
-      else res.writeHead(400).end((e as Error).message);
+      else res.writeHead(statusOf(e)).end((e as Error).message);
     }
   } else {
     res.writeHead(404).end();
@@ -99,3 +104,16 @@ createServer(async (req, res) => {
 }).listen(PORT, '127.0.0.1', () => console.log(`jarvis UI: http://127.0.0.1:${PORT}`));
 
 loadWorkspaces();
+if (process.env.JARVIS_VOICE) {
+  import('./voice.ts').then((m) => m.initVoice()).then((v) => {
+    if (!v) return;
+    // Same Origin and content-type checks as every POST (the commands table), level included: it renews the lease. One recording at a time; start returns an id that the other calls must pass.
+    Object.assign(commands, {
+      '/voice/start': async () => ({ id: await v.start() }),
+      '/voice/stop': async (b: any) => ({ text: await v.stop(b.id) }),
+      '/voice/cancel': (b: any) => v.cancel(b.id),
+      '/voice/level': (b: any) => v.level(b.id),
+    });
+    voice = v;
+  }, (e) => console.error(`voice disabled: ${(e as Error).message}`));
+}
