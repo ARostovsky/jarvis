@@ -113,6 +113,8 @@
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
   input, #dinput { flex: 1; min-width: 0; background: transparent; border: 0; color: var(--text); font: 16px Rajdhani, sans-serif; padding: 14px 16px; outline: none; }
   #dinput[readonly] { cursor: default; } #dinput[readonly] + button { opacity: .4; pointer-events: none; }
+  #mic { position: relative; overflow: hidden; } #mic i { position: absolute; left: 0; bottom: 0; height: 3px; width: calc(var(--lvl, 0) * 100%); background: currentColor; display: none; }
+  #mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; } #mic.rec { color: #ff4d4d; } #mic.rec i { display: block; } #mic.busy { opacity: .5; pointer-events: none; cursor: wait; } #mic.busy::after { content: ' transcribing…'; }
   #dinput { resize: none; max-height: 40vh; line-height: 1.3; }
   #dinput::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--cyan); font: 600 14px Rajdhani, sans-serif; letter-spacing: .15em; padding: 0 16px; cursor: pointer; }
@@ -234,7 +236,7 @@
   <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="preset" title="Fresh session from the notes and a short summary">RESET</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="log"></div>
-  <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button>SEND</button></form>
+  <form id="direct"><textarea id="dinput" rows="1" placeholder="Message…" autocomplete="off"></textarea><button>SEND</button><button type="button" id="mic" hidden title="Hold to talk (or hold Ctrl+Space / Alt+V), release to send, Esc cancels" aria-label="Hold to talk">MIC<i id="micLvl"></i></button></form>
 </aside>
 
 
@@ -514,7 +516,7 @@ function log(id, cls, text, cost, at) {
   if (selected === id) appendLog(cls, text, cost, at);
 }
 // What model an agent really runs: what its session reported, else what was asked for, else the settings default.
-let settingsModel = null, arbiterModel = null;
+let settingsModel = null, arbiterModel = null, voice = false, voiceAutosend = true, voiceMaxS = 60;
 const modelLabel = (ag) => ag.runtimeModel ?? ag.model ?? (ag.id === ARBITER ? arbiterModel : settingsModel) ?? '';
 // Cost of an agent plus everything it spawned, recursively.
 const subtreeCost = (id) => (agents.get(id)?.agent.costUsd ?? 0) + kidsOf(id).reduce((s, c) => s + subtreeCost(c.agent.id), 0);
@@ -646,6 +648,7 @@ function select(id) {
   $('dinput').oninput(); // after the panel is visible and sized: hidden, scrollHeight is 0
   // Every agent takes orders from its parent (Jarvis or a lead); a stray message from the user derails it, so typing needs a double-click first.
   const lead = id === ARBITER ? null : nameOf(parentOf(id)) ?? parentOf(id);
+  unlocked = null; // select() locks again
   $('dinput').readOnly = !!lead;
   $('dinput').placeholder = lead ? `Works for ${lead} · double-click to write anyway` : `Message ${nameOf(id)}…  (Enter to send, Shift+Enter for new line)`;
   $('dinput').focus();
@@ -833,7 +836,8 @@ const clearDrop = () => $('tabs').querySelectorAll('.drop-before, .drop-after').
 const dropAfter = (ev, b) => ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
 async function refreshTabs() {
   let list, archived;
-  try { ({ workspaces: list, archived, settingsModel, arbiterModel } = await (await fetch('/workspaces')).json()); } catch { return; }
+  try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
+  $('mic').hidden = !voice;
   wsNames.clear();
   wsNotes.clear(); wsLive.clear();
   list.forEach((w) => (wsNames.set(w.id, w.name), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
@@ -1060,7 +1064,7 @@ function toast(text) {
 $('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
 
 async function post(path, data) {
-  const r = await postJson(path, { ...data, ws: WS }).catch((e) => e);
+  const r = await postJson(path, { ws: WS, ...data }).catch((e) => e);
   if (r instanceof Error) return toast(`${path.slice(1)} failed: ${r.message}`), false;
   if (r.ok) return true;
   if (r.status === 409 && path === '/delete') askDirty(data.id, await r.text(), r.headers.get('x-can-commit') === 'true');
@@ -1084,7 +1088,7 @@ $('direct').onsubmit = async (ev) => {
   $('dinput').oninput();
   setDraft('');
 };
-$('dinput').ondblclick = () => { const t = $('dinput'); if (t.readOnly) { t.readOnly = false; t.placeholder = 'Message the agent directly…  (Enter to send, Shift+Enter for new line)'; } };
+$('dinput').ondblclick = () => { const t = $('dinput'); if (t.readOnly) { unlocked = `${WS}/${selected}`; t.readOnly = false; t.placeholder = 'Message the agent directly…  (Enter to send, Shift+Enter for new line)'; } };
 $('dinput').onkeydown = (e) => { if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) { e.preventDefault(); $('direct').requestSubmit(); } };
 $('dinput').oninput = () => { const t = $('dinput'); t.style.height = 'auto'; if (t.value) t.style.height = t.scrollHeight + 'px'; }; // empty: skip, a wrapped placeholder would inflate scrollHeight
 $('pclose').onclick = () => { document.activeElement?.blur(); $('panel').classList.remove('open'); document.body.classList.remove('panel-open'); setDraft(); selected = null; markSelected(null); };
@@ -1144,6 +1148,110 @@ document.onkeydown = (e) => {
   // With the panel closed, Enter or / brings back the arbiter chat.
   else if ((e.key === 'Enter' || e.key === '/') && WS && !selected && !e.target.closest('input, textarea, dialog') && !(e.key === 'Enter' && e.target.closest('button'))) { e.preventDefault(); select(ARBITER); }
 };
+
+// ---- voice input: the server records the default microphone (pw-record) between POST /voice/start and /voice/stop, transcribes it and the text is sent at once to the agent selected at press time (JARVIS_VOICE_AUTOSEND=0: text at the caret instead, never sent). The browser never touches the microphone. ----
+// The button is hidden unless the server reports voice.
+let rec = null; // {starting: true, cancelled?} while /voice/start is in flight, then {id, key, to, timer, poll, busy}
+function micIdle() { $('mic').className = ''; $('mic').style.removeProperty('--lvl'); }
+const micCall = async (path, body = {}) => { // the server answers 409 to a second start, 500 when pw-record is missing or silent
+  const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  if (!r.ok) throw new Error((await r.text()) || r.status);
+  return r;
+};
+const micDrop = (r) => { clearTimeout(r.timer); clearTimeout(r.poll); };
+function micCancel() {
+  const r = rec; if (!r || r.busy) return; // while it transcribes the text is on its way: Esc and blur leave it alone
+  if (r.starting) return void (r.cancelled = true); // micStart cancels the recording when /voice/start returns; rec stays set until then, so a new press cannot hit a 409
+  rec = null; micIdle(); micDrop(r);
+  micCall('/voice/cancel', { id: r.id }).catch(() => {});
+}
+async function micStart() {
+  if (!WS || !selected || rec) return;
+  const key = draftKey(), to = { ws: WS, id: selected }, me = rec = { starting: true }; // set before the await: a second start or Esc while the recorder opens sees it
+  let id;
+  try { ({ id } = await (await micCall('/voice/start')).json()); }
+  catch (e) { rec = null; return me.cancelled || toast(`Microphone unavailable: ${e.message}`); }
+  if (me.cancelled) { rec = null; return void micCall('/voice/cancel', { id }).catch(() => {}); } // released or cancelled while it started
+  const r = rec = { id, key, to, busy: false, timer: setTimeout(() => { held = null; micFinish(); }, voiceMaxS * 1000) };
+  let fails = 0;
+  const tick = async () => { // the meter, and the keep-alive: the server drops a recording nobody polls. One request at a time.
+    let j;
+    try { j = await (await micCall('/voice/level', { id })).json(); fails = 0; } catch { j = ++fails >= 3 ? { recording: false } : undefined; }
+    if (rec !== r || r.busy) return;
+    if (j && !j.recording) { // the server ended it (lease, restart, another tab): do not stay red
+      held = null; rec = null; micIdle(); micDrop(r);
+      return toast('Recording stopped');
+    }
+    if (j) $('mic').style.setProperty('--lvl', j.level);
+    r.poll = setTimeout(tick, 100);
+  };
+  r.poll = setTimeout(tick, 100);
+  $('mic').className = 'rec';
+}
+async function micFinish() {
+  const r = rec; if (!r || r.starting || r.busy) return;
+  micDrop(r);
+  r.busy = true;
+  $('mic').className = 'busy';
+  try {
+    const { text } = await (await micCall('/voice/stop', { id: r.id })).json();
+    if (!text.trim()) toast('No speech recognized');
+    else if (voiceAutosend) { // the agent selected at press time; the draft stays untouched unless the text could not be sent
+      if (guarded(r.to)) { toast('Agent is guarded: double-click its input to unlock, then talk'); micInsert(r.key, text.trim()); }
+      else if (!await post('/send', { ...r.to, text: text.trim() })) micInsert(r.key, text.trim());
+    }
+    else micInsert(r.key, text.trim());
+  } catch (e) { toast(`voice failed: ${e.message}`); }
+  finally { if (rec === r) { rec = null; micIdle(); } }
+}
+function micInsert(key, text) {
+  const t = $('dinput');
+  if (key !== draftKey()) { drafts[key] = drafts[key] ? `${drafts[key]} ${text}` : text; return saveJson('jarvis.drafts', drafts); } // the user moved on: the text joins that draft
+  const v = t.value, a = t.selectionStart ?? v.length, b = t.selectionEnd ?? v.length;
+  const pre = v.slice(0, a), ins = (pre && !/\s$/.test(pre) ? ' ' : '') + text + (v.slice(b) && !/^\s/.test(v.slice(b)) ? ' ' : '');
+  t.value = pre + ins + v.slice(b);
+  t.selectionStart = t.selectionEnd = pre.length + ins.length;
+  t.oninput(); setDraft(); t.focus();
+}
+// Push-to-talk: `held` is the input that started the recording ({codes} for keys, {ptr} for the pointer); its release stops it.
+let held = null, pressAt = 0, unlocked = null; // unlocked: `ws/id` of the agent whose guard the double-click lifted (select() clears it)
+const guarded = (to) => to.id !== ARBITER && unlocked !== `${to.ws}/${to.id}`; // same rule as the readOnly input: only Jarvis takes user messages without the double-click
+function micPress(h) {
+  if (rec || held || !WS) return;
+  if (!selected) select(ARBITER);
+  if (guarded({ ws: WS, id: selected })) return toast(`Works for ${nameOf(parentOf(selected)) ?? parentOf(selected)}: double-click the input to unlock, then talk`);
+  held = h; pressAt = performance.now(); micStart();
+}
+function micRelease() {
+  if (!held) return; held = null;
+  if (!rec || rec.busy) return; // nothing running, or already transcribing
+  if (performance.now() - pressAt < 300) { micCancel(); toast('Hold to talk'); } // a tap: no request, no error
+  else if (rec.starting) micCancel(); // released before the recorder opened
+  else micFinish();
+}
+const mic = $('mic');
+mic.onpointerdown = (e) => {
+  if (e.button !== 0 || rec || held) return;
+  e.preventDefault(); mic.setPointerCapture(e.pointerId); micPress({ ptr: e.pointerId });
+};
+mic.onpointerup = mic.onpointercancel = mic.onlostpointercapture = (e) => { if (held?.ptr === e.pointerId) micRelease(); };
+mic.oncontextmenu = (e) => e.preventDefault();
+// Autosend sends at once, so losing the window cancels instead of sending a partial clip.
+addEventListener('blur', () => { if (!voiceAutosend) return micRelease(); if (held) { held = null; micCancel(); } });
+// Capture phase: runs before the document handler, so Escape cancels a recording instead of closing the panel.
+addEventListener('keydown', (e) => {
+  if (held?.mod && !e[held.mod]) micRelease(); // the modifier went up without a keyup reaching us (IME, focus change)
+  if (document.querySelector('dialog[open]')) return; // a dialog owns the keys: Esc closes it, Alt+V does nothing
+  if (e.key === 'Escape' && rec) { e.stopImmediatePropagation(); held = null; micCancel(); }
+  else if (mic.hidden) return;
+  else {
+    const alt = e.altKey && e.code === 'KeyV' && !e.ctrlKey && !e.metaKey, ctrl = e.ctrlKey && e.code === 'Space' && e.target === $('dinput');
+    if (!alt && !ctrl) return;
+    e.preventDefault();
+    if (!e.repeat) micPress({ mod: alt ? 'altKey' : 'ctrlKey', codes: alt ? ['KeyV', 'AltLeft', 'AltRight'] : ['Space', 'ControlLeft', 'ControlRight'] });
+  }
+}, true);
+addEventListener('keyup', (e) => { if (held?.codes?.includes(e.code) || (held?.mod && !e[held.mod])) micRelease(); }, true);
 
 // ---- pan, zoom, drag ----
 const svg = $('view');
