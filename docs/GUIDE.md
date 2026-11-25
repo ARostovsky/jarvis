@@ -94,6 +94,8 @@ The dot at the bottom left shows whether your Claude access works: green the las
 
 Panels are pinned blocks above Jarvis's chat. They show only while Jarvis (the center circle) is selected and at least one panel has something to show.
 
+![The Jobs panel with a failed, a running and a finished row, the Open items panel, and Jarvis's chat below](screenshots/panels.png)
+
 - **Jobs** lists long jobs: CI runs, training, deploys. A job is a row with a state edge (failed red, waiting amber, running cyan, done dim), its label, id (a link when the provider gives one), step, progress, time running and, when the provider has it, the cost as `$12.40 (as of 14:05)`. A field the provider does not return is not shown at all, never as a placeholder.
 - Rows sort by severity: failed first, then stale, waiting and needing attention, then running, then done; the most recent change first. Drag a row to put it where you want; the order is kept per workspace and **Reset order** brings the sort back. A failed row stays highlighted even under your own order.
 - A finished row stays until you press **×** on it or **Clear done**. **↻** checks now. Rows that Jarvis cannot refresh (provider failed, disabled or changed) are dimmed with a note.
@@ -103,6 +105,8 @@ Panels are pinned blocks above Jarvis's chat. They show only while Jarvis (the c
 - **Status providers** are small scripts that you approve once. When a job has no provider and someone keeps checking it by hand, and the workspace has a notes folder, Jarvis offers to build one (it asks once per kind of job and records your answer in `status-providers.md` in the notes folder). A new provider appears as an approval card with its manifest, files and test report; **Approve** stays off until the files are shown on the card, and pins those exact files, so a later change stops the provider until you approve again. Without a notes folder Jarvis cannot build providers and tells you to set one. **PROVIDERS** (top bar, shown once any provider or proposal exists, with the number of proposals waiting) lists all providers, their state and **Approve** for a folder you placed by hand (press **Files** first: Approve stays off until the files are shown); the tab menu **Job providers…** picks which providers one workspace may use. Unsaved ticks survive a refresh, and ticking every provider saves an empty list, which means all approved providers. Contract, safety rules and how to write one: [STATUS-PROVIDERS.md](STATUS-PROVIDERS.md).
 - A provider runs on your machine with your rights, outside the agent permission checks. Approve only what you read.
 - Turn it all off with `JARVIS_JOBS=0` (see Settings).
+
+![The approval card of a new job provider: manifest, files, test report, Approve and Reject](screenshots/provider-dialog.png)
 
 ### Open items
 
