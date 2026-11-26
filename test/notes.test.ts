@@ -2,14 +2,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-notes-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
 process.env.GIT_CONFIG_GLOBAL = '/dev/null'; // no user hooks or signing; commitNotes supplies the identity
-const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace } = await import('../src/agents.ts');
+const { prepareNotes, commitNotes, notesWritten, notesBash, notesToolUse, addWorkspace, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, loadWorkspaces } = await import('../src/agents.ts');
 
 const git = (cwd: string, ...a: string[]) => execFileSync('git', ['-C', cwd, ...a], { encoding: 'utf8', stdio: 'pipe' }).trim();
 // What the arbiter's Write tool call does.
@@ -175,20 +175,38 @@ test('a refused notes folder never stays in the workspace meta', () => {
   assert.equal(w.meta.notes, undefined);
 });
 
-test('archive leaves the notes folder in place; restore brings it back from workspaces/_archive', () => {
+test('archive moves the notes folder to workspaces/_archive and commits it; restore brings it back', () => {
   const notes = join(tmp, 'arch-notes');
   const w = addWorkspace('archnotes', undefined, {}, notes);
   const dir = join(notes, 'workspaces', w.meta.id), parked = join(notes, 'workspaces', '_archive', w.meta.id);
-  archiveWorkspace(w.meta.id);
-  assert.ok(existsSync(join(dir, 'status.md')) && !existsSync(parked)); // archiving moves nothing
-  mkdirSync(join(notes, 'workspaces', '_archive'), { recursive: true });
-  renameSync(dir, parked); // the user filed it away
+  const own = git(notes, 'rev-parse', '--absolute-git-dir');
+  const r = archiveWorkspace(w.meta.id);
+  assert.equal(r.notes.result, 'moved');
+  assert.ok(existsSync(join(parked, 'status.md')) && !existsSync(dir));
+  assert.ok(!readFileSync(join(notes, 'workspaces', 'index.md'), 'utf8').includes(w.meta.id));
+  assert.match(git(tmp, '--git-dir', own, 'ls-tree', '-r', '--name-only', 'HEAD'), new RegExp(`workspaces/_archive/${w.meta.id}/status.md`));
   restoreWorkspace(w.meta.id);
   assert.ok(existsSync(join(dir, 'status.md')) && !existsSync(parked));
   archiveWorkspace(w.meta.id);
-  mkdirSync(parked, { recursive: true }); // collision: a folder at both places
-  assert.doesNotThrow(() => restoreWorkspace(w.meta.id));
-  assert.ok(existsSync(join(dir, 'status.md')) && existsSync(parked));
+  mkdirSync(dir, { recursive: true });
+  restoreWorkspace(w.meta.id); // collision on restore: both stay
+  assert.ok(existsSync(dir) && existsSync(parked));
+  assert.equal(archiveWorkspace(w.meta.id).notes.result, 'collision'); // target exists: nothing overwritten, archive done
+  assert.ok(existsSync(dir) && existsSync(parked));
+});
+
+test('loadWorkspaces moves the folder of an already archived workspace once', () => {
+  const notes = join(tmp, 'mig-notes');
+  const w = addWorkspace('migrate', undefined, {}, notes);
+  const act = addWorkspace('stays', undefined, {}, notes);
+  archiveWorkspace(w.meta.id);
+  const dir = join(notes, 'workspaces', w.meta.id), parked = join(notes, 'workspaces', '_archive', w.meta.id);
+  renameSync(parked, dir); // what an older version left behind
+  loadWorkspaces();
+  assert.ok(existsSync(join(parked, 'status.md')) && !existsSync(dir));
+  assert.ok(existsSync(join(notes, 'workspaces', act.meta.id, 'status.md')));
+  loadWorkspaces(); // idempotent
+  assert.ok(existsSync(join(parked, 'status.md')));
 });
 
 test('a restore move is committed with the deletion of the old _archive path', () => {

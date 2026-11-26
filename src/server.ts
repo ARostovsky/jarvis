@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -46,6 +46,7 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/workspaces/notes': (b) => setWorkspaceNotes(String(b.ws), b.notes ? String(b.notes) : undefined),
   '/workspaces/providers': (b) => setWorkspaceProviders(String(b.ws), b.providers),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
+  '/workspaces/archive/preview': (b) => archivePreview(String(b.ws)),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
   '/workspaces/archived/info': (b) => archivedInfo(String(b.id)),
   '/workspaces/archived/delete': (b) => deleteArchived(String(b.id), String(b.name ?? '')),

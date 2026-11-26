@@ -114,10 +114,7 @@ test('restore from the archive shows the panel without a panel_removed', () => {
   writeFileSync(itemsFile(w, n), LINES.join('\n') + '\n');
   w.refreshOpenItems();
   const before = log(w.meta.id).length;
-  archiveWorkspace(w.meta.id);
-  const parked = join(n, 'workspaces', '_archive', w.meta.id);
-  mkdirSync(join(n, 'workspaces', '_archive'), { recursive: true });
-  renameSync(workspaceDir({ id: w.meta.id, notes: n }), parked);
+  assert.deepEqual(archiveWorkspace(w.meta.id).notes.result, 'moved');
   restoreWorkspace(w.meta.id);
   const after = log(w.meta.id).slice(before);
   assert.ok(!after.some((e) => e.type === 'panel_removed'), 'no spurious removal');

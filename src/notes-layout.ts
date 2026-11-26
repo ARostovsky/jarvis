@@ -60,7 +60,7 @@ export function ensureWorkspaceNotes(meta: Meta): { created: string[] } {
   return { created };
 }
 
-// Restore from the archive: a folder the user moved to workspaces/_archive/<id> goes back to workspaces/<id>. Archiving moves nothing. An existing workspaces/<id> is never overwritten: both stay and a warning is logged.
+// Restore from the archive: workspaces/_archive/<id> goes back to workspaces/<id>. An existing workspaces/<id> is never overwritten: both stay and a warning is logged.
 export function restoreArchivedNotes(meta: Meta): 'moved' | 'collision' | 'none' {
   if (!meta.notes || !/^[a-z0-9-]+$/.test(meta.id)) return 'none';
   const root = join(meta.notes, 'workspaces'), from = join(root, '_archive', meta.id), to = join(root, meta.id);
@@ -74,6 +74,39 @@ export function restoreArchivedNotes(meta: Meta): 'moved' | 'collision' | 'none'
   plainDir(join(root, '_archive'));
   renameSync(from, to);
   return 'moved';
+}
+
+// Open and parked items in workspaces/<id>/open-items.md (0/0 when there is no file).
+export function countOpenItems(meta: { id: string; notes: string }): { open: number; parked: number } {
+  const items = parseOpenItems(readPlain(join(workspaceDir(meta), 'open-items.md')) ?? '').items;
+  return { open: items.filter((i) => i.kind === 'open').length, parked: items.filter((i) => i.kind === 'parked').length };
+}
+
+// Archive: workspaces/<id> moves to workspaces/_archive/<id> (atomic rename). A missing source does nothing; an existing target is never overwritten: both stay, a warning is logged and 'collision' returned. Counts are taken before the move.
+export function archiveNotes(meta: Meta): { result: 'moved' | 'collision' | 'none'; open: number; parked: number } {
+  if (!meta.notes || !/^[a-z0-9-]+$/.test(meta.id)) return { result: 'none', open: 0, parked: 0 };
+  const m = { id: meta.id, notes: meta.notes }, from = workspaceDir(m), root = join(meta.notes, 'workspaces'), arch = join(root, '_archive'), to = join(arch, meta.id);
+  if (!lstatSync(from, { throwIfNoEntry: false })?.isDirectory()) return { result: 'none', open: 0, parked: 0 }; // missing, a symlink or a file
+  const counts = countOpenItems(m);
+  if (lstatSync(to, { throwIfNoEntry: false })) {
+    console.warn(`notes: not archiving ${from}: ${to} exists`);
+    return { result: 'collision', ...counts };
+  }
+  plainDir(root);
+  mkdirSync(arch, { recursive: true });
+  plainDir(arch);
+  renameSync(from, to);
+  return { result: 'moved', ...counts };
+}
+
+// One-shot, idempotent: archived workspaces (not in `active`) whose notes folder still sits in workspaces/<id>/ move to _archive. Returns what moved; one failure never stops the rest.
+export function migrateArchivedNotes(archived: Meta[], active: (id: string) => boolean): Meta[] {
+  const moved: Meta[] = [];
+  for (const m of archived) {
+    if (!m.notes || active(m.id)) continue;
+    try { if (archiveNotes(m).result === 'moved') { moved.push(m); console.log(`notes: moved the folder of archived workspace ${m.id} to ${join(m.notes, 'workspaces', '_archive', m.id)}`); } } catch (e) { console.warn(`notes: cannot move the folder of archived workspace ${m.id}: ${(e as Error).message}`); }
+  }
+  return moved;
 }
 
 export type OpenItem = { kind: 'open' | 'parked' | 'done'; date: string; text: string; you: boolean; check?: string };

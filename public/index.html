@@ -1117,8 +1117,10 @@ async function wsPost(path, data) {
 }
 
 async function archiveWs(w) {
+  const pv = (await wsPost('/workspaces/archive/preview', { ws: w.id })).json;
+  const left = pv && (pv.open || pv.parked) ? ` Its ${pv.open} open and ${pv.parked} parked items stay in its notes folder under workspaces/_archive/ (restore to bring them back).` : '';
   const v = await choose(`ARCHIVE "${w.name}"?`, '',
-    'Agents are stopped and the workspace moves to the archive. Branches already merged into main (or empty) and their clean worktrees are removed; committed work stays on the other jarvis/<id> branches, plain workdirs, files ignored by git (.env, node_modules) and logs move with it, and you can restore it any time.',
+    'Agents are stopped and the workspace moves to the archive. Branches already merged into main (or empty) and their clean worktrees are removed; committed work stays on the other jarvis/<id> branches, plain workdirs, files ignored by git (.env, node_modules) and logs move with it, and you can restore it any time.' + left,
     [{ value: 'archive', label: 'ARCHIVE' }]);
   if (!v) return;
   let r = await wsPost('/workspaces/archive', { ws: w.id });
@@ -1132,6 +1134,9 @@ async function archiveWs(w) {
   dropDrafts(w.id);
   WS = null;
   refreshTabs();
+  const n = r.json?.notes;
+  if (n?.result === 'moved') toast(`archived; ${n.open} open and ${n.parked} parked items stay in workspaces/_archive/${w.id}/open-items.md (restore to bring them back)`);
+  else if (n?.result === 'collision' || n?.result === 'error') toast(`archived, but the notes folder of ${w.id} was not moved: ${n.error ?? 'workspaces/_archive/' + w.id + ' already exists'}`);
   if (r.json?.kept?.length) toast(`kept, not safe to remove:\n${r.json.kept.join('\n')}`);
 }
 

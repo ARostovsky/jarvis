@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, linkSync, mkdirSync, readdirSync, mkdtempSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, restoreArchivedNotes, saveTurnText, workspaceDir, writeIndex } from '../src/notes-layout.ts';
+import { OPEN_ITEMS_FORMAT, archiveNotes, countOpenItems, migrateArchivedNotes, arbiterNotesPrompt, ensureWorkspaceNotes, migrationNotice, parseOpenItems, restoreArchivedNotes, saveTurnText, workspaceDir, writeIndex } from '../src/notes-layout.ts';
 import { resetSeed } from '../src/reset.ts';
 
 const tmp = () => mkdtempSync(join(tmpdir(), 'jarvis-layout-'));
@@ -196,4 +196,44 @@ test('the index ignores workspaces/_archive', () => {
   writeFileSync(join(notes, 'workspaces', '_archive', 'gone-1111', 'status.md'), 'Summary: archived\n');
   const text = readFileSync(writeIndex(notes)!, 'utf8');
   assert.ok(text.includes('(my-ws-ab12/status.md)') && !text.includes('gone-1111') && !text.includes('_archive'));
+});
+
+const ws = (notes: string, id = 'my-ws-ab12') => join(notes, 'workspaces', id);
+
+test('archive moves the folder with open and parked counts, restore returns it', () => {
+  const notes = tmp(), m = meta(notes);
+  ensureWorkspaceNotes(m);
+  writeFileSync(join(ws(notes), 'open-items.md'), '- [ ] 25-11-2026 a\n- [ ] 25-11-2026 (you) b\n- [~] 25-11-2026 c (waiting on user)\n- [x] d verified 25-11-2026: e\n');
+  assert.deepEqual(countOpenItems({ id: m.id, notes }), { open: 2, parked: 1 });
+  assert.deepEqual(archiveNotes(m), { result: 'moved', open: 2, parked: 1 });
+  assert.ok(!existsSync(ws(notes)));
+  assert.ok(existsSync(join(ws(notes, '_archive'), m.id, 'journal')) || existsSync(join(ws(notes, '_archive'), m.id, 'status.md')));
+  assert.ok(!readFileSync(writeIndex(notes)!, 'utf8').includes(m.id));
+  assert.equal(restoreArchivedNotes(m), 'moved');
+  assert.match(readFileSync(join(ws(notes), 'open-items.md'), 'utf8'), /\] 25-11-2026 a/);
+});
+
+test('archive: existing target stays untouched, missing source does nothing, no notes folder does nothing', (t) => {
+  const notes = tmp(), m = meta(notes);
+  assert.equal(archiveNotes(m).result, 'none');
+  assert.equal(archiveNotes(meta()).result, 'none');
+  ensureWorkspaceNotes(m);
+  mkdirSync(join(ws(notes, '_archive'), m.id), { recursive: true });
+  writeFileSync(join(ws(notes, '_archive'), m.id, 'status.md'), 'older');
+  t.mock.method(console, 'warn', () => {});
+  assert.equal(archiveNotes(m).result, 'collision');
+  assert.ok(existsSync(join(ws(notes), 'status.md')));
+  assert.equal(readFileSync(join(ws(notes, '_archive'), m.id, 'status.md'), 'utf8'), 'older');
+});
+
+test('migration moves archived ids once, never an active workspace', (t) => {
+  const notes = tmp(), shared = { id: 'a-1111', name: 'A', notes }, other = { id: 'b-2222', name: 'B', notes }, live = { id: 'c-3333', name: 'C', notes };
+  for (const m of [shared, other, live]) ensureWorkspaceNotes(m);
+  const log = t.mock.method(console, 'log', () => {});
+  const moved = migrateArchivedNotes([shared, other], (id) => id === 'b-2222'); // b is active again
+  assert.deepEqual(moved.map((m) => m.id), ['a-1111']);
+  assert.equal(log.mock.calls.length, 1);
+  assert.ok(!existsSync(ws(notes, 'a-1111')) && existsSync(ws(notes, 'b-2222')) && existsSync(ws(notes, 'c-3333')));
+  assert.deepEqual(migrateArchivedNotes([shared], () => false), []); // idempotent
+  assert.ok(existsSync(join(ws(notes, '_archive'), 'a-1111')));
 });

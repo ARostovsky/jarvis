@@ -10,7 +10,7 @@ import { homedir, tmpdir } from 'node:os';
 import { atResult, resetLimit, resetSeed, type ResetPhase } from './reset.ts';
 import { classify, recordOutcome, setProbe } from './health.ts';
 import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
-import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, restoreArchivedNotes, workspaceDir, writeIndex } from './notes-layout.ts';
+import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, restoreArchivedNotes, archiveNotes, countOpenItems, migrateArchivedNotes, workspaceDir, writeIndex } from './notes-layout.ts';
 import { createPanels, type Panel } from './panels.ts';
 import { createJobs, TERMINAL } from './jobs.ts';
 import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry } from './providers.ts';
@@ -1910,7 +1910,31 @@ export function archiveWorkspace(id: string, commit = false) {
   renameSync(w.dir, join(ARCHIVE, id));
   workspaces.delete(id);
   saveRegistry();
-  return { kept };
+  return { kept, notes: moveNotesToArchive(w.meta) };
+}
+
+// Open and parked items that archiving would leave in workspaces/_archive/<id>/ (shown before the archive is confirmed).
+export function archivePreview(id: string) {
+  const w = workspaces.get(id);
+  if (!w) throw new Error(`no workspace ${id}`);
+  return w.meta.notes ? countOpenItems({ id, notes: w.meta.notes }) : { open: 0, parked: 0 };
+}
+
+// After the archive is done: the notes folder moves, the index is regenerated and the move is committed. Never throws: the archive itself must stay done.
+function moveNotesToArchive(meta: WorkspaceMeta) {
+  try {
+    const r = archiveNotes(meta);
+    if (r.result === 'moved') afterNotesMove(meta);
+    return r;
+  } catch (e) {
+    console.warn(`notes: cannot move the notes folder of ${meta.id}: ${(e as Error).message}`);
+    return { result: 'error' as const, open: 0, parked: 0, error: (e as Error).message };
+  }
+}
+
+function afterNotesMove(meta: WorkspaceMeta) {
+  try { refreshIndex(meta.notes!, meta.id); } catch (e) { console.warn(`notes: cannot refresh the index of ${meta.id}: ${(e as Error).message}`); }
+  commitNotes(meta.notes!, meta.id, meta.name);
 }
 
 export function listArchived(): (WorkspaceMeta & { archivedAt: string })[] {
@@ -1982,6 +2006,8 @@ export function loadWorkspaces() {
   mkdirSync(DATA, { recursive: true });
   const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? readJson(REGISTRY) : [];
   for (const m of metas) workspaces.set(m.id, createWorkspace(m));
+  // Workspaces archived before archiving moved the notes folder.
+  for (const m of migrateArchivedNotes(listArchived(), (id) => workspaces.has(id))) afterNotesMove(m);
 }
 
 // The health dot's fallback: one Haiku call, no tools, when no real run has finished lately and a browser watches.

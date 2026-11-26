@@ -179,7 +179,9 @@ test('journals survive archive and restore under the current name', async ({ pag
   await turn(page, w, `bash echo after >> ${notes}/${dayFile(w)}`);
   expect(journals(w)).toEqual([dayFile(w)]);
   expect(readFileSync(join(notes, dayFile(w)), 'utf8')).toBe('before\nafter\n');
-  expect(changes()).toEqual([`A\t${dayFile(w)}`, `D\t${first}`].sort());
+  // The archive commits the rename (the folder move runs commitNotes); the turn after the restore only appends.
+  expect(changes()).toEqual([`M\t${dayFile(w)}`]);
+  expect(git('show', '--no-renames', '--name-status', '--format=', 'HEAD~1').split('\n').filter(keep).sort()).toEqual([`A\t${dayFile(w)}`, `D\t${first}`].sort());
 });
 
 test('a stale rewrite of the whole file plus a new line adds only the new line', async ({ page, request }) => {
