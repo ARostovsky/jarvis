@@ -16,6 +16,7 @@ import { createJobs, TERMINAL } from './jobs.ts';
 import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry } from './providers.ts';
 import { createOpenItems, OPEN_ITEMS_PANEL_ID, openItemsFile, type OpenItemsSource } from './openitems.ts';
 import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
+import { voiceVocab } from './voice-vocab.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
 import { HASH_RE, providerDetails, providerFiles, providerList, providerScreenshot } from './provider-admin.ts';
 
@@ -551,6 +552,7 @@ const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v 
 
 const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`);
 const NOTES_TOOLS = ['notes_message'].map((t) => `mcp__jarvis__${t}`);
+const VOICE_TOOLS = process.env.JARVIS_VOICE ? ['mcp__jarvis__voice_vocab'] : [];
 const INTERCOM_TOOLS = ['list_workspaces', 'tell_workspace', 'create_workspace'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
@@ -570,6 +572,7 @@ const BUDGET_ALERT_USD = 10;
 export const ARBITER_PROMPT = `You are Jarvis, the coordinator (your agent id is arbiter). You do not write code yourself: you split the user's goal into tasks, spawn coding agents with spawn_agent, pass context between them with send_to_agent, and report back to the user.
 Never run shell commands, edit or create project files, or solve a task yourself, even a small one or one that only needs waiting or polling: spawn an agent or message the one that has it. Your own Bash, Edit and Write are only for the project notes, when you have them. Even when the goal says nothing about agents, delegate it.
 Agents see only what you send them, so give self-contained instructions with paths and acceptance criteria.
+When the user asks to add or remove a word of the voice dictionary (a word voice input gets wrong), call voice_vocab, if you have it, and write the word exactly as the user spelled it.
 When an agent finishes you get a message starting with "[agent <id> finished". Route on its VERDICT line. On verified (and the body agrees), move on. On partial, send the missing items to the same agent with send_to_agent; do not spawn a new one. Send at most 2 follow-ups for the same partial result to one agent; if it is still not verified after that, treat it as failed, get advice as described below, then decide; escalate to the user only if the decision is theirs. On failed, read_agent only if the reason is unclear or the report is TRUNCATED, then re-plan. Every task you send needs testable acceptance criteria. Agents already start their final report with the VERDICT line; do not ask for a report format or a VERDICT line in your task texts.
 Size the process to the task. A small or clear task (one area, a few files) goes straight to one agent. For a large or unclear goal, first spawn one planner agent that writes the task list with acceptance criteria, then spawn from that list.
 For facts several agents need (interfaces, decisions, conventions) use board_post with the recipients instead of repeating them in every send_to_agent.
@@ -1429,6 +1432,11 @@ export function createWorkspace(meta: WorkspaceMeta) {
           const next = createWorkspaceFor(name, task, project);
           return ok(`created workspace ${next.name} (${next.id}) and sent it the task`);
         }),
+      ] : []), ...(owner === ARBITER && process.env.JARVIS_VOICE ? [
+        tool('voice_vocab', 'Edit the voice dictionary (words added to the speech recognizer prompt). Use it when the user asks to add or remove a word that voice input gets wrong. Write each word exactly as the user spelled it. Applies from the next recording.', {
+          action: z.enum(['add', 'remove', 'list']),
+          words: z.array(z.string()).optional().describe('words or short phrases, for add and remove'),
+        }, async ({ action, words }) => ok(voiceVocab(action, words))),
       ] : []), ...(owner === ARBITER && jobsOn() ? jobsTools() : []), ...(owner === ARBITER && meta.notes ? [
         tool('notes_message', 'Set the git commit message for this turn\'s changes to the notes folder: one line in imperative mood saying what you changed and why, e.g. "Record PR #2 approval, fix verification and review gotchas". Call once per turn in which you changed the notes; a later call replaces the earlier one.', {
           message: z.string(),
@@ -1475,7 +1483,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       // Each agent gets its own browser: isolated, so parallel agents don't fight over one profile dir.
       // Screenshots go outside the worktree, so they don't get committed or block deletion.
       mcpServers: { jarvis: jarvisTools(a.id, team), ...(PLAYWRIGHT !== '0' ? { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--isolated', ...(PLAYWRIGHT === 'headed' ? [] : ['--headless']), '--output-dir', join(dir, 'playwright', a.id)] } } : {}) },
-      allowedTools: [...(team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS), ...(a.id === ARBITER ? INTERCOM_TOOLS : []), ...(a.id === ARBITER && meta.notes ? NOTES_TOOLS : []), ...(a.id === ARBITER ? jobsToolNames(meta.notes) : []), ...(PLAYWRIGHT !== '0' ? ['mcp__playwright'] : [])],
+      allowedTools: [...(team ? [...BOARD_TOOLS, ...TEAM_TOOLS] : BOARD_TOOLS), ...(a.id === ARBITER ? INTERCOM_TOOLS : []), ...(a.id === ARBITER && meta.notes ? NOTES_TOOLS : []), ...(a.id === ARBITER ? VOICE_TOOLS : []), ...(a.id === ARBITER ? jobsToolNames(meta.notes) : []), ...(PLAYWRIGHT !== '0' ? ['mcp__playwright'] : [])],
       // Built-in subagents are invisible in the graph; whoever has spawn_agent must use it instead.
       ...(team ? { disallowedTools: ['Agent', 'Task'] } : {}),
       systemPrompt: { type: 'preset', preset: 'claude_code', append: prompt },

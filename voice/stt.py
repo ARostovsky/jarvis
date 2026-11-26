@@ -172,9 +172,66 @@ class ArtifactFilter:
         return None
 
 
-def prompt_from_env() -> str:
+PROMPT_TOKENS = 223  # Whisper keeps the last ~223 prompt tokens and drops the start, so an overlong prompt would lose the default
+
+
+def est_tokens(text: str) -> int:
+    """Rough Whisper token count, no tokenizer needed: ~4 chars per token in ASCII, ~2 in Cyrillic and others (rounded up)."""
+    return sum(1 if ord(c) < 128 else 2 for c in text) // 3 + 1
+
+
+def vocab_path() -> Path:
+    env = os.environ.get("JARVIS_VOICE_VOCAB", "").strip()
+    return Path(env) if env else Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "jarvis" / "voice-vocab.txt"
+
+
+def parse_vocab(text: str) -> list[str]:
+    """One word or phrase per line; blank lines and `#` comment lines are skipped."""
+    return [t for t in (line.strip() for line in text.splitlines()) if t and not t.startswith("#")]
+
+
+class VocabFile:
+    """The vocabulary file, re-read when its mtime changes (`refresh()` is one stat). Missing, unreadable or invalid: no words, logged once."""
+
+    def __init__(self, path: Path | None = None):
+        self.path, self.words, self._stamp, self._warned = path or vocab_path(), [], None, False
+
+    def refresh(self) -> bool:
+        """True when the word list changed."""
+        try:
+            st = self.path.stat()
+            stamp = (st.st_mtime_ns, st.st_size)
+        except OSError:
+            stamp = None
+        if stamp == self._stamp:
+            return False
+        self._stamp, old = stamp, self.words
+        self.words = []
+        if stamp is not None:
+            try:
+                self.words = parse_vocab(self.path.read_text(encoding="utf-8"))
+            except (OSError, UnicodeDecodeError) as e:
+                if not self._warned:
+                    log.warning("stt vocabulary file %s ignored: %s", self.path, e)
+                    self._warned = True
+        return self.words != old
+
+
+def prompt_from_env(vocab: list[str] = ()) -> str:
+    """Default terms, vocabulary file words, then JARVIS_VOICE_PROMPT. The vocabulary is cut from its end to fit PROMPT_TOKENS."""
     base = "" if os.environ.get("JARVIS_VOICE_PROMPT_DEFAULT", "").strip() == "0" else DEFAULT_PROMPT
-    return ", ".join(p for p in (base, os.environ.get("JARVIS_VOICE_PROMPT", "").strip()) if p)
+    extra = os.environ.get("JARVIS_VOICE_PROMPT", "").strip()
+    room = PROMPT_TOKENS - est_tokens(base) - est_tokens(extra)
+    kept = []
+    for w in vocab:
+        room -= est_tokens(w) + 1  # +1: the ", " separator
+        if room < 0:
+            break
+        kept.append(w)
+    if len(kept) < len(vocab) and not getattr(prompt_from_env, "warned", False):
+        prompt_from_env.warned = True
+        log.warning("stt vocabulary too long for the Whisper prompt: using %d of %d words", len(kept), len(vocab))
+    return ", ".join(p for p in (base, ", ".join(kept), extra) if p)
 
 
 def echoes_prompt(text: str, prompt: str) -> bool:
@@ -213,12 +270,17 @@ def trim_speech(audio: np.ndarray) -> tuple[np.ndarray, float]:
 class Transcriber:
     """faster-whisper wrapper. Loads the model on construction, from the local cache only."""
 
+    _vocab: VocabFile | None = None
+
     def __init__(self, model: str = MODEL, device: str = "cuda", beam_size: int = BEAM_SIZE,
                  languages: tuple[str, ...] = LANGUAGES, cpu_fallback: str | None = CPU_FALLBACK,
                  artifacts: ArtifactFilter = ArtifactFilter(), prompt: str | None = None):
         from faster_whisper import WhisperModel
         self.languages, self.artifacts, self.beam_size = languages, artifacts, beam_size
-        self.prompt = prompt_from_env() if prompt is None else prompt
+        self._vocab = VocabFile() if prompt is None else None  # an explicit prompt (tests) skips the file
+        if self._vocab:
+            self._vocab.refresh()
+        self.prompt = prompt_from_env(self._vocab.words if self._vocab else ()) if prompt is None else prompt
         self._cpu_fallback = cpu_fallback
         self._clock, self._reload_after = time.monotonic, 0.0
         self._cpu = device == "cpu"
@@ -331,6 +393,8 @@ class Transcriber:
 
     def transcribe(self, audio: np.ndarray, voiced: float | None = None) -> str:
         """`voiced`: seconds of speech the VAD found in `audio` (default: all of it)."""
+        if self._vocab and self._vocab.refresh():
+            self.prompt = prompt_from_env(self._vocab.words)
         segs, info = self._run(audio, None)
         if info.language not in self.languages:
             # Whisper sometimes labels Russian as Ukrainian/Bulgarian etc.: pick the best allowed language

@@ -15,6 +15,10 @@ test('arbiter prompt: verify claims, read truncated reports, check evidence befo
   }
 });
 
+test('arbiter prompt: voice dictionary words go through voice_vocab, spelled as the user wrote them', () => {
+  assert.ok(ARBITER_PROMPT.includes('call voice_vocab, if you have it, and write the word exactly as the user spelled it'));
+});
+
 test('capReport marks a cut report loudly and leaves a short one alone', () => {
   assert.equal(capReport('a1', 'short'), 'short');
   const out = capReport('a1', 'x'.repeat(1500));

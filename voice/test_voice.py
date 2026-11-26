@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import struct
 import subprocess
@@ -339,3 +340,65 @@ def test_long_clip_segments_join_in_order_and_a_bad_one_is_logged_without_text(c
         assert tr.transcribe(np.zeros(47 * 16000, np.float32)) == "Так, ну что ж. Исключено по логам. 34,7 секунд. работала на gpu"
     assert "compression 3.10, no_speech 0.00, logprob -0.20" in caplog.text
     assert "loop" not in caplog.text
+
+
+def test_parse_vocab_skips_comments_and_blanks_and_keeps_utf8():
+    assert stt.parse_vocab("# c\n\n  Кафка  \nfoo bar\n  # x\r\nГрафана\n") == ["Кафка", "foo bar", "Графана"]
+
+
+def test_vocab_orders_default_vocab_env_and_joins_with_commas(monkeypatch):
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT_DEFAULT", raising=False)
+    monkeypatch.setenv("JARVIS_VOICE_PROMPT", "Env")
+    assert stt.prompt_from_env(["Кафка", "foo bar"]) == stt.DEFAULT_PROMPT + ", Кафка, foo bar, Env"
+    monkeypatch.setenv("JARVIS_VOICE_PROMPT_DEFAULT", "0")
+    assert stt.prompt_from_env(["a"]) == "a, Env"
+
+
+def test_vocab_is_cut_from_the_end_and_keeps_default_and_env(monkeypatch):
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT_DEFAULT", raising=False)
+    monkeypatch.setenv("JARVIS_VOICE_PROMPT", "Env")
+    words = [f"слово{i}" for i in range(500)]
+    p = stt.prompt_from_env(words)
+    assert p.startswith(stt.DEFAULT_PROMPT + ", слово0, слово1,") and p.endswith(", Env")
+    assert "слово499" not in p and stt.est_tokens(p) <= stt.PROMPT_TOKENS + 5
+
+
+def test_vocab_file_missing_reload_and_invalid(tmp_path, caplog):
+    f = tmp_path / "v.txt"
+    v = stt.VocabFile(f)
+    assert not v.refresh() and v.words == []  # missing: nothing changes
+    f.write_text("# x\nКафка\nfoo\n", encoding="utf-8")
+    assert v.refresh() and v.words == ["Кафка", "foo"]
+    assert not v.refresh()  # unchanged mtime: no re-read
+    f.write_text("bar\n", encoding="utf-8")
+    os.utime(f, ns=(1, 1))
+    assert v.refresh() and v.words == ["bar"]
+    f.unlink()
+    assert v.refresh() and v.words == []
+    f.write_bytes(b"\xff\xfe\x00bad")
+    with caplog.at_level("WARNING"):
+        v.refresh()
+        os.utime(f, ns=(2, 2))
+        v.refresh()
+    assert v.words == [] and sum("ignored" in r.message for r in caplog.records) == 1
+
+
+def test_transcribe_picks_up_a_changed_vocab_file(tmp_path, monkeypatch):
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT", raising=False)
+    monkeypatch.delenv("JARVIS_VOICE_PROMPT_DEFAULT", raising=False)
+    f = tmp_path / "v.txt"
+    tr, seen = fake_transcriber(["hi"], stt.DEFAULT_PROMPT)
+    tr._vocab = stt.VocabFile(f)
+    tr.transcribe(np.zeros(16000, np.float32))
+    assert seen["initial_prompt"] == stt.DEFAULT_PROMPT
+    f.write_text("Кафка\n", encoding="utf-8")
+    tr.transcribe(np.zeros(16000, np.float32))
+    assert seen["initial_prompt"] == stt.DEFAULT_PROMPT + ", Кафка"
+
+
+def test_vocab_path_env_and_xdg(monkeypatch):
+    monkeypatch.setenv("JARVIS_VOICE_VOCAB", "/x/v.txt")
+    assert str(stt.vocab_path()) == "/x/v.txt"
+    monkeypatch.delenv("JARVIS_VOICE_VOCAB")
+    monkeypatch.setenv("XDG_CONFIG_HOME", "/cfg")
+    assert str(stt.vocab_path()) == "/cfg/jarvis/voice-vocab.txt"

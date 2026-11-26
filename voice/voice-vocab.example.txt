@@ -1,0 +1,7 @@
+# Custom vocabulary for voice recognition.
+# Copy to ~/.config/jarvis/voice-vocab.txt (or point JARVIS_VOICE_VOCAB at it).
+# One word or phrase per line, UTF-8. Blank lines and lines starting with # are ignored.
+# Changes apply to the next recording, no restart needed.
+Grafana
+Terraform
+# Кубернетес
