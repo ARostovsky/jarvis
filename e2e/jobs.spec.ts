@@ -170,6 +170,23 @@ test('unknown fields are ignored; a schema 2 provider shows its error', async ({
   await expect(block(page)).toHaveClass(/\bstale\b/);
 });
 
+test('providers dialog: Approve again of a changed provider works with one click and shows a rejection', async ({ page }) => {
+  const p = await setup(page);
+  appendFileSync(join(p.dir, 'fake.ts'), '\n// edited\n');
+  await expect.poll(async () => (await p.info(page)).status).toBe('changed');
+  await page.goto('/');
+  await page.waitForFunction('typeof openProviders === "function" && es.readyState === 1');
+  await page.evaluate(() => (window as any).openProviders());
+  const row = page.locator('#provList > div', { hasText: p.name });
+  await expect(row.getByRole('button', { name: 'APPROVE AGAIN' })).toBeEnabled(); // no FILES click first
+  appendFileSync(join(p.dir, 'fake.ts'), '\n// edited again\n'); // the hash on the button is now stale: the server refuses
+  await row.getByRole('button', { name: 'APPROVE AGAIN' }).click();
+  await expect(page.locator('#toast')).toContainText('providers/approve failed');
+  await page.evaluate(() => (window as any).loadProviders());
+  await row.getByRole('button', { name: 'APPROVE AGAIN' }).click();
+  await expect.poll(async () => (await p.info(page)).status).toBe('approved');
+});
+
 test('editing an installed provider file asks for approval again and stops polling until then', async ({ page }) => {
   const p = await setup(page);
   p.set('c1', { state: 'running' });

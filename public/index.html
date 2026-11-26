@@ -1974,11 +1974,11 @@ const pendingProps = () => [...document.querySelectorAll('#asks [data-prov]')].m
 async function loadProvFiles(name, hash, view) {
   try {
     const r = await fetch(`/providers/files?name=${encodeURIComponent(name)}&hash=${encodeURIComponent(hash ?? '')}`);
-    if (!r.ok) { view.textContent = `files failed: ${(await r.text()) || r.status}`; return false; }
+    if (!r.ok) { view.textContent = `files failed: ${(await r.text()) || r.status}`; view.hidden = false; return false; }
     const j = await r.json(), list = Array.isArray(j) ? j : Array.isArray(j.files) ? j.files : Object.entries(j).map(([path, text]) => ({ path, text }));
     view.textContent = list.map((x) => `── ${x.path ?? x.name}${x.truncated ? ' (cut)' : ''}\n${x.binary ? '(binary file, not shown)' : x.text ?? x.content ?? ''}`).join('\n\n');
     view.hidden = false; return list.length > 0;
-  } catch { view.textContent = 'files failed'; return false; }
+  } catch { view.textContent = 'files failed'; view.hidden = false; return false; }
 }
 function showProposal(e) {
   document.querySelector(`[data-prov="${CSS.escape(e.name)}"]`)?.remove();
@@ -2028,7 +2028,7 @@ function renderProviders() {
         const view = h('pre'); view.hidden = !provSeen.has(p.hash);
         const show = h('button', '', 'FILES'); show.type = 'button';
         const load = async () => { const ok = await loadProvFiles(p.name, p.hash, view); b.disabled = !ok; if (ok) provSeen.set(p.hash, true); };
-        show.onclick = load; b.disabled = !provSeen.has(p.hash); if (provSeen.has(p.hash)) load();
+        show.onclick = load; b.disabled = true; b.title = 'Approve is enabled once the files are shown'; load(); // the files load by themselves: a disabled button with no visible reason looked like a dead click
         b.onclick = async () => { if (await post('/providers/approve', { name: p.name, hash: p.hash })) { await loadProviders(); refreshTabs(); } };
         row.append(show, b, view);
       }
