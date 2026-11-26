@@ -154,6 +154,7 @@
   dialog button { border: 1px solid var(--line); padding: 8px 14px 8px calc(14px + .15em); margin-right: 6px; }
   dialog > form[method=dialog]:not(#newwsForm) { margin-top: 14px; } /* air between the list or text above and the CLOSE / footer buttons */
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; user-select: text; z-index: 5; }
+  #toast.info { border-color: var(--line); color: inherit; }
   #toast.show { display: flex; gap: 12px; align-items: flex-start; }
   #note { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; display: none; pointer-events: none; z-index: 5; }
   #note.show { display: block; }
@@ -1162,8 +1163,8 @@ async function archiveWs(w) {
   WS = null;
   refreshTabs();
   const n = r.json?.notes;
-  if (n?.result === 'moved') toast(`archived; ${n.open} open and ${n.parked} parked items stay in workspaces/_archive/${w.id}/open-items.md (restore to bring them back)`);
-  else if (n?.result === 'collision' || n?.result === 'error') toast(`archived, but the notes folder of ${w.id} was not moved: ${n.error ?? 'workspaces/_archive/' + w.id + ' already exists'}`);
+  if (n?.result === 'collision' || n?.result === 'error') toast(`archived, but the notes folder of ${w.id} was not moved: ${n.error ?? 'workspaces/_archive/' + w.id + ' already exists'}`);
+  else toast(n?.result === 'moved' && (n.open || n.parked) ? `archived; ${n.open} open and ${n.parked} parked items stay in workspaces/_archive/${w.id}/open-items.md (restore to bring them back)` : 'archived', 'info');
   if (r.json?.kept?.length) toast(`kept, not safe to remove:\n${r.json.kept.join('\n')}`);
 }
 
@@ -1261,11 +1262,12 @@ function connect() {
   es.onerror = () => { $('conn').textContent = 'LINK LOST · RETRYING'; };
 }
 
-function toast(text) {
+function toast(text, kind) {
   $('toastText').textContent = text;
+  $('toast').classList.toggle('info', kind === 'info');
   $('toast').classList.add('show');
 }
-// Errors stay until dismissed, so the text can be read and copied.
+// Errors (red) and info toasts stay until dismissed, so the text can be read and copied.
 $('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
 
 // Brief non-blocking status (success); errors use toast().

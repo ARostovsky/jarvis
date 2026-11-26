@@ -1,4 +1,4 @@
-import { test, expect, tab, uniq } from './helpers.ts';
+import { test, expect, tab, uniq, createWs } from './helpers.ts';
 
 // One workspace goes through its whole life: the steps build on each other.
 test.describe.configure({ mode: 'serial' });
@@ -34,6 +34,7 @@ test('rename to nothing keeps the name', async ({ page }) => {
 });
 
 test('archive moves it from the tabs to the archive', async ({ page }) => {
+  await createWs(page, uniq('other')); // the tab to move on to: a fresh server has no other workspace
   await page.goto('/');
   await tab(page, renamed).click({ button: 'right' });
   await page.getByRole('menuitem', { name: 'Archive workspace' }).click();
