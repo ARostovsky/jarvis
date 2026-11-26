@@ -149,6 +149,89 @@ test('dragging the bottom edge sets the body height, it survives a reload, doubl
   expect(await bodyH()).toBe(auto);
 });
 
+test('dragging the name column edge sets its width for all rows, it survives a reload, double-click resets', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  const p = await jobsWorkspace(page);
+  const ids = ['n1', 'n2', 'n3'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 } });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(3);
+  const pg = (await page.locator('#pgrip').boundingBox())!; // widen the panel into the one-line layout
+  await page.mouse.move(pg.x + pg.width / 2, pg.y + 100);
+  await page.mouse.down(); await page.mouse.move(pg.x - 800, pg.y + 100, { steps: 5 }); await page.mouse.up();
+  const widths = () => jobsBlock(page).locator('.jr .lab').evaluateAll((l) => l.map((e) => Math.round(e.getBoundingClientRect().width)));
+  await expect(jobsBlock(page).locator('.pn-cr').first()).toBeVisible();
+  const auto = (await widths())[0];
+  expect(auto).toBeGreaterThan(150);
+  const drag = async (dx: number) => {
+    const g = (await jobsBlock(page).locator('.pn-cr').first().boundingBox())!;
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down(); await page.mouse.move(g.x + g.width / 2 + dx, g.y + g.height / 2, { steps: 5 }); await page.mouse.up();
+  };
+  await drag(-100);
+  const set = await widths();
+  expect(set.every((w) => Math.abs(w - (auto - 100)) <= 1)).toBe(true);
+  await page.reload();
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(3);
+  expect(await widths()).toEqual(set);
+  await jobsBlock(page).locator('.pn-cr').first().dblclick();
+  expect((await widths()).every((w) => w === auto)).toBe(true);
+});
+
+test('dragging the step column edge widens it, the width is kept when switching workspace and back', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  const p = await jobsWorkspace(page);
+  const otherName = uniq('other');
+  await createWs(page, otherName);
+  const ids = ['s1', 's2'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'collect_coverage', progress: { done: 1, total: 4 } });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(2);
+  const pg = (await page.locator('#pgrip').boundingBox())!;
+  await page.mouse.move(pg.x + pg.width / 2, pg.y + 100);
+  await page.mouse.down(); await page.mouse.move(pg.x - 800, pg.y + 100, { steps: 5 }); await page.mouse.up();
+  const widths = () => jobsBlock(page).locator('.jr .step').evaluateAll((l) => l.map((e) => Math.round(e.getBoundingClientRect().width)));
+  await expect(jobsBlock(page).locator('.pn-cr').nth(3)).toBeVisible();
+  const auto = (await widths())[0];
+  const g = (await jobsBlock(page).locator('.pn-cr').nth(3).boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down(); await page.mouse.move(g.x + g.width / 2 + 60, g.y + g.height / 2, { steps: 5 }); await page.mouse.up();
+  const set = await widths();
+  expect(set.every((w) => Math.abs(w - (auto + 60)) <= 1)).toBe(true);
+  await tabOf(page, otherName).click();
+  await tabOf(page, p.wsName).click();
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(2);
+  expect(await widths()).toEqual(set);
+  expect((await uiState(page, p.ws))['jobs'].cols.step).toBe(set[0]);
+});
+
+test('every column starts at the same x in all rows, whatever the text lengths', async ({ page }) => {
+  await page.setViewportSize({ width: 1800, height: 900 });
+  const p = await jobsWorkspace(page);
+  const rows: [string, object][] = [
+    ['idx22-claim-3', { step: 'collect_coverage_22', detail: 'running', progress: { done: 1, total: 8 } }],
+    ['idx36', { step: 'generate_tests_36', detail: 'succeeded soon', progress: { done: 4, total: 8 } }],
+    ['i51', { step: 'x', detail: 'running' }],
+    ['idx42-claim-1-long', { step: 'generate_task_42', detail: 'running', progress: { done: 5, total: 8 } }],
+  ];
+  for (const [id, f] of rows) p.set(id, { state: 'running', startedAt: new Date(Date.now() - 3600_000).toISOString(), ...f });
+  await watchJobs(page, p.ws, p.name, rows.map(([id]) => id));
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(4);
+  const pg = (await page.locator('#pgrip').boundingBox())!;
+  await page.mouse.move(pg.x + pg.width / 2, pg.y + 100);
+  await page.mouse.down(); await page.mouse.move(pg.x - 800, pg.y + 100, { steps: 5 }); await page.mouse.up();
+  await expect(jobsBlock(page).locator('.pn-cr').first()).toBeVisible();
+  const xs = (sel: string) => jobsBlock(page).locator(`li.jr ${sel}`).evaluateAll((l) => l.map((e) => Math.round(e.getBoundingClientRect().x)));
+  for (const sel of ['.lab', '.step', '.det']) {
+    const v = await xs(sel);
+    expect(v).toHaveLength(4);
+    expect(new Set(v).size, sel).toBe(1);
+  }
+  expect(new Set(await xs('.prog')).size).toBe(1); // rows without a bar have none, the rest line up
+  const r = await jobsBlock(page).locator('li.jr .dur').evaluateAll((l) => l.map((e) => Math.round(e.getBoundingClientRect().right)));
+  expect(new Set(r).size).toBe(1); // elapsed times end on the same x
+});
+
 test('a dragged panel collapses to its header only, and the dragged height returns on expand and after a reload', async ({ page }) => {
   const p = await jobsWorkspace(page);
   const ids = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];

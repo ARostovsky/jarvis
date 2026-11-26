@@ -195,6 +195,11 @@ test('× and Clear done remove rows, and a reload keeps what is left', async ({ 
   p.set('d1', { state: 'done' }); p.set('d2', { state: 'failed', error: 'x' }); p.set('d3', { state: 'running' });
   await watch(page, p.ws, p.name, ['d1', 'd2', 'd3']);
   await expect(row(page, p.name, 'd2')).toHaveClass(/st-failed/);
+  for (const id of ['d1', 'd2']) { // the plate spans the row (status bar inset 2px) and stays inside it
+    const rb = (await row(page, p.name, id).boundingBox())!, xb = (await row(page, p.name, id).getByRole('button', { name: /^Remove/ }).boundingBox())!;
+    expect(xb.height).toBeGreaterThanOrEqual(rb.height - 4 - 0.5);
+    expect(xb.y).toBeGreaterThanOrEqual(rb.y); expect(xb.y + xb.height).toBeLessThanOrEqual(rb.y + rb.height + 0.5);
+  }
   await row(page, p.name, 'd1').getByRole('button', { name: /^Remove/ }).click();
   await expect(row(page, p.name, 'd1')).toHaveCount(0);
   expect((await act(page, p.ws, 'bogus')).status()).toBe(400);
@@ -240,6 +245,22 @@ test('absent fields are not in the DOM at all', async ({ page }) => {
   for (const sel of ['.cost', '.bar', '.cnt', '.step', 'a', '.err']) await expect(row(page, p.name, 'full-1').locator(sel)).toHaveCount(1);
   for (const sel of ['.cost', '.asof', '.bar', '.cnt', '.step', 'a', '.err']) await expect(row(page, p.name, 'bare-1').locator(sel)).toHaveCount(0);
   await expect(row(page, p.name, 'bare-1').locator('.l2 > *')).toHaveCount(0); // the id is on the first line, nothing else to show
+});
+
+test('the progress bar and counter are vertically centered with the row text', async ({ page }) => {
+  const p = await setup(page);
+  p.set('c-1', { state: 'running', step: 'eval', progress: { done: 1, total: 8 } });
+  p.set('c-2', { state: 'running', step: 'eval', progress: { done: 4, total: 8 } });
+  await watch(page, p.ws, p.name, ['c-1', 'c-2']);
+  const mid = (r: { y: number; height: number }) => r.y + r.height / 2;
+  for (const id of ['c-1', 'c-2']) {
+    const r = row(page, p.name, id);
+    const bar = (await r.locator('.bar').boundingBox())!;
+    const cnt = (await r.locator('.cnt').boundingBox())!;
+    const lab = (await r.locator('.lab').boundingBox())!;
+    expect(Math.abs(mid(bar) - mid(cnt))).toBeLessThanOrEqual(1);
+    if ((await r.boundingBox())!.width >= 640) expect(Math.abs(mid(bar) - mid(lab))).toBeLessThanOrEqual(1); // one-line layout: same line as the name
+  }
 });
 
 test('clear_jobs keepCurrent leaves only the unfinished rows; agents never get watch_jobs or clear_jobs', async ({ page }) => {

@@ -204,7 +204,10 @@
   .pn.stale .pn-meta { color: var(--amber); opacity: 1; }
   .pn.stale .pn-sum { color: var(--amber); opacity: 1; }
   .pn-btn { flex: none; border: 1px solid var(--line) !important; padding: 1px 8px; font-size: 11px; letter-spacing: .1em !important; text-transform: uppercase; line-height: 16px; }
-  .pn-wrap { flex: 0 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); transition: grid-template-rows .16s ease-out; }
+  .pn-cr { display: none; position: absolute; top: 0; bottom: 0; width: 8px; margin-left: -4px; cursor: col-resize; z-index: 1; touch-action: none; } /* a column's right edge, wide layout only */
+  @container (min-width: 640px) { .pn-cr { display: block; } .pn-cr[hidden] { display: none; } }
+  .pn-cr:hover, .pn-cr.dragging { background: linear-gradient(90deg, transparent 3px, var(--cyan) 3px, var(--cyan) 5px, transparent 5px); }
+  .pn-wrap { position: relative; flex: 0 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); transition: grid-template-rows .16s ease-out; }
   .pn:not(.collapsed) { min-height: 28px; } /* header only: the body follows its content, and a crowded stack may squeeze a body but never clip a header */
   .pn.collapsed .pn-wrap { grid-template-rows: minmax(0, 0fr); overflow: hidden; } /* 0fr alone has an auto minimum: a dragged body height would keep that space open */
   .pn-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
@@ -228,22 +231,29 @@
   .jr .lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .jr .prov { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
   .jr .dur { flex: none; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; opacity: .85; }
-  .jr .x { flex: none; align-self: center; min-width: 28px; height: 22px; padding: 0 6px; color: var(--text); opacity: .6; font-size: 16px; line-height: 1; }
-  .jr .x:hover, .jr .x:focus-visible { opacity: 1; }
+  .jr .x { flex: none; position: absolute; right: 0; top: 2px; bottom: 2px; min-width: 30px; margin: 0; padding: 0 6px; color: var(--text); opacity: .5; font-size: 16px; line-height: 1; border-left: 0; } /* the plate spans the row like the status bar (same 2px inset) */
+  .jr:has(> .l1 > .x) .l1, .jr:has(> .l1 > .x) .l2 { padding-right: 34px; } /* narrow: the plate is pinned to the row's right edge, full height */
+  .jr .x:hover, .jr .x:focus-visible { opacity: 1; background: rgba(255, 90, 90, .16); box-shadow: inset 0 0 0 1px var(--red); }
+  .jr:not(:hover):not(:focus-within) .x:not(:hover) { opacity: .35; }
   .jr .l2 a { color: var(--cyan); }
   .jr .det { min-width: 0; overflow-wrap: anywhere; }
   .jr.st-failed .det, .jr .err { color: var(--red); }
-  .jr .prog { display: inline-flex; align-items: baseline; gap: 6px; white-space: nowrap; } /* bar and count wrap together */
+  .jr .prog { display: inline-flex; align-items: center; align-self: center; gap: 6px; white-space: nowrap; } /* bar and count wrap together */
   .jr .bar { display: inline-flex; gap: 2px; } .jr .bar i { width: 6px; height: 3px; background: var(--line); } .jr .bar i.on { background: var(--e); }
   .jr .cost .asof { opacity: .6; }
   .jr.drop-before { box-shadow: inset 0 2px 0 var(--cyan); } .jr.drop-after { box-shadow: inset 0 -2px 0 var(--cyan); }
   @container (max-width: 639px) { .jr .cost { flex-basis: 100%; } } /* narrow: the cost takes its own line */
   @container (min-width: 640px) { /* one line per job, columns: label, provider, id, step, detail, progress, duration, cost, x */
-    .jr { display: flex; align-items: baseline; gap: 12px; margin-bottom: 2px; }
+    /* a shared grid: the list owns the tracks, each row takes them as a subgrid, so every column starts at the same x in all rows; a column nobody fills is 0 wide */
+    .pn-list:has(> .jr) { display: grid; grid-template-columns: minmax(0, calc(var(--col-name, 197px) + 23px)) minmax(0, var(--col-prov, auto)) minmax(0, var(--col-id, auto)) minmax(0, var(--col-step, max-content)) minmax(0, 1fr) auto auto auto auto; }
+    .jr { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: baseline; margin-bottom: 2px; }
     .jr .l1, .jr .l2 { display: contents; }
-    .jr .lab { order: 1; flex: 0 1 220px; } .jr .prov { order: 2; } .jr .l2 > .id, .jr .l2 > a { order: 3; } .jr .step { order: 4; }
-    .jr .det { order: 5; flex: 1; } .jr .det.sw, .jr .err { order: 5; flex: 0 1 auto; } .jr .prog { order: 6; }
-    .jr .dur { order: 8; min-width: 5ch; text-align: right; } .jr .cost { order: 9; flex: none; } .jr .x { order: 10; }
+    .jr .l1 > *, .jr .l2 > * { grid-row: 1; padding-right: 12px; min-width: 0; }
+    .jr .lab, .jr .prov, .jr .id, .jr .step, .jr .det { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .jr .prov, .jr .l2 > .id, .jr .l2 > a, .jr .step, .jr .det { padding-left: 6px; } /* air between a column's resize line (on the track edge) and the next column's text */
+    .jr .lab { grid-column: 1; } .jr .prov { grid-column: 2; } .jr .l2 > .id, .jr .l2 > a { grid-column: 3; } .jr .step { grid-column: 4; }
+    .jr .det { grid-column: 5; } .jr .det.sw, .jr .err { grid-column: 5; grid-row: 2; } .jr .prog { grid-column: 6; }
+    .jr .dur { grid-column: 7; min-width: 5ch; text-align: right; } .jr .cost { grid-column: 8; } .jr .x { position: static; align-self: stretch; margin: 2px 0; grid-column: 9; grid-row: 1 / span 2; padding-right: 0; } .jr:has(> .l1 > .x) .l1 { padding-right: 0; }
   }
   .ci { display: flex; align-items: baseline; gap: 8px; padding-top: 4px; padding-bottom: 4px; margin-bottom: 2px; }
   .ci .mk { flex: none; width: 16px; text-align: center; color: var(--e); font: 400 14px 'JetBrains Mono', monospace; }
@@ -1846,9 +1856,35 @@ function gripBody(p) {
     p.grip.classList.add('dragging');
     const move = (e) => { h = Math.round(Math.min(Math.max(h0 + e.clientY - y0, lo), innerHeight * 0.6)); p.body.style.height = `${h}px`; };
     p.grip.addEventListener('pointermove', move);
-    p.grip.addEventListener('pointerup', () => { p.grip.removeEventListener('pointermove', move); p.grip.classList.remove('dragging'); setPanelUi(id(), { h }); p.sig = ''; }, { once: true });
+    const end = () => { p.grip.removeEventListener('pointermove', move); p.grip.removeEventListener('pointerup', end); p.grip.removeEventListener('lostpointercapture', end); p.grip.classList.remove('dragging'); p.el.classList.remove('dragging'); h = Math.round(p.body.getBoundingClientRect().height); setPanelUi(id(), { h }); p.sig = ''; };
+    p.grip.addEventListener('pointerup', end); p.grip.addEventListener('lostpointercapture', end);
   });
   p.grip.addEventListener('dblclick', () => { setPanelUi(id(), { h: undefined }); p.sig = ''; p.body.style.height = ''; });
+}
+// Drag the right edge of a text column (name, provider, id, step; wide layout) to set its width for every row of the panel (40px .. 60% of the panel); double-click resets. Kept per panel with the other panel prefs.
+const COLS = [['name', '.lab', '--col-name'], ['prov', '.prov', '--col-prov'], ['id', '.l2 > .id, .l2 > a', '--col-id'], ['step', '.step', '--col-step']];
+function colResize(wrap, body, id) {
+  const hs = COLS.map(([key, sel, v]) => {
+    const cr = h('div', 'pn-cr'); cr.title = 'Drag to resize the column · double-click to reset';
+    const el = () => body.querySelector(`.jr ${sel.replace(', ', ', .jr ')}`);
+    cr.place = () => { const l = el(); cr.hidden = !l || !l.offsetWidth; if (l) cr.style.left = `${Math.round(l.getBoundingClientRect().right - wrap.getBoundingClientRect().left)}px`; };
+    cr.addEventListener('pointerdown', (ev) => {
+      if (ev.button || !el()) return;
+      ev.preventDefault();
+      const w0 = el().getBoundingClientRect().width, x0 = ev.clientX, max = body.clientWidth * 0.6;
+      let w = w0;
+      cr.setPointerCapture(ev.pointerId); cr.classList.add('dragging');
+      const move = (e) => { w = Math.round(Math.min(Math.max(w0 + e.clientX - x0, 40), max)); body.style.setProperty(v, `${w}px`); hs.forEach((c) => c.place()); };
+      cr.addEventListener('pointermove', move);
+      const end = () => { cr.removeEventListener('pointermove', move); cr.removeEventListener('pointerup', end); cr.removeEventListener('lostpointercapture', end); cr.classList.remove('dragging'); if (w !== w0) setPanelUi(id, { cols: { ...loadJson(panelUiKey())[id]?.cols, [key]: Math.round(w) } }); };
+      cr.addEventListener('pointerup', end); cr.addEventListener('lostpointercapture', end);
+    });
+    cr.addEventListener('dblclick', () => { const { [key]: _, ...rest } = loadJson(panelUiKey())[id]?.cols ?? {}; setPanelUi(id, { cols: Object.keys(rest).length ? rest : undefined }); body.style.removeProperty(v); hs.forEach((c) => c.place()); });
+    return cr;
+  });
+  new ResizeObserver(() => hs.forEach((c) => c.place())).observe(body);
+  wrap.place = () => hs.forEach((c) => c.place());
+  return hs;
 }
 function updateBlock(p, ui) {
   const { panelId, title, data } = p.panel, kind = kindOf(p), status = panelStatus.get(panelId);
@@ -1861,10 +1897,15 @@ function updateBlock(p, ui) {
     p.head = h('div', 'pn-h'); p.body = h('div', 'pn-body'); p.body.id = `pnb-${panelId}`;
     p.body.setAttribute('role', 'region');
     p.grip = h('div', 'pn-grip'); p.grip.title = 'Drag to resize · double-click to reset';
-    p.el.append(p.head, h('div', 'pn-wrap', p.body), p.grip);
+    const wrap = h('div', 'pn-wrap', p.body);
+    wrap.append(...colResize(wrap, p.body, panelId));
+    p.el.append(p.head, wrap, p.grip);
     gripBody(p);
   }
-  p.body.style.height = ui.h ? `${ui.h}px` : '';
+  if (!p.el.classList.contains('dragging') && !p.body.parentElement.querySelector('.pn-cr.dragging')) { // a re-render mid-drag must not overwrite the unsaved size
+    p.body.style.height = ui.h ? `${ui.h}px` : '';
+    for (const [key, , v] of COLS) if (ui.cols?.[key]) p.body.style.setProperty(v, `${ui.cols[key]}px`); else p.body.style.removeProperty(v);
+  }
   const fk = p.el.contains(document.activeElement) ? document.activeElement.dataset?.fk : null, top = p.body.scrollTop;
   p.el.classList.toggle('collapsed', collapsed);
   p.el.classList.toggle('stale', !!kind.stale?.(data, status));
@@ -1880,6 +1921,7 @@ function updateBlock(p, ui) {
   kind.render(p.body, data, status, act, ctx);
   p.body.scrollTop = top;
   if (fk) [...p.el.querySelectorAll('[data-fk]')].find((e) => e.dataset.fk === fk)?.focus();
+  p.body.parentNode.place();
 }
 // Shown only with the arbiter selected and at least one panel not hidden by hand.
 function renderPanels() {
