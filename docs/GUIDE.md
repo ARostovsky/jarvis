@@ -65,7 +65,7 @@ To enable it:
 
 1. Linux with PipeWire and `pw-record` (package `pipewire`, or `pipewire-bin` / `pipewire-utils`). Jarvis records the default input of your sound server: the one `wpctl status` marks with `*` under Sources.
 2. Set up Python with `faster-whisper` (`voice/setup.sh` creates `voice/.venv` and fetches the models; Jarvis uses that venv by default), or point `JARVIS_VOICE_PYTHON` at a Python that already has it.
-3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces CPU).
+3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces CPU). To have it on after every restart without passing the variable, put `JARVIS_VOICE=1` on a line in `$XDG_CONFIG_HOME/jarvis/env` (`~/.config/jarvis/env`). Jarvis reads that optional file of `KEY=value` lines at start, for any `JARVIS_*` variable. A variable set in the environment overrides the file; a missing file changes nothing. `JARVIS_ENV_FILE` points at another file.
 
 If `pw-record`, Python or `faster-whisper` is missing, Jarvis starts as usual, logs one `voice disabled: ...` line (for example `voice disabled: pw-record not found`) to `server.log` and shows no mic button. The check runs after the server starts, so the mic button appears a moment later (reload the page if it is missing right after a start).
 

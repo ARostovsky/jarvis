@@ -450,7 +450,8 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_STATUS_URL` | `https://status.claude.com/api/v2/summary.json` | Statuspage summary the status dot polls. Tests only: `e2e` points it at a dead port, `e2e/health.spec.ts` at a stub |
 | `JARVIS_STATUS_POLL_MS` | `60000` | Tests only: status poll interval |
 | `JARVIS_VOICE` | unset | Voice input: `1` on, `cpu` force CPU, unset = off (no route, no process, `voice: false`) |
-| `JARVIS_VOICE_AUTOSEND` | `1` | Voice: `0` inserts the transcript into `#dinput`; otherwise it is posted to `/send` for the agent selected at press time (`{ws, id}` captured then, draft untouched). Reported to the UI as `voiceAutosend` in `GET /workspaces` |
+| `JARVIS_ENV_FILE` | `$XDG_CONFIG_HOME/jarvis/env` | Optional `KEY=value` file loaded by `src/local-env.ts`, the first import of `server.ts` and of `bin/jarvis.mjs`, so every module and the CLI (`PORT`, `XDG_DATA_HOME`) see it; set variables win, missing file = no change. Tests point it at `/dev/null` |
+| `JARVIS_VOICE_AUTOSEND` | `1` | Voice: `0` inserts the transcript into `#dinput`; otherwise it is posted to `/send` for the agent selected at press time (`{ws, id}` captured then, the box text sent first, one message, box cleared after a successful send). Reported to the UI as `voiceAutosend` in `GET /workspaces` |
 | `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Interpreter for preflight and sidecar |
 | `JARVIS_VOICE_MODEL` | `large-v3` | Sidecar model (float16, beam 5, about 4 GB VRAM peak; CPU fallback `large-v3-turbo` int8) |
 | `JARVIS_VOICE_LANGS` | `en,ru` | Sidecar languages |

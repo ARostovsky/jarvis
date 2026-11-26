@@ -28,6 +28,7 @@ export const OPEN_LOG = join(tmpdir(), `jarvis-e2e-open-${PORT}.log`);
 export const PROVIDERS_DIR = join(tmpdir(), `jarvis-e2e-providers-${PORT}`);
 // Servers a spec spawns inherit this: none may read the real ~/.config/jarvis/status-providers.
 process.env.JARVIS_PROVIDERS_DIR ??= PROVIDERS_DIR;
+process.env.JARVIS_ENV_FILE ??= '/dev/null'; // never read the real local env file
 
 const server = (i: number) => {
   const port = BASE + STRIDE * i;

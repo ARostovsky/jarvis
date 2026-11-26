@@ -1,4 +1,5 @@
 // Web UI server: SSE stream of bus events + JSON POST commands. Loopback only.
+import './local-env.ts';
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';

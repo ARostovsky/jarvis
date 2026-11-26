@@ -5,6 +5,7 @@ import { openSync, readFileSync, writeFileSync, rmSync, mkdirSync, realpathSync 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
+import '../src/local-env.ts'; // ~/.config/jarvis/env first: PORT and XDG_DATA_HOME below may come from it
 
 const PORT = Number(process.env.PORT ?? 7777);
 const URL = `http://127.0.0.1:${PORT}`;
