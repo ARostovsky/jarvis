@@ -123,6 +123,13 @@ With a notes folder, the **Open items** panel shows `workspaces/<workspace id>/o
 
 - Every fenced code block in the chat has a **Copy** button at its top right (shown on hover or keyboard focus, always on touch screens). One click copies the whole block.
 
+### Clickable files
+
+- An absolute path in a chat message (also inside `` `code` ``, not in fenced blocks or URLs) that ends in `png`, `jpg`, `jpeg`, `webp`, `gif`, `svg`, `pdf`, `txt`, `md`, `log`, `json`, `ts`, `tsx`, `js`, `mjs`, `css`, `html`, `yml`, `yaml`, `toml` or `py` is a link. A relative path (`src/server.ts`, `README.md`, with an optional `:123` or `:123:4` that is ignored) is a link only when it resolves to an existing file, looked up in this order: the workspace's project folder, its notes folder, the notes root, the agents' worktrees; the first match wins and no match stays plain text. A bare name such as `foo.ts` matches only at the top of one of those folders. A plain click opens the file in the system default program (`xdg-open`; `open` on macOS): image viewer, text editor, PDF reader. A brief note says "opened in system viewer"; an error shows as a message. The link keeps its address, so middle-click or ctrl-click still opens the file in a browser tab, served read-only by Jarvis (`GET /local-file?path=`). Jarvis runs on your machine, so the program opens there.
+- Only files below these folders open: `/tmp`, `~/Pictures`, `~/Downloads`, `~/Documents`, `~/.local/share/jarvis` and `~/IdeaProjects`. `JARVIS_FILE_ROOTS` (colon-separated) replaces the list. Opening uses the same rules and the same file types as the browser tab: images, `pdf`, `txt`, `md`, `log`, `json`. Scripts, executables, `.desktop`, `.AppImage` and unknown types never open. `html` and `svg` files open in a browser tab (html as plain text, svg sandboxed), never in the system viewer. At most 10 opens per 10 seconds.
+- Never served, whatever the folder: anything below a dot folder (`.ssh`, `.git`, `.config`, ...), names that look secret (`secret`, `password`, `token`, `credential`, `.env`, `.pem`, `.key`, ...), symlinks that leave the folders, directories and files over 20 MB. Jarvis answers 404 for all of these, so a denied file looks like a missing one.
+- SVG opens in a sandbox: its scripts do not run.
+
 ## Safety
 
 - **Your project folder is never edited directly** when it is a git repo. Each agent works in its own git worktree on branch `jarvis/<agent-id>`. You review and merge. When an agent is stopped or its workspace is archived, its worktree and branch are removed if the branch is merged into `main` (or has no commits) and the worktree has no uncommitted changes; anything else is kept and listed.
@@ -161,6 +168,8 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_CLAUDE_PATH` | `claude` on `PATH` | Claude Code binary sessions run. Default is the first executable `claude` on `PATH` (the auto-updating install), picked up again at each session start. It falls back to the build bundled in the SDK package when none is found, when `claude --version` fails, or when it is older than the bundled one. `bundled` forces the bundled build (escape hatch); the choice is logged at startup |
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
 | `JARVIS_JOBS` | `1` | `0` turns off the Jobs panel: no polling, no jobs tools or prompt text for Jarvis |
+| `JARVIS_OPEN_CMD` | `xdg-open` (`open` on macOS) | Program that opens a clicked file; it gets the real path as its only argument (tests use a stub) |
+| `JARVIS_FILE_ROOTS` | `/tmp`, `~/Pictures`, `~/Downloads`, `~/Documents`, `~/.local/share/jarvis`, `~/IdeaProjects` | Colon-separated folders whose files chat links may open (see Clickable files) |
 | `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |
 | `JARVIS_PROVIDERS_DIR` | `$XDG_CONFIG_HOME/jarvis/status-providers` (`~/.config/...`) | Folder with status providers, one subfolder each |
 | `JARVIS_JOBS_MIN_POLL_S` | unset | Tests only: lowers the minimum poll, slow-field interval and `timeoutS` (normally 15 s, 15 min and 5 s) to this many seconds |

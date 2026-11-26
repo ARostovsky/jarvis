@@ -2,11 +2,19 @@
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
 import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
+// GETs that read local data (files, screenshots): a foreign page can embed them as <img>/<iframe> and learn from onload/size what exists. Only our own page may read them.
+function ownPage(req: IncomingMessage): boolean {
+  const site = req.headers['sec-fetch-site'];
+  if (site) return site === 'same-origin' || site === 'none';
+  const from = req.headers.origin ?? req.headers.referer; // no fetch metadata (old clients, tests): a sent Origin/Referer must be ours
+  return !from || ORIGINS.has(from.replace(/^(https?:\/\/[^/]+).*$/, '$1'));
+}
 // Voice input is opt-in: voice.ts is not even loaded unless JARVIS_VOICE is set. The /voice routes and `voice` in /workspaces appear once its preflight passed (after listen, so a slow preflight never delays the start).
 let voice: { maxS: number } | undefined;
 const PAGE = resolve(import.meta.dirname, '..', 'public', 'index.html');
@@ -41,6 +49,8 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
   '/workspaces/archived/info': (b) => archivedInfo(String(b.id)),
   '/workspaces/archived/delete': (b) => deleteArchived(String(b.id), String(b.name ?? '')),
+  // Relative chat paths to absolute ones (null = no match), for the links; the policy is the one of /local-file. At most 50 per call.
+  '/local-file/resolve': (b) => { const bases = ws(b.ws).fileBases(); return Object.fromEntries((Array.isArray(b.paths) ? b.paths.slice(0, 50) : []).map((p: unknown) => [String(p), resolveRelative(String(p), bases) ?? null])); },
   '/say': (b) => ws(b.ws).tellArbiter(String(b.text)),
   '/answer': (b) => ws(b.ws).answerAsk(String(b.reqId), Boolean(b.allow), replyOf(b)),
   '/send': (b) => ws(b.ws).sendToAgent(String(b.id), String(b.text), 'user'),
@@ -79,10 +89,28 @@ createServer(async (req, res) => {
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
     } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
   } else if (req.method === 'GET' && url.pathname === '/providers/screenshot') {
+    if (!ownPage(req)) return void res.writeHead(404).end();
     try {
       const { type, data } = getProviderScreenshot(url.searchParams.get('name') ?? '');
       res.writeHead(200, { 'content-type': type, 'content-length': data.length, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-cache' }).end(data);
     } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
+  } else if (req.method === 'GET' && url.pathname === '/local-file') {
+    if (!ownPage(req)) return void res.writeHead(404).end();
+    const f = localFile(url.searchParams.get('path') ?? '');
+    if (!f) return void res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': f.type, 'content-length': f.data.length, 'content-disposition': 'inline', 'x-content-type-options': 'nosniff', 'cache-control': 'no-cache', ...(f.csp && { 'content-security-policy': f.csp }) }).end(f.data);
+  } else if (url.pathname === '/local-file/open') {
+    // Triggers a local action, so same-origin JSON POST only (a cross-site form cannot set this Origin or content type).
+    if (req.method !== 'POST') return void res.writeHead(405, { allow: 'POST' }).end();
+    if (!ORIGINS.has(req.headers.origin ?? '') || req.headers['content-type'] !== 'application/json') return void res.writeHead(403).end();
+    if (!openAllowed()) return void res.writeHead(429).end();
+    let path = '';
+    try { path = String((await body(req)).path ?? ''); } catch { return void res.writeHead(400).end(); }
+    const r = await openLocal(path);
+    if (r === 'denied') return void res.writeHead(404).end();
+    if (r === 'view-only') return void res.writeHead(415).end();
+    if (r) res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify(r));
+    else res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
   } else if (req.method === 'GET' && url.pathname === '/recent') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
   } else if (req.method === 'GET' && url.pathname === '/health') {

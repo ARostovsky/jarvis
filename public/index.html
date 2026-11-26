@@ -140,6 +140,8 @@
   dialog button { border: 1px solid var(--line); padding: 8px 14px; margin-right: 6px; }
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; user-select: text; z-index: 5; }
   #toast.show { display: flex; gap: 12px; align-items: flex-start; }
+  #note { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; display: none; pointer-events: none; z-index: 5; }
+  #note.show { display: block; }
   #toast span { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
   #toast button { border: 1px solid var(--line); padding: 0 8px; }
   #hint { position: fixed; bottom: 36px; left: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
@@ -301,6 +303,7 @@
 </svg>
 
 <div id="asks"></div>
+<div id="note" role="status"></div>
 <div id="toast" role="alert"><span id="toastText"></span><button id="toastClose" aria-label="Dismiss error">×</button></div>
 <dialog id="newws">
   <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
@@ -643,12 +646,62 @@ function renderTitle() {
   $('pmeta').classList.toggle('full', ctxPct(a.agent) >= 80);
 }
 const atBottom = (box) => box.scrollHeight - box.scrollTop - box.clientHeight < 40;
+// Relative chat paths: one batched POST /local-file/resolve per 50 ms of rendering (per workspace), answers cached 30 s (misses too), so a long log is a few requests, not one per word.
+const relCache = new Map(), relWait = new Map();
+let relTimer = 0;
+function resolveRel(q, found) {
+  const key = `${WS}\0${q}`, hit = relCache.get(key);
+  if (hit && Date.now() - hit.t < 30000) return void (hit.abs && found(hit.abs));
+  if (!relWait.has(key)) relWait.set(key, []);
+  relWait.get(key).push(found);
+  relTimer ||= setTimeout(async () => {
+    relTimer = 0;
+    const batch = [...relWait.entries()].map(([k, cbs]) => ({ k, ws: k.slice(0, k.indexOf('\0')), p: k.slice(k.indexOf('\0') + 1), cbs }));
+    relWait.clear();
+    for (const ws of new Set(batch.map((b) => b.ws))) {
+      const mine = batch.filter((b) => b.ws === ws);
+      for (let i = 0; i < mine.length; i += 50) {
+        const part = mine.slice(i, i + 50);
+        const got = await postJson('/local-file/resolve', { ws, paths: part.map((b) => b.p) }).then((r) => (r.ok ? r.json() : {}), () => ({}));
+        for (const b of part) {
+          const abs = got[b.p] ?? null;
+          relCache.set(b.k, { abs, t: Date.now() });
+          if (abs) b.cbs.forEach((f) => f(abs));
+        }
+      }
+    }
+  }, 50);
+}
 // Markdown subset agents use: ``` fences, pipe tables, `code`, **bold**, [label](url) and bare URLs (http/https only). Built with DOM nodes, never innerHTML, so agent text cannot inject markup.
 function inlineMd(text) {
-  const link = (href, label) => Object.assign(document.createElement('a'), { href, textContent: label, target: '_blank', rel: 'noopener noreferrer' });
+  const link = (href, label, rel = 'noopener noreferrer') => Object.assign(document.createElement('a'), { href, textContent: label, target: '_blank', rel });
+  // Path to a local file, served by /local-file (the server decides what is allowed): absolute, or relative with an optional :line[:col] (resolved lazily by resolveRel, plain text unless the server finds a file). Not after a word char, "/" or ":" so URLs stay text.
+  const EXT = 'png|jpe?g|webp|gif|svg|pdf|txt|md|log|json|tsx?|m?js|css|html|ya?ml|toml|py';
+  const FILE = `(?:[\\w.@+~-]+\\/)*[\\w.@+~-]+\\.(?:${EXT})`;
+  const PATH = new RegExp(`((?<![\\w/.:~@-])(?:\\/${FILE}|${FILE}(?::\\d+(?::\\d+)?)?)(?![\\w/]|\\.\\w))`, 'i');
+  // Plain left click opens the file in the system program (POST /local-file/open); the href stays for middle/ctrl-click.
+  const openFile = (q) => (e) => {
+    if (e.button || e.ctrlKey || e.metaKey || e.shiftKey || e.altKey) return;
+    e.preventDefault();
+    postJson('/local-file/open', { path: q }).then(async (r) => {
+      if (r.ok) return note('opened in system viewer');
+      if (r.status === 415) return void window.open(`/local-file?path=${encodeURIComponent(q)}`, '_blank', 'noopener'); // html/svg: browser tab only
+      toast(`open failed: ${r.status === 404 ? 'file not available' : r.status === 429 ? 'too many opens, wait a moment' : (await r.json().catch(() => ({}))).error ?? r.status}`);
+    }, () => toast('open failed: server not reachable'));
+  };
+  const fileLink = (q, abs) => { const a = link(`/local-file?path=${encodeURIComponent(abs)}`, q, 'noopener'); a.onclick = openFile(abs); return a; };
+  const paths = (t) => t.split(PATH).map((q, i) => {
+    if (i % 2 === 0) return document.createTextNode(q);
+    if (q[0] === '/') return fileLink(q, q);
+    const span = document.createElement('span');
+    span.textContent = q;
+    resolveRel(q, (abs) => span.replaceWith(fileLink(q, abs)));
+    return span;
+  });
   return text.split(/(`[^`\n]+`|\*\*[^*\n]+\*\*|\[[^\]\n]+\]\([^\s)]+\)|https?:\/\/[^\s<>]+)/).flatMap((p, i) => {
-    if (i % 2 === 0) return [document.createTextNode(p)];
-    if (p[0] === '`' || p[0] === '*') return [Object.assign(document.createElement(p[0] === '`' ? 'code' : 'strong'), { textContent: p[0] === '`' ? p.slice(1, -1) : p.slice(2, -2) })];
+    if (i % 2 === 0) return paths(p);
+    if (p[0] === '`') { const c = document.createElement('code'); c.append(...paths(p.slice(1, -1))); return [c]; }
+    if (p[0] === '*') return [Object.assign(document.createElement('strong'), { textContent: p.slice(2, -2) })];
     if (p[0] === '[') { const m = p.match(/^\[(.+)\]\((.+)\)$/); return [/^https?:\/\//i.test(m[2]) ? link(m[2], m[1]) : document.createTextNode(p)]; }
     let url = p; // bare URL: trailing punctuation, and a ")" with no "(" before it, belong to the sentence
     while (/[.,;:!?'"\]]$/.test(url) || (url.endsWith(')') && !url.includes('('))) url = url.slice(0, -1);
@@ -1182,6 +1235,16 @@ function toast(text) {
 }
 // Errors stay until dismissed, so the text can be read and copied.
 $('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
+
+// Brief non-blocking status (success); errors use toast().
+let noteTimer;
+function note(text) {
+  const n = $('note');
+  n.textContent = text;
+  n.classList.add('show');
+  clearTimeout(noteTimer);
+  noteTimer = setTimeout(() => n.classList.remove('show'), 2500);
+}
 
 async function post(path, data) {
   const r = await postJson(path, { ws: WS, ...data }).catch((e) => e);

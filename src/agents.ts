@@ -1706,6 +1706,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
     jobs,
     syncOpenItems,
     refreshOpenItems: () => openItems?.refresh(),
+    // Folders chat file paths resolve against, in order: the repo, the notes folder of this workspace, the notes root, the agents' worktrees.
+    fileBases: () => [meta.project, meta.notes && workspaceDir(meta as { id: string; notes: string }), meta.notes, ...[...agents.values()].filter((a) => a.repo).map((a) => a.cwd)].filter((x): x is string => !!x),
     proposals: () => [...proposals.values()],
     systemNote,
     answerAsk,

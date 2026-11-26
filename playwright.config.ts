@@ -22,6 +22,8 @@ if (index >= WORKERS) throw new Error(`worker ${index} has no server: only ${WOR
 export const PORT = BASE + STRIDE * index;
 export const ORIGIN = `http://127.0.0.1:${PORT}`;
 export const DATA_HOME = join(tmpdir(), `jarvis-e2e-data-${PORT}`);
+// The open stub (e2e/fake-open.sh) appends the paths it gets here; the real xdg-open never runs in tests.
+export const OPEN_LOG = join(tmpdir(), `jarvis-e2e-open-${PORT}.log`);
 // Where the status-provider specs install copies of e2e/fake-provider (outside the data folder, as the location rules need); one per worker like the data dir.
 export const PROVIDERS_DIR = join(tmpdir(), `jarvis-e2e-providers-${PORT}`);
 // Servers a spec spawns inherit this: none may read the real ~/.config/jarvis/status-providers.
@@ -35,7 +37,7 @@ const server = (i: number) => {
     url: `http://127.0.0.1:${port}/workspaces`,
     // Nothing listens on port 1: the status poll fails fast and no spec touches the network.
     // Agent sessions run on a scripted fake of the SDK: no API calls, no cost.
-    env: { PORT: String(port), XDG_DATA_HOME: join(tmpdir(), `jarvis-e2e-data-${port}`), JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_HEALTH_PROBE: '0', JARVIS_PROVIDERS_DIR: join(tmpdir(), `jarvis-e2e-providers-${port}`), JARVIS_JOBS_MIN_POLL_S: '1' },
+    env: { PORT: String(port), XDG_DATA_HOME: join(tmpdir(), `jarvis-e2e-data-${port}`), JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_HEALTH_PROBE: '0', JARVIS_PROVIDERS_DIR: join(tmpdir(), `jarvis-e2e-providers-${port}`), JARVIS_JOBS_MIN_POLL_S: '1', JARVIS_OPEN_CMD: join(import.meta.dirname, 'e2e', 'fake-open.sh'), JARVIS_OPEN_LOG: join(tmpdir(), `jarvis-e2e-open-${port}.log`) },
     reuseExistingServer: false,
   };
 };
