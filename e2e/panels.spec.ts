@@ -272,3 +272,19 @@ test('Open items shows a static marker per row: no checkbox, no buttons, only co
   await expect(block.locator('input, li.ci button, .pn-btn')).toHaveCount(0);
   await expect(block.locator('li.ci.st-done .txt')).toHaveCSS('text-decoration-line', 'line-through');
 });
+
+test('the reorder handle spans the same height as the row stripe and is a wide hit area', async ({ page }) => {
+  const p = await jobsWorkspace(page);
+  p.set('g-a', { state: 'running' });
+  await watchJobs(page, p.ws, p.name, ['g-a']);
+  const row = jobRow(page, p.name, 'g-a');
+  await expect(row).toBeVisible();
+  const m = await row.evaluate((el) => {
+    const g = el.querySelector('.dgrip')!.getBoundingClientRect(), r = el.getBoundingClientRect();
+    const s = getComputedStyle(el, '::before'); // stripe: top/bottom 2px inside the row
+    return { gTop: g.top - r.top, gBottom: r.bottom - g.bottom, w: g.width, sTop: parseFloat(s.top), sBottom: parseFloat(s.bottom) };
+  });
+  expect(m.gTop).toBeCloseTo(m.sTop, 0);
+  expect(m.gBottom).toBeCloseTo(m.sBottom, 0);
+  expect(m.w).toBeGreaterThanOrEqual(18);
+});
