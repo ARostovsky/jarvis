@@ -107,7 +107,8 @@
   #viewMenu.open { display: block; }
   #viewMenu label { display: flex; gap: 8px; align-items: center; padding: 5px 0; cursor: pointer; white-space: nowrap; }
   #viewMenu input { flex: none; width: auto; accent-color: var(--cyan); }
-  #direct { display: flex; border-top: 1px solid var(--line); }
+  #direct { --gap: 8px; display: flex; align-items: flex-end; gap: var(--gap); padding: var(--gap) var(--gap) var(--gap) 0; border-top: 1px solid var(--line); }
+  #direct button { flex: none; } #direct button, #recbar { height: 49px; } #recbar { flex: 0 1 auto; min-width: 0; max-width: 58%; overflow: hidden; } /* one input row (2 × 14px padding + 1.3 × 16px line): a tall draft pins SEND, MIC and the recording strip to the bottom edge instead of stretching them */
   #asks { position: fixed; left: 16px; bottom: 16px; display: flex; flex-direction: column; gap: 8px; width: min(420px, calc(100vw - 32px)); max-height: calc(100vh - 32px); overflow: auto; }
   .ask { background: var(--panel); border: 1px solid var(--amber); padding: 10px 12px; backdrop-filter: blur(8px); }
   .ask pre { margin: 6px 0; max-height: 120px; overflow: auto; font-size: 11px; color: #e8d2a8; white-space: pre-wrap; word-break: break-all; }
@@ -115,10 +116,22 @@
   #dinput[readonly] { cursor: default; } #dinput[readonly] + button, #dinput[readonly] ~ #mic { opacity: .4; pointer-events: none; }
   #mic { position: relative; overflow: hidden; } #mic i { position: absolute; left: 0; bottom: 0; height: 3px; width: calc(var(--lvl, 0) * 100%); background: currentColor; display: none; }
   #mic { touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; } #mic.rec { color: #ff4d4d; } #mic.rec i { display: block; } #mic.busy { opacity: .5; pointer-events: none; cursor: wait; } #mic.away { color: #888; text-decoration: line-through; }
-  #recbar { display: none; align-items: center; padding: 0 16px; color: #ff4d4d; background: rgba(255, 77, 77, .12); border-left: 1px solid var(--line); font: 600 14px Rajdhani, sans-serif; letter-spacing: .08em; white-space: nowrap; }
+  #recbar { display: none; align-items: center; padding: 0 10px; color: #ff4d4d; background: rgba(255, 77, 77, .12); border-left: 1px solid var(--line); font: 600 14px Rajdhani, sans-serif; letter-spacing: .04em; white-space: nowrap; }
   #recbar.wait { color: var(--cyan); background: transparent; } #recbar.away { color: #aaa; background: transparent; }
-  #direct.vbar #recbar { display: flex; } #direct.vbar #send { display: none; }
-  #dinput { resize: none; max-height: 40vh; line-height: 1.3; }
+  #recbar b { flex: none; font-weight: 700; font-variant-numeric: tabular-nums; margin-right: .4em; } #recbar span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } /* the timer never shrinks; the hint gives way with an ellipsis */
+  #direct.vbar #recbar { display: flex; } #direct.vbar #dinput { min-width: 28%; } /* the typed draft stays readable while recording */ #direct.vbar #send { display: none; }
+  /* SEND and MIC are framed buttons, not table cells: SEND is the primary (lit cyan fill), MIC the secondary (outline only); the recording strip keeps the same frame. */
+  #direct button, #recbar { border: 1px solid var(--line); transition: background .12s, border-color .12s, box-shadow .12s; }
+  #send, #mic { width: 74px; padding: 0 0 0 .15em; text-align: center; } /* equal width; the left pad balances the trailing letter-spacing */
+  #send { color: #03080f; border-color: var(--cyan); background: var(--cyan); box-shadow: 0 0 14px rgba(79, 216, 255, .45); }
+  #send:hover { background: #9aeaff; box-shadow: 0 0 20px rgba(79, 216, 255, .7); }
+  #direct #send:active { background: #2fb5dc; }
+  #mic:hover { border-color: var(--cyan); }
+  #direct button:active { background: rgba(79, 216, 255, .42); } #mic.rec:active { background: rgba(255, 77, 77, .25); }
+  #direct button:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
+  #direct button:disabled { opacity: .4; cursor: default; pointer-events: none; }
+  #mic.rec, #recbar { border-color: #ff4d4d; } #mic.rec { background: rgba(255, 77, 77, .12); } #mic.away, #recbar.away { border-color: #888; } #recbar.wait { border-color: var(--cyan-dim); }
+  #dinput { resize: none; min-height: 49px; max-height: 40vh; line-height: 1.3; } /* a one-line draft is as tall as the 49px buttons, so row and buttons share one centre line */
   #dinput::placeholder { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   button { background: transparent; border: 0; border-left: 1px solid var(--line); color: var(--cyan); font: 600 14px Rajdhani, sans-serif; letter-spacing: .15em; padding: 0 16px; cursor: pointer; }
   button:hover, button:focus-visible { background: rgba(79, 216, 255, .12); outline: none; }
@@ -1358,8 +1371,9 @@ function micPaint() {
   $('mic').classList.toggle('away', away);
   $('direct').classList.toggle('vbar', !!r && !r.starting);
   bar.className = r?.busy ? 'wait' : away ? 'away' : '';
-  if (r?.busy) bar.textContent = r.discard ? 'discarding…' : 'transcribing… Esc to discard';
-  else if (r && !r.starting) { const s = Math.floor((Date.now() - r.t0) / 1000); bar.textContent = `${away ? '✕' : '●'} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')} · ${away ? 'release to cancel · move back to keep recording' : 'release to send · Esc / drag away to cancel'}`; }
+  const bit = (t, h) => { bar.replaceChildren(Object.assign(document.createElement('b'), { textContent: t }), ' ', Object.assign(document.createElement('span'), { textContent: h })); };
+  if (r?.busy) bit(r.discard ? 'discarding…' : 'transcribing…', r.discard ? '' : 'Esc discards');
+  else if (r && !r.starting) { const s = Math.floor((Date.now() - r.t0) / 1000); bit(`${away ? '✕' : '●'} ${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`, away ? 'release cancels' : 'release sends'); }
 }
 const micCall = async (path, body = {}) => { // the server answers 409 to a second start, 500 when pw-record is missing or silent
   const r = await fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
@@ -1401,13 +1415,18 @@ async function micFinish() {
   micDrop(r);
   r.busy = true;
   $('mic').className = 'busy'; micPaint();
+  const draft = (r.key === draftKey() ? $('dinput').value : drafts[r.key] ?? '').trim(); // what stood in the box when recording stopped: it goes ahead of the transcript, text typed later does not
   try {
     const { text } = await (await micCall('/voice/stop', { id: r.id })).json();
     if (r.discard) return; // Esc while it transcribed: the sidecar finished, the text is dropped
     if (!text.trim()) toast('No speech recognized');
-    else if (voiceAutosend) { // the agent selected at press time; the draft stays untouched unless the text could not be sent
+    else if (voiceAutosend) { // the agent selected at press time, draft first; the draft stays untouched unless the message could not be sent
       if (guarded(r.to)) { toast('Agent is guarded: double-click its input to unlock, then talk'); micInsert(r.key, text.trim()); }
-      else if (!await post('/send', { ...r.to, text: text.trim() })) micInsert(r.key, text.trim());
+      else if (!await post('/send', { ...r.to, text: draft ? `${draft}\n\n${text.trim()}` : text.trim() })) micInsert(r.key, text.trim());
+      else if (draft) { // sent with the transcript: clear the box like a normal send, minus any text typed after it
+        if (r.key !== draftKey()) { if (drafts[r.key]?.trim() === draft) { delete drafts[r.key]; saveJson('jarvis.drafts', drafts); } }
+        else if ($('dinput').value.trimStart().startsWith(draft)) { $('dinput').value = $('dinput').value.trimStart().slice(draft.length).trimStart(); $('dinput').oninput(); setDraft(); } // keep only what was typed after the sent draft
+      }
     }
     else micInsert(r.key, text.trim());
   } catch (e) { if (!r.discard) toast(`voice failed: ${e.message}`); }

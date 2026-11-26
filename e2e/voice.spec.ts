@@ -166,7 +166,7 @@ test.describe('voice on (autosend off)', () => {
     await hold(page, 400);
     await page.mouse.up();
     await expect(page.locator('#mic')).toHaveClass('busy');
-    await expect(page.locator('#recbar')).toHaveText('transcribing… Esc to discard');
+    await expect(page.locator('#recbar')).toHaveText('transcribing… Esc discards');
     await page.keyboard.press('Escape');
     await page.evaluate(() => dispatchEvent(new Event('blur')));
     await expect(page.locator('#mic')).toHaveClass('busy');
@@ -184,7 +184,7 @@ test.describe('voice on (autosend off)', () => {
     await expect(page.locator('#send')).toBeVisible();
     await hold(page, 1200);
     await expect(page.locator('#send')).toBeHidden();
-    await expect(page.locator('#recbar')).toHaveText(/^● 0:0[1-9] · release to send · Esc \/ drag away to cancel$/);
+    await expect(page.locator('#recbar')).toHaveText(/^● 0:0[1-9] release sends$/);
     await page.mouse.up();
     await expect(page.locator('#send')).toBeVisible();
   });
@@ -233,10 +233,10 @@ test.describe('voice on (autosend off)', () => {
     const b = (await page.locator('#mic').boundingBox())!;
     await page.mouse.move(b.x + b.width / 2, b.y - 120);
     await expect(page.locator('#mic')).toHaveClass(/away/);
-    await expect(page.locator('#recbar')).toContainText('release to cancel');
+    await expect(page.locator('#recbar')).toContainText('release cancels');
     await page.mouse.move(b.x + b.width / 2, b.y + b.height / 2); // back: re-armed
     await expect(page.locator('#mic')).not.toHaveClass(/away/);
-    await expect(page.locator('#recbar')).toContainText('release to send');
+    await expect(page.locator('#recbar')).toContainText('release sends');
     await page.mouse.move(b.x + b.width / 2, b.y - 120);
     await expect(page.locator('#mic')).toHaveClass(/away/);
     await page.mouse.up();
@@ -438,7 +438,7 @@ test.describe('voice autosend', () => {
   const sends = (page: Page) => { const l: any[] = []; page.on('request', (r) => r.url().endsWith('/send') && l.push(r.postDataJSON())); return l; };
   const hold = async (page: Page) => { await page.locator('#mic').hover(); await page.mouse.down(); await expect(page.locator('#mic')).toHaveClass('rec'); await page.waitForTimeout(500); await page.mouse.up(); };
 
-  test('release sends the transcript to the agent selected at press time and leaves the draft', async ({ page }) => {
+  test('release sends draft and transcript to the agent selected at press time as one message', async ({ page }) => {
     expect((await (await page.request.get('/workspaces')).json()).voiceAutosend).toBe(true);
     await setup(page);
     const l = sends(page);
@@ -456,11 +456,57 @@ test.describe('voice autosend', () => {
     await page.locator('#pclose').click({ force: true }); // the user moves on meanwhile
     await expect(page.locator('#log .user').filter({ hasText: 'hello from voice' })).toHaveCount(0);
     await expect.poll(() => l.length).toBe(1);
-    expect(l[0]).toMatchObject({ text: 'hello from voice', id: 'arbiter' });
+    expect(l[0]).toMatchObject({ text: 'my draft\n\nhello from voice', id: 'arbiter' });
     await page.locator('#core').click({ force: true });
     await expect(page.locator('#log .user').filter({ hasText: 'hello from voice' })).toBeVisible();
-    await expect(page.locator('#dinput')).toHaveValue('my draft');
+    await expect(page.locator('#dinput')).toHaveValue(''); // the saved draft went with the message
     await expect(page.locator('#mic')).not.toHaveClass(/rec|busy/);
+  });
+
+  test('a multi-line draft goes ahead of the transcript in one message and the box is cleared; empty box sends the transcript alone', async ({ page }) => {
+    await setup(page);
+    const l = sends(page);
+    await page.fill('#dinput', 'line one\nline two');
+    await hold(page);
+    await expect.poll(() => l.length).toBe(1);
+    expect(l[0].text).toBe('line one\nline two\n\nhello from voice');
+    await expect(page.locator('#dinput')).toHaveValue('');
+    const ws = await page.evaluate('WS');
+    expect(await page.evaluate((k) => JSON.parse(localStorage.getItem('jarvis.drafts') || '{}')[k], `${ws}/arbiter`)).toBeUndefined();
+    await hold(page);
+    await expect.poll(() => l.length).toBe(2);
+    expect(l[1].text).toBe('hello from voice');
+  });
+
+  test('text typed while it transcribes stays in the box, the sent draft part is cut, and it is not sent', async ({ page }) => {
+    await setup(page);
+    const l = sends(page);
+    await page.fill('#dinput', 'draft');
+    await page.route('**/voice/stop', async (r) => { await new Promise((ok) => setTimeout(ok, 600)); await r.continue(); });
+    await hold(page);
+    await expect(page.locator('#mic')).toHaveClass('busy');
+    await page.fill('#dinput', 'draft and more'); // the draft part was sent already
+    await expect.poll(() => l.length).toBe(1);
+    expect(l[0].text).toBe('draft\n\nhello from voice');
+    await expect(page.locator('#dinput')).toHaveValue('and more');
+    const ws = await page.evaluate('WS');
+    expect(await page.evaluate((k) => JSON.parse(localStorage.getItem('jarvis.drafts') || '{}')[k], `${ws}/arbiter`)).toBe('and more');
+  });
+
+  test('a cancelled or failed recording keeps the draft', async ({ page }) => {
+    await setup(page);
+    const l = sends(page);
+    await page.fill('#dinput', 'keep me');
+    await page.locator('#mic').hover(); // a tap cancels
+    await page.mouse.down();
+    await page.mouse.up();
+    await expect(page.locator('#toastText')).toHaveText('Hold to talk');
+    await page.waitForTimeout(500); // the cancel must be through before the next press
+    await page.route('**/voice/stop', async (r) => r.fulfill({ response: await r.fetch(), status: 400, body: 'boom' })); // the server must still see the stop, or its recorder stays busy
+    await hold(page);
+    await expect(page.locator('#toastText')).toContainText('voice failed');
+    await expect(page.locator('#dinput')).toHaveValue('keep me');
+    expect(l.length).toBe(0);
   });
 
   test('an empty transcript sends nothing', async ({ page }) => {
