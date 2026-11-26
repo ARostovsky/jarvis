@@ -181,7 +181,11 @@
   /* Panels: live blocks pinned under the arbiter's header. The one memorable element is the state edge, a thin bar of light down the left of each row. */
   #panels { flex: none; display: flex; flex-direction: column; max-height: 40%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--cyan-dim) var(--line); border-bottom: 1px solid var(--line); container-type: inline-size; }
   #panels[hidden] { display: none; }
-  .pn { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
+  .pn { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; position: relative; }
+  .pn-grip { position: absolute; left: 0; right: 0; bottom: 0; height: 6px; cursor: ns-resize; z-index: 1; touch-action: none; } /* sits on the list's bottom padding, so it adds no height */
+  .pn-grip:hover, .pn-grip.dragging { background: linear-gradient(180deg, transparent 2px, var(--cyan) 2px, var(--cyan) 4px, transparent 4px); }
+  .pn.collapsed .pn-grip { display: none; }
+  .pn.collapsed { flex: none; } /* a folded block is its header row and never shrinks under the cap */
   .pn + .pn { border-top: 1px solid var(--line); }
   .pn.stale { box-shadow: inset 0 1px 0 var(--amber); }
   .pn-h { flex: none; min-height: 28px; display: flex; align-items: center; gap: 6px; padding-right: 8px; background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .06)); clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); }
@@ -200,7 +204,7 @@
   .pn-btn { flex: none; border: 1px solid var(--line) !important; padding: 1px 8px; font-size: 11px; letter-spacing: .1em !important; text-transform: uppercase; line-height: 16px; }
   .pn-wrap { flex: 0 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); transition: grid-template-rows .16s ease-out; }
   .pn:not(.collapsed) { min-height: 28px; } /* header only: the body follows its content, and a crowded stack may squeeze a body but never clip a header */
-  .pn.collapsed .pn-wrap { grid-template-rows: 0fr; }
+  .pn.collapsed .pn-wrap { grid-template-rows: minmax(0, 0fr); overflow: hidden; } /* 0fr alone has an auto minimum: a dragged body height would keep that space open */
   .pn-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   .pn.collapsed .pn-body { visibility: hidden; overflow: hidden; transition: visibility 0s .16s; } /* a folded body must not stay in the tab order */
   .pn-note { padding: 4px 12px; font-size: 13px; color: var(--amber); overflow-wrap: anywhere; }
@@ -1751,6 +1755,22 @@ function sumParts(sum) {
     return [i ? ' · ' : null, !m ? t : n === 'failed' ? h('span', 'sc-failed', t) : [h('span', `sc-${n}`, m[1]), m[2] + m[3]]].flat();
   });
 }
+// Drag the bottom edge to set the body height (one row .. 60% of the window); double-click returns to content height. Kept per panel with the other panel prefs.
+function gripBody(p) {
+  const id = () => p.panel.panelId;
+  p.grip.addEventListener('pointerdown', (ev) => {
+    if (ev.button) return;
+    ev.preventDefault();
+    const h0 = p.body.getBoundingClientRect().height, y0 = ev.clientY, lo = p.body.querySelector('li')?.offsetHeight ?? 32;
+    let h = h0;
+    p.grip.setPointerCapture(ev.pointerId);
+    p.grip.classList.add('dragging');
+    const move = (e) => { h = Math.round(Math.min(Math.max(h0 + e.clientY - y0, lo), innerHeight * 0.6)); p.body.style.height = `${h}px`; };
+    p.grip.addEventListener('pointermove', move);
+    p.grip.addEventListener('pointerup', () => { p.grip.removeEventListener('pointermove', move); p.grip.classList.remove('dragging'); setPanelUi(id(), { h }); p.sig = ''; }, { once: true });
+  });
+  p.grip.addEventListener('dblclick', () => { setPanelUi(id(), { h: undefined }); p.sig = ''; p.body.style.height = ''; });
+}
 function updateBlock(p, ui) {
   const { panelId, title, data } = p.panel, kind = kindOf(p), status = panelStatus.get(panelId);
   const collapsed = ui.collapsed ?? kind.collapsed?.(data, status) ?? false;
@@ -1761,8 +1781,11 @@ function updateBlock(p, ui) {
     p.el = h('section', 'pn'); p.el.dataset.panel = panelId; p.el.dataset.kind = p.panel.kind;
     p.head = h('div', 'pn-h'); p.body = h('div', 'pn-body'); p.body.id = `pnb-${panelId}`;
     p.body.setAttribute('role', 'region');
-    p.el.append(p.head, h('div', 'pn-wrap', p.body));
+    p.grip = h('div', 'pn-grip'); p.grip.title = 'Drag to resize · double-click to reset';
+    p.el.append(p.head, h('div', 'pn-wrap', p.body), p.grip);
+    gripBody(p);
   }
+  p.body.style.height = ui.h ? `${ui.h}px` : '';
   const fk = p.el.contains(document.activeElement) ? document.activeElement.dataset?.fk : null, top = p.body.scrollTop;
   p.el.classList.toggle('collapsed', collapsed);
   p.el.classList.toggle('stale', !!kind.stale?.(data, status));

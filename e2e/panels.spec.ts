@@ -123,6 +123,60 @@ test('an expanded panel with one row is as tall as its content, with no reserved
   expect(body.height).toBeLessThan(row.height + 24); // list padding only, not two more rows
 });
 
+test('dragging the bottom edge sets the body height, it survives a reload, double-click resets', async ({ page }) => {
+  const p = await jobsWorkspace(page);
+  const ids = ['g1', 'g2', 'g3', 'g4', 'g5', 'g6'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  const bodyH = async () => Math.round((await jobsBlock(page).locator('.pn-body').boundingBox())!.height);
+  const auto = await bodyH();
+  const drag = async (dy: number) => {
+    const g = (await jobsBlock(page).locator('.pn-grip').boundingBox())!;
+    await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+    await page.mouse.down(); await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + dy, { steps: 5 }); await page.mouse.up();
+  };
+  await drag(-60);
+  const set = await bodyH();
+  expect(set).toBeLessThan(auto - 40);
+  await page.reload();
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  expect(await bodyH()).toBe(set);
+  await jobsBlock(page).locator('.pn-grip').dblclick();
+  expect(await bodyH()).toBe(auto);
+  await page.reload();
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  expect(await bodyH()).toBe(auto);
+});
+
+test('a dragged panel collapses to its header only, and the dragged height returns on expand and after a reload', async ({ page }) => {
+  const p = await jobsWorkspace(page);
+  const ids = ['c1', 'c2', 'c3', 'c4', 'c5', 'c6'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  const h = async (sel: string) => Math.round((await (sel ? jobsBlock(page).locator(sel) : jobsBlock(page)).boundingBox())!.height);
+  const head = await h('.pn-h');
+  const g = (await jobsBlock(page).locator('.pn-grip').boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down(); await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 - 60, { steps: 5 }); await page.mouse.up();
+  const dragged = await h('.pn-body');
+  const wrapOpen = await h('.pn-wrap');
+  await jobsBlock(page).locator('.pn-tog').click();
+  await expect(jobsBlock(page)).toHaveClass(/collapsed/);
+  await expect.poll(() => h('.pn-wrap')).toBe(0); // waits out the fold transition
+  expect(await h('.pn-wrap')).toBe(0);
+  expect(Math.abs((await h('')) - head)).toBeLessThanOrEqual(1);
+  await page.reload();
+  await expect(jobsBlock(page)).toHaveClass(/collapsed/);
+  expect(await h('.pn-wrap')).toBe(0);
+  expect(Math.abs(await h('') - head)).toBeLessThanOrEqual(2);
+  await jobsBlock(page).locator('.pn-tog').click();
+  await expect(jobsBlock(page)).not.toHaveClass(/collapsed/);
+  await expect.poll(() => h('.pn-body')).toBe(dragged);
+  await expect.poll(() => h('.pn-wrap')).toBe(wrapOpen);
+});
+
 test('rows sort failed, waiting, running, done, newest change first; a quiet poll keeps the order; a failure moves to the top', async ({ page }) => {
   const p = await jobsWorkspace(page);
   p.set('s-done', { state: 'done' }); p.set('s-run1', { state: 'running' });
