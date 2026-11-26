@@ -12,7 +12,8 @@ const URL = `http://127.0.0.1:${PORT}`;
 let server: ChildProcess | undefined;
 let stub: Server | undefined;
 test.use({ baseURL: URL });
-test.afterEach(async () => {
+test.afterEach(async ({ page }) => {
+  await page.close(); // the page holds the event stream open: stopping the server first would make the browser log a cut stream
   stub?.close();
   stub?.closeAllConnections();
   if (server && server.exitCode === null) { const exit = once(server, 'exit'); server.kill(); await exit; }
