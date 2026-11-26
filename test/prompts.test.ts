@@ -94,3 +94,9 @@ test('arbiter prompt: files for the user are absolute paths in backticks, copied
     assert.ok(ARBITER_PROMPT.includes(s), s);
   }
 });
+
+test('arbiter prompt: git housekeeping goes to one reused git-ops agent whose id is kept in status.md', () => {
+  for (const s of ['one long-lived agent named "git-ops"', 'model sonnet, effort low, repo = the project', 'do not spawn a new agent per merge', 'Record its id in status.md']) {
+    assert.ok(ARBITER_PROMPT.includes(s), s);
+  }
+});
