@@ -38,6 +38,9 @@ test('notes paragraph, save turn and agent report prompt carry the verification 
     "When you remove a '[x]' line, keep one dated journal line per removed item.",
     "At session start and after a reset, treat every '[ ]' item as not verified: keep its '[ ]' state, and verify it before you report or act on it. Never drop an item you did not verify, unless the user says it is done.",
     'Do not re-check a verified fact that cannot change (a sha is in origin/main, a branch is deleted). Re-check a fact that can change (push state, worktrees, a running service) before you report it.',
+    'Add a line only if it is durable, project-wide and prevents a mistake that would repeat',
+    'First merge it into or replace an existing line. Never add one-off incident, run or PR details: they go to decisions.md or the journal.',
+    'Keep CLAUDE.md small, about 40 lines or 6 KB; when it is over that, shorten or delete lines before you add one.',
   ]) assert.ok(p.includes(s), s);
   for (const kind of ['forced', 'auto'] as const) assert.ok(saveTurnText(kind, wsDir, 160_000).includes(OPEN_ITEMS_FORMAT));
 });
