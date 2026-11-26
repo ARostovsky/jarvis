@@ -14,8 +14,7 @@ test('archiving moves the notes folder, names the open items, and restore brings
   await expect(page.locator('#choiceQuestion')).toContainText('2 open and 1 parked items stay in its notes folder');
   await page.locator('#choiceButtons button').filter({ hasText: /^ARCHIVE$/ }).click();
   await expect(tab(page, name)).toHaveCount(0);
-  await expect(page.locator('#toast')).toHaveClass(/\binfo\b/);
-  await expect(page.locator('#toastText')).toContainText(`archived; 2 open and 1 parked items stay in workspaces/_archive/${ws}/open-items.md`);
+  await expect(page.locator('#toast')).toBeHidden();
   expect(existsSync(dir)).toBe(false);
   expect(readFileSync(join(archived, 'open-items.md'), 'utf8')).toContain('second');
   expect(readFileSync(join(notes, 'workspaces', 'index.md'), 'utf8')).not.toContain(ws);
@@ -27,7 +26,7 @@ test('archiving moves the notes folder, names the open items, and restore brings
   expect(existsSync(archived)).toBe(false);
 });
 
-test('archiving with no open items shows a plain neutral toast, not an error', async ({ page }) => {
+test('archiving with no open items shows no toast', async ({ page }) => {
   const name = uniq('arq');
   await createWs(page, name, { notes: tmp('archquiet') });
   await open(page, name);
@@ -35,6 +34,5 @@ test('archiving with no open items shows a plain neutral toast, not an error', a
   await page.getByRole('menuitem', { name: 'Archive workspace' }).click();
   await page.locator('#choiceButtons button').filter({ hasText: /^ARCHIVE$/ }).click();
   await expect(tab(page, name)).toHaveCount(0);
-  await expect(page.locator('#toastText')).toHaveText('archived');
-  await expect(page.locator('#toast')).toHaveClass(/\binfo\b/);
+  await expect(page.locator('#toast')).toBeHidden();
 });
