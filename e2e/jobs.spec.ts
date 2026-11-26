@@ -177,7 +177,7 @@ test('editing an installed provider file asks for approval again and stops polli
   await expect(row(page, p.name, 'c1')).toHaveClass(/st-running/);
   appendFileSync(join(p.dir, 'fake.ts'), '\n// edited\n');
   p.set('c1', { state: 'failed', error: 'late' });
-  await expect(block(page).locator('.pn-note')).toContainText('provider files changed, approve again');
+  await expect(block(page).locator('.pn-note', { hasText: 'provider files changed, approve again' })).toBeVisible(); // a second note, files changed, shows up with the next poll
   await expect(block(page).getByRole('button', { name: 'Approve again' })).toBeVisible();
   await expect.poll(async () => (await p.info(page)).status).toBe('changed');
   await expect.poll(() => jobsMsgs(p.ws).some((m) => m.includes('files changed'))).toBe(true);
