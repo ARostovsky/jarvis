@@ -99,3 +99,49 @@ test('a restored draft gets its own input height, not a squeezed one', async ({ 
   await expect(page.locator('#dinput')).toHaveValue('one\ntwo\nthree\nfour');
   expect(await h()).toBe(grown);
 });
+
+test('SEND keeps its compact height and bottom edge when the draft grows tall', async ({ page }) => {
+  const n = uniq('btn');
+  await createWs(page, n);
+  await open(page, n);
+  await arbiter(page);
+  const box = () => page.evaluate(() => {
+    const s = document.getElementById('send')!.getBoundingClientRect(), t = document.getElementById('dinput')!.getBoundingClientRect();
+    return { h: s.height, bottomGap: t.bottom - s.bottom, textarea: t.height };
+  });
+  await page.fill('#dinput', 'short');
+  const short = await box();
+  await page.fill('#dinput', Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n'));
+  const tall = await box();
+  expect(tall.textarea).toBeGreaterThan(short.textarea * 2);
+  expect(tall.h).toBe(short.h);
+  expect(tall.bottomGap).toBe(0);
+});
+
+test('a tall draft grows to a capped height, then scrolls', async ({ page }) => {
+  const name = uniq('dsc');
+  await createWs(page, name);
+  await open(page, name);
+  await arbiter(page);
+  await page.fill('#dinput', Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n'));
+  const m = await page.locator('#dinput').evaluate((t: HTMLTextAreaElement) => {
+    t.scrollTop = 0; const top = t.scrollTop; t.scrollTop = 50;
+    return { sh: t.scrollHeight, ch: t.clientHeight, oy: getComputedStyle(t).overflowY, st: t.scrollTop, top, vh: innerHeight };
+  });
+  expect(m.sh).toBeGreaterThan(m.ch);
+  expect(['auto', 'scroll']).toContain(m.oy);
+  expect(m.ch).toBeLessThan(m.vh / 2);
+  expect(m.st).toBeGreaterThan(m.top);
+});
+
+test('a draft that fits shows whole, with no scrollbar and nothing scrolled off the top', async ({ page }) => {
+  const name = uniq('dfit');
+  await createWs(page, name);
+  await open(page, name);
+  await arbiter(page);
+  await page.fill('#dinput', ' first line\nsecond\nthird\nfourth\nfifth');
+  const m = await page.locator('#dinput').evaluate((t: HTMLTextAreaElement) => ({ sh: t.scrollHeight, ch: t.clientHeight, st: t.scrollTop, vh: innerHeight }));
+  expect(m.st).toBe(0);
+  expect(m.sh).toBeLessThanOrEqual(m.ch);
+  expect(m.ch).toBeLessThan(m.vh * 0.4);
+});
