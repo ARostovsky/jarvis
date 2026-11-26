@@ -178,7 +178,7 @@ test('item text is shown as text: no element, no script', async ({ page }) => {
   expect(dialogs).toBe(0);
 });
 
-test('two panels: jobs above items, both scroll inside the shared cap, headers pinned, collapse and hide are independent', async ({ page }) => {
+test('two panels: jobs above items, both scroll inside the shared stack, headers pinned, collapse and hide are independent', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 672 });
   const p = await jobsWorkspace(page, {}, { notes: tmp('oinotes') });
   const meta = (await (await page.request.get('/workspaces')).json()).workspaces.find((x: any) => x.id === p.ws);
@@ -192,13 +192,13 @@ test('two panels: jobs above items, both scroll inside the shared cap, headers p
   const names = await page.locator('#panels section.pn').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.panel));
   expect(names).toEqual(['jobs', 'open-items']);
   const panel = (await page.locator('#panel').boundingBox())!, panels = (await page.locator('#panels').boundingBox())!;
-  expect(panels.height).toBeLessThanOrEqual(panel.height * 0.4 + 1);
+  expect(panels.height).toBeLessThanOrEqual(panel.height - 380 + 1);
   for (const b of [jobsBlock(page), block(page)]) {
     expect(await b.locator('.pn-body').evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
     await b.locator('.pn-body').evaluate((e) => { e.scrollTop = e.scrollHeight; });
-    const h = (await b.locator('.pn-h').boundingBox())!;
-    expect(h.y).toBeGreaterThanOrEqual(panels.y - 1);
-    expect(h.y + h.height).toBeLessThanOrEqual(panels.y + panels.height + 1);
+    const h = (await b.locator('.pn-h').boundingBox())!, now = (await page.locator('#panels').boundingBox())!; // measured again: the stack settles as rows arrive
+    expect(h.y).toBeGreaterThanOrEqual(now.y - 1);
+    expect(h.y + h.height).toBeLessThanOrEqual(now.y + now.height + 1);
   }
   expect((await page.locator('#log').boundingBox())!.height).toBeGreaterThanOrEqual(160);
 

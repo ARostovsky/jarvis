@@ -88,7 +88,7 @@ test('GET /panels returns the jobs panel with the rows the page shows', async ({
   expect((await page.request.get('/panels?ws=nope')).status()).toBe(404);
 });
 
-test('with 12 rows the panel is capped at 40%, scrolls inside, keeps its header and leaves the log 160 px', async ({ page }) => {
+test('with 12 rows the stack is capped to leave the log 160 px, scrolls inside, keeps its header and leaves the log 160 px', async ({ page }) => {
   await page.setViewportSize({ width: 1280, height: 672 }); // the panel is 56 px from the top and 16 px from the bottom: 600 px
   const p = await jobsWorkspace(page);
   const ids = Array.from({ length: 12 }, (_, i) => `m${String(i).padStart(2, '0')}`);
@@ -98,7 +98,7 @@ test('with 12 rows the panel is capped at 40%, scrolls inside, keeps its header 
   const panel = (await page.locator('#panel').boundingBox())!;
   expect(Math.round(panel.height)).toBe(600);
   const panels = (await page.locator('#panels').boundingBox())!;
-  expect(panels.height).toBeLessThanOrEqual(panel.height * 0.4 + 1);
+  expect(panels.height).toBeLessThanOrEqual(panel.height - 380 + 1);
   const body = jobsBlock(page).locator('.pn-body');
   expect(await body.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
   await body.evaluate((e) => { e.scrollTop = e.scrollHeight; });
@@ -141,7 +141,7 @@ test('dragging the bottom edge sets the body height, it survives a reload, doubl
   expect(set).toBeLessThan(auto - 40);
   await page.reload();
   await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
-  expect(await bodyH()).toBe(set);
+  expect(Math.abs((await bodyH()) - set)).toBeLessThanOrEqual(10); // a reload re-fits all panels together: a few px of rounding between them
   await jobsBlock(page).locator('.pn-grip').dblclick();
   expect(await bodyH()).toBe(auto);
   await page.reload();
@@ -370,4 +370,178 @@ test('the reorder handle spans the same height as the row stripe and is a wide h
   expect(m.gTop).toBeCloseTo(m.sTop, 0);
   expect(m.gBottom).toBeCloseTo(m.sBottom, 0);
   expect(m.w).toBeGreaterThanOrEqual(18);
+});
+
+test('two open panels never overlap and every row stays inside its panel, also with a tall dragged body', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const notes = tmp('notes');
+  const p = await jobsWorkspace(page, {}, { notes });
+  mkdirSync(join(notes, 'workspaces', p.ws), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', p.ws, 'open-items.md'), ['- [ ] 25-11-2026 First item', '- [ ] 25-11-2026 Second item', '- [ ] 25-11-2026 Third item', ''].join('\n'));
+  const ids = ['o1', 'o2', 'o3', 'o4', 'o5'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await page.evaluate((k) => localStorage.setItem(k, JSON.stringify({ jobs: { h: 500 } })), `jarvis.panels.${p.ws}`); // a body height dragged taller than the cap allows
+  await page.reload();
+  await open(page, p.wsName);
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(5);
+  const items = page.locator('#panels section.pn[data-kind="checklist"]');
+  await expect(items.locator('li.ci')).toHaveCount(3);
+  const inside = async () => {
+    const a = (await jobsBlock(page).boundingBox())!, b = (await items.boundingBox())!;
+    expect(a.y + a.height).toBeLessThanOrEqual(b.y + 1); // the lower panel starts below the upper one
+    for (const [blk, sel] of [[jobsBlock(page), 'li.jr'], [items, 'li.ci']] as const) {
+      const box = (await blk.boundingBox())!;
+      const body = (await blk.locator('.pn-body').boundingBox())!;
+      expect(body.y + body.height).toBeLessThanOrEqual(box.y + box.height + 1); // the scroll area ends inside its panel
+      // a row whose centre shows in the body paints on top there: the element at that point belongs to its own panel
+      const stray = await blk.evaluate((el, q) => [...el.querySelectorAll(q)].filter((r) => {
+        const b = r.getBoundingClientRect(), c = el.querySelector('.pn-body')!.getBoundingClientRect(), y = b.y + b.height / 2;
+        const st = document.getElementById('panels')!.getBoundingClientRect();
+        return y > Math.max(c.y, st.y) && y < Math.min(c.y + c.height, st.y + st.height) && !el.contains(document.elementFromPoint(b.x + 40, y));
+      }).length, sel);
+      expect(stray).toBe(0);
+    }
+  };
+  await expect(jobRow(page, p.name, 'o5')).toHaveClass(/st-running/);
+  await inside();
+  await jobsBlock(page).locator('.pn-tog').click(); await jobsBlock(page).locator('.pn-tog').click();
+  await expect(jobsBlock(page)).not.toHaveClass(/collapsed/);
+  const bodyH = () => jobsBlock(page).locator('.pn-body').evaluate((e) => e.getBoundingClientRect().height);
+  let last = -1;
+  await expect.poll(async () => { const h = await bodyH(), same = h === last; last = h; return same; }).toBe(true);
+  await inside();
+});
+
+test('a panel can be dragged far past the old 40% limit, neighbours shrink but stay visible, the stack never scrolls, panels never overlap, the height survives reload and workspace switch', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 1000 });
+  const notes = tmp('notes');
+  const p = await jobsWorkspace(page, {}, { notes });
+  const otherName = uniq('other');
+  await createWs(page, otherName);
+  mkdirSync(join(notes, 'workspaces', p.ws), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', p.ws, 'open-items.md'), ['- [ ] 25-11-2026 First item', '- [ ] 25-11-2026 Second item', ''].join('\n'));
+  const ids = ['d1', 'd2', 'd3', 'd4', 'd5', 'd6'];
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  const items = page.locator('#panels section.pn[data-kind="checklist"]');
+  await expect(items.locator('li.ci')).toHaveCount(2);
+  const bodyH = async () => Math.round((await jobsBlock(page).locator('.pn-body').boundingBox())!.height);
+  const stackH = async () => (await page.locator('#panels').boundingBox())!.height;
+  const noOverlap = async () => {
+    const a = (await jobsBlock(page).boundingBox())!, b = (await items.boundingBox())!;
+    expect(a.y + a.height).toBeLessThanOrEqual(b.y + 1);
+    const body = (await jobsBlock(page).locator('.pn-body').boundingBox())!;
+    expect(body.y + body.height).toBeLessThanOrEqual(a.y + a.height + 1);
+  };
+  const g = (await jobsBlock(page).locator('.pn-grip').boundingBox())!;
+  await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2);
+  await page.mouse.down(); await page.mouse.move(g.x + g.width / 2, g.y + g.height / 2 + 700, { steps: 8 }); await page.mouse.up();
+  const set = await bodyH();
+  expect(set).toBeGreaterThan(1000 * 0.4); // the old limit
+  await noOverlap();
+  const panel = (await page.locator('#panel').boundingBox())!;
+  expect(await stackH()).toBeLessThanOrEqual(panel.height - 380 + 1); // the log keeps its room
+  expect(await page.locator('#panels').evaluate((e) => e.scrollHeight <= e.clientHeight)).toBe(true); // nothing hides in an outer scroll
+  const nb = (await items.boundingBox())!, sb = (await page.locator('#panels').boundingBox())!;
+  expect(nb.height).toBeGreaterThanOrEqual(72); expect(nb.y + nb.height).toBeLessThanOrEqual(sb.y + sb.height + 1); // the neighbour shrank to its minimum but is whole and reachable
+  await expect(items.locator('li.ci').first()).toBeInViewport();
+  expect((await page.locator('#log').boundingBox())!.height).toBeGreaterThanOrEqual(160);
+  await page.reload();
+  await open(page, p.wsName);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  expect(Math.abs((await bodyH()) - set)).toBeLessThanOrEqual(10); // a reload re-fits all panels together: a few px of rounding between them
+  await noOverlap();
+  await tabOf(page, otherName).click();
+  await tabOf(page, p.wsName).click();
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(6);
+  expect(Math.abs((await bodyH()) - set)).toBeLessThanOrEqual(10); // a reload re-fits all panels together: a few px of rounding between them
+  await noOverlap();
+  await jobsBlock(page).locator('.pn-tog').click(); // a folded sized panel is still its header only
+  await expect(jobsBlock(page)).toHaveClass(/collapsed/);
+  await expect.poll(async () => (await jobsBlock(page).boundingBox())!.height).toBeLessThan(40);
+});
+
+test('each panel scrolls its own rows with the wheel: the other panel and the stack stay put, the header stays in view', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const notes = tmp('notes');
+  const p = await jobsWorkspace(page, {}, { notes });
+  mkdirSync(join(notes, 'workspaces', p.ws), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', p.ws, 'open-items.md'), Array.from({ length: 12 }, (_, i) => `- [ ] 25-11-2026 Item number ${i}`).join('\n') + '\n');
+  const ids = Array.from({ length: 12 }, (_, i) => `w${String(i).padStart(2, '0')}`);
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await page.evaluate((k) => localStorage.setItem(k, JSON.stringify({ jobs: { h: 120 }, 'open-items': { h: 120 } })), `jarvis.panels.${p.ws}`);
+  await page.reload();
+  await open(page, p.wsName);
+  await watchJobs(page, p.ws, p.name, ids);
+  const items = page.locator('#panels section.pn[data-kind="checklist"]');
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(12);
+  await expect(items.locator('li.ci')).toHaveCount(12);
+  const top = (loc: ReturnType<Page['locator']>) => loc.evaluate((e) => e.scrollTop);
+  const a = jobsBlock(page).locator('.pn-body'), b = items.locator('.pn-body'), stack = page.locator('#panels');
+  expect(await a.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  expect(await b.evaluate((e) => e.scrollHeight > e.clientHeight)).toBe(true);
+  const log = page.locator('#log'), logTop = await log.evaluate((e) => e.scrollTop);
+  const box = (await a.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.wheel(0, 150);
+  await expect.poll(() => top(a)).toBeGreaterThan(0);
+  expect(await top(b)).toBe(0);
+  expect(await log.evaluate((e) => e.scrollTop)).toBe(logTop);
+  const head = (await jobsBlock(page).locator('.pn-h').boundingBox())!, panel = (await jobsBlock(page).boundingBox())!;
+  expect(head.y).toBeGreaterThanOrEqual(panel.y - 1);
+  await expect(jobsBlock(page).locator('.pn-h')).toBeInViewport();
+  const boxB = (await b.boundingBox())!;
+  await page.mouse.move(boxB.x + boxB.width / 2, boxB.y + boxB.height / 2);
+  await page.mouse.wheel(0, 150);
+  await expect.poll(() => top(b)).toBeGreaterThan(0);
+  expect(await log.evaluate((e) => e.scrollTop)).toBe(logTop);
+});
+
+test('in a short window every open panel keeps its header inside the stack, panels squeeze to the header', async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 500 });
+  const notes = tmp('notes');
+  const p = await jobsWorkspace(page, {}, { notes });
+  mkdirSync(join(notes, 'workspaces', p.ws), { recursive: true });
+  writeFileSync(join(notes, 'workspaces', p.ws, 'open-items.md'), Array.from({ length: 12 }, (_, i) => `- [ ] 25-11-2026 Item number ${i}`).join('\n') + '\n');
+  const ids = Array.from({ length: 12 }, (_, i) => `s${String(i).padStart(2, '0')}`);
+  for (const id of ids) p.set(id, { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1 });
+  await watchJobs(page, p.ws, p.name, ids);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(12);
+  await expect(page.locator('#panels section.pn[data-kind="checklist"] li.ci')).toHaveCount(12);
+  // Only two real panels exist: clone the open-items one to get 5 open, and measure in the same tick so a re-render cannot interfere.
+  const bad = await page.evaluate(() => {
+    const stack = document.getElementById('panels')!, src = stack.querySelector('section.pn[data-kind="checklist"]')!;
+    for (let i = 0; i < 3; i++) stack.append(src.cloneNode(true));
+    const s = stack.getBoundingClientRect();
+    const open = [...stack.querySelectorAll('section.pn:not(.collapsed)')];
+    const out = open.map((e) => e.querySelector('.pn-h')!.getBoundingClientRect()).filter((r) => r.top < s.top - 0.5 || r.bottom > s.bottom + 0.5 || r.height < 20).length;
+    return { open: open.length, out };
+  });
+  expect(bad.open).toBe(5);
+  expect(bad.out).toBe(0);
+});
+
+test('the fold icon is one axis-aligned triangle: same size and centre x in both states, centred on the title', async ({ page }) => {
+  const a = await jobsWorkspace(page);
+  a.set('c1', { state: 'running' });
+  await watchJobs(page, a.ws, a.name, ['c1']);
+  const block = jobsBlock(page), chev = block.locator('.chev');
+  await expect(block).not.toHaveClass(/collapsed/);
+  const measure = async () => {
+    const c = (await chev.boundingBox())!, t = (await block.locator('.pn-title').boundingBox())!;
+    return { w: c.width, h: c.height, cx: c.x + c.width / 2, dy: Math.abs(c.y + c.height / 2 - (t.y + t.height / 2)) };
+  };
+  const rot = () => chev.evaluate((e) => getComputedStyle(e).transform);
+  await expect.poll(rot).toBe('matrix(1, 0, 0, 1, 0, 0)'); // down, no leftover angle
+  const open = await measure();
+  await block.locator('.pn-tog').click();
+  await expect(block).toHaveClass(/collapsed/);
+  await expect.poll(rot).toBe('matrix(0, -1, 1, 0, 0, 0)'); // rotate(-90deg): right
+  const shut = await measure();
+  expect(open.w).toBeCloseTo(10, 0);
+  expect(shut.w).toBeCloseTo(open.w, 1); expect(shut.h).toBeCloseTo(open.h, 1);
+  expect(shut.cx).toBeCloseTo(open.cx, 1);
+  expect(open.dy).toBeLessThanOrEqual(2); expect(shut.dy).toBeLessThanOrEqual(2);
 });
