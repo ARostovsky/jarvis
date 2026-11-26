@@ -201,7 +201,6 @@ test('providers dialog: a changed provider with files, screenshot and a long sta
   await page.evaluate(() => (window as any).openProviders());
   const row = page.locator('#provList > div', { hasText: p.name });
   await expect(row.getByRole('button', { name: 'APPROVE AGAIN' })).toBeEnabled(); // the files are shown
-  if (process.env.SHOT_DIR) await page.locator('#providers').screenshot({ path: `${process.env.SHOT_DIR}/providers-changed.png` });
   const b = (await row.locator('small').boundingBox())!;
   expect(b.width).toBeGreaterThan(200);
   expect(b.height).toBeLessThan(150); // a few lines (about 7 in the 640px dialog), not one character per line
@@ -298,6 +297,21 @@ test('the progress bar and counter are vertically centered with the row text', a
     expect(Math.abs(mid(bar) - mid(cnt))).toBeLessThanOrEqual(1);
     if ((await r.boundingBox())!.width >= 640) expect(Math.abs(mid(bar) - mid(lab))).toBeLessThanOrEqual(1); // one-line layout: same line as the name
   }
+});
+
+test('progress bars have one width and the counters one x whatever the step total', async ({ page }) => {
+  await page.setViewportSize({ width: 1400, height: 900 });
+  const p = await setup(page);
+  const totals: [string, number, number][] = [['t1', 1, 1], ['t6', 3, 6], ['t8', 5, 8], ['t12', 7, 12], ['t20', 9, 20], ['t50', 25, 50], ['t0', 0, 8]];
+  for (const [id, done, total] of totals) p.set(id, { state: 'running', step: 'eval', progress: { done, total } });
+  await watch(page, p.ws, p.name, totals.map(([id]) => id));
+  const boxes = [];
+  for (const [id] of totals) boxes.push({ bar: (await row(page, p.name, id).locator('.bar').boundingBox())!, cnt: (await row(page, p.name, id).locator('.cnt').boundingBox())! });
+  for (const b of boxes) {
+    expect(b.bar.width).toBeCloseTo(boxes[0].bar.width, 1);
+    expect(b.cnt.x).toBeCloseTo(boxes[0].cnt.x, 1);
+  }
+  for (const i of await row(page, p.name, 't50').locator('.bar i').all()) expect((await i.boundingBox())!.width).toBeGreaterThanOrEqual(2);
 });
 
 test('clear_jobs keepCurrent leaves only the unfinished rows; agents never get watch_jobs or clear_jobs', async ({ page }) => {
