@@ -18,6 +18,7 @@ import { createOpenItems, OPEN_ITEMS_PANEL_ID, openItemsFile, type OpenItemsSour
 import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
 import { voiceVocab } from './voice-vocab.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
+import { claudeTmpDir, removeAgentTmp } from './tmpguard.ts';
 import { HASH_RE, providerDetails, providerFiles, providerList, providerScreenshot } from './provider-admin.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
@@ -169,6 +170,13 @@ function userSettings() {
   } catch {
     return {};
   }
+}
+// Agent sessions keep their command output on disk, not in a /tmp tmpfs that can run out of inodes. An explicit CLAUDE_CODE_TMPDIR wins.
+function claudeEnv() {
+  const dir = process.env.CLAUDE_CODE_TMPDIR || claudeTmpDir();
+  if (!dir) return process.env;
+  try { mkdirSync(dir, { recursive: true, mode: 0o700 }); } catch { return process.env; } // no disk dir: the claude default
+  return { ...process.env, CLAUDE_CODE_TMPDIR: dir };
 }
 const SETTINGS = userSettings();
 export const SETTINGS_MODEL: string | undefined = SETTINGS.model;
@@ -758,6 +766,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       prompt: box,
       options: {
         cwd: a.cwd,
+        env: claudeEnv(),
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
         settings: SETTINGS,
         pathToClaudeCodeExecutable: claudeBinary(),
@@ -985,7 +994,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
         held.delete(a.id); // queued results stay in `pending`: the next message to a resumed session carries them
         releaseParent(a); // the session ended (stopped or failed): its parent must not wait for it
         sessions.delete(a.id);
-        if (a.status === 'stopped') tidy(a);
+        if (a.status === 'stopped') (tidy(a), dropTmp(a));
         compacting.delete(a.id); // a /compact that died without a result must not swallow the next session's report
       }
     }
@@ -1225,6 +1234,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     }
     removedUsd += a.costUsd;
     agents.delete(id);
+    if (!sessions.has(id)) dropTmp(a); // a session still ending writes there: pump's end drops it then
     emit('removed', { agentId: id });
   }
 
@@ -1284,6 +1294,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Frees the worktree and branch of a stopped agent when that loses nothing; the reason it stayed is logged.
   const cleaned = new Set<string>(); // agents whose worktree tidy() freed in this process
+  // Command output of a stopped agent: its per-agent dir in the claude temp dir goes with it (never while another running agent shares the cwd).
+  function dropTmp(a: Agent) {
+    // Every running agent of the server counts: another workspace may work in the same folder.
+    const live = [...agents.values()].filter((x) => x.id !== a.id && x.status !== 'stopped').map((x) => x.cwd);
+    for (const [id, w] of workspaces) if (id !== meta.id) live.push(...w.liveCwds());
+    try { removeAgentTmp(a.cwd, live); } catch (e) { console.warn(`tmp cleanup ${a.id}: ${(e as Error).message}`); }
+  }
   function tidy(a: Agent) {
     if (parkedIgnored(a.id).length) return; // an archive parked files for a restore, which needs the branch
     const had = existsSync(a.cwd);
@@ -1304,7 +1321,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     let asked = false;
     // Its permission prompts die with the session.
     for (const [reqId, p] of pendingAsks) if ((p.event as { agentId: string }).agentId === id) { asked = true; pendingAsks.delete(reqId); emit('answered', { reqId }); }
-    if (!s) tidy(a); // a live session still writes to the worktree: pump's end cleans up then
+    if (!s) (tidy(a), dropTmp(a)); // a live session still writes to the worktree: pump's end cleans up then
     if (s?.interrupting && s.timer) return; // already interrupted, its result is on the way: aborting now would lose that turn's cost
     if (s && wasWorking && !asked) {
       // Interrupt instead of abort: the turn ends with a result carrying its cost, then pump ends the session. Abort anyway if none comes.
@@ -1725,6 +1742,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
     receive,
     noteJournalMoved: (key: string) => void (journalNote = [journalNote, `[workspace renamed] Your old journal files in ${meta.notes} were renamed to journal/YYYY-MM-DD-${key}.md; do not add to them. New entries go to ${workspaceDir(meta as { id: string; notes: string })}/journal/YYYY-MM-DD.md.`].filter(Boolean).join('\n\n')),
     markNotesTold: () => { try { mkdirSync(dir, { recursive: true }); writeFileSync(toldFile, ''); } catch {} },
+    // For the temp-volume guard (src/tmpguard.ts): a chat warning from the system, and the cwds of the agents that run.
+    notice: (text: string) => emit('text', { agentId: ARBITER, text }),
+    liveCwds: () => [...agents.values()].filter((x) => x.status !== 'stopped').map((x) => x.cwd),
     emitProviderDecided: (d: { name: string; hash: string; approved: boolean; reason?: string }) => (proposals.delete(`${d.name}:${d.hash}`), emit('provider_decided', d)),
     wake,
     notesMessage,

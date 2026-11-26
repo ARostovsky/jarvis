@@ -9,4 +9,5 @@ Before changing anything, read `docs/ARCHITECTURE.md`: code map, event model, HT
 - Tests never use the real API or `~/.local/share/jarvis`. CI (`.github/workflows/ci.yml`) runs check, test and e2e.
 - Node 24 runs `.ts` directly: erasable TypeScript only, no build step. The UI is one file, `public/index.html`.
 - Keep the invariants: never lose user work, event log is the source of truth, loopback only with the Origin check.
+- Tests put temp dirs under one root (`npm test` and `playwright.config.ts` set `TMPDIR`, removed on exit): create them with `os.tmpdir()`, never a fixed `/tmp` path.
 - Update `README.md` (users) and `docs/ARCHITECTURE.md` (developers) when behavior changes.

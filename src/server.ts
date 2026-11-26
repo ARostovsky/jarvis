@@ -4,6 +4,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
+import { startGuard } from './tmpguard.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
 import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
@@ -154,6 +155,7 @@ createServer(async (req, res) => {
 }).listen(PORT, '127.0.0.1', () => console.log(`jarvis UI: http://127.0.0.1:${PORT}`));
 
 loadWorkspaces();
+startGuard(() => workspaces.values());
 if (process.env.JARVIS_VOICE) {
   import('./voice.ts').then((m) => m.initVoice()).then((v) => {
     if (!v) return;

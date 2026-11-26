@@ -1,6 +1,16 @@
 import { defineConfig } from '@playwright/test';
 import { join } from 'node:path';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { availableParallelism, tmpdir } from 'node:os';
+
+// One root for everything a run creates in the temp dir (data dirs, providers, spec folders): workers and servers inherit TMPDIR, and the runner removes the root when it exits, pass or fail. A killed run leaves one dir that the server sweep (src/tmpguard.ts) removes after a day.
+if (!process.env.JARVIS_TMP_ROOT) {
+  process.env.JARVIS_TMP_ROOT = mkdtempSync(join(tmpdir(), 'jarvis-tmp-e2e-'));
+  const root = process.env.JARVIS_TMP_ROOT;
+  process.on('exit', () => rmSync(root, { recursive: true, force: true }));
+}
+process.env.TMPDIR = process.env.JARVIS_TMP_ROOT;
+process.env.JARVIS_TMPGUARD = '0'; // test servers never sweep the real /tmp
 
 // Every worker owns a server (port BASE + STRIDE * worker index) and a data dir, so specs running in parallel never see each other's state.
 // Some specs also start extra servers at the worker's port + OFFSETS (resume and voice 1000-1005, arbiter-reset 1100, health 2000).
