@@ -2,8 +2,9 @@
 // Loaded by server.ts only when JARVIS_VOICE is set, so a broken file here cannot break a plain start.
 // Sidecar protocol: stdin = frames of 4-byte big-endian length N + N bytes PCM s16le 16 kHz mono; stdout = one JSON line per frame, {"text"} or {"error"}; stderr = logs; EOF on stdin = exit.
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
-import { resolve, delimiter } from 'node:path';
-import { existsSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
+import { resolve, delimiter, join } from 'node:path';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
 type Job = { pcm: Buffer; ok: (text: string) => void; fail: (e: Error) => void };
@@ -101,29 +102,47 @@ const live = new Set<ChildProcess>();
 process.on('exit', () => live.forEach((c) => c.kill('SIGKILL')));
 
 // Mutes the default output (sink) while a recording runs, so speakers do not bleed into the microphone. cmd is `wpctl` (JARVIS_VOICE_MUTE_CMD replaces it in tests).
-// restore() is idempotent and synchronous (also used by the exit hook); a sink that was muted before engage() stays muted.
+// engage()/restore() are counted: the sink is unmuted only when the last active recording has released it, so a recording that starts while the previous child is still closing keeps it muted.
+// A sink that was muted before the first engage() stays muted. A failed unmute stays pending (retried every 2 s up to 5 times, by the next restore, and by the exit and signal hooks), and `marker` (a file) records that Jarvis muted the sink, so the next start can undo it after a crash or SIGKILL.
 export const MUTE = ['wpctl'];
 const SINK = '@DEFAULT_AUDIO_SINK@';
-export function createMuter(cmd: string[] = MUTE) {
-  let ours = false, warned = false;
+export function createMuter(cmd: string[] = MUTE, marker?: string) {
+  let n = 0, ours = false, warned = false, retry: NodeJS.Timeout | undefined, tries = 0;
   const run = (...a: string[]) => execFileSync(cmd[0], [...cmd.slice(1), ...a], { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] });
-  const warn = (e: unknown) => { if (!warned) { warned = true; console.error(`voice: cannot mute the output: ${(e as Error).message.split('\n')[0]}`); } };
+  const warn = (e: unknown) => { if (!warned) { warned = true; console.error(`voice: cannot change the output mute: ${(e as Error).message.split('\n')[0]}`); } };
+  const unmute = () => {
+    if (!ours) return;
+    clearTimeout(retry);
+    try { run('set-mute', SINK, '0'); ours = false; tries = 0; if (marker) rmSync(marker, { force: true }); }
+    catch (e) { warn(e); if (n === 0 && ++tries <= 5) { retry = setTimeout(unmute, 2_000); retry.unref(); } } // a failed unmute is retried every 2 s, five times, not only at the next recording
+  };
   const m = {
     engage() {
-      if (ours) return;
+      if (n++ > 0) return;
       try {
-        if (/\[MUTED\]/.test(run('get-volume', SINK))) return; // the user muted it: leave it alone afterwards
+        if (!ours && /\[MUTED\]/.test(run('get-volume', SINK))) return; // the user muted it: leave it alone afterwards
         ours = true; // set before the call: a half-done mute must still be restored
+        if (marker) try { writeFileSync(marker, String(process.pid)); } catch {} // best effort: the mute itself matters more
         run('set-mute', SINK, '1');
       } catch (e) { warn(e); }
     },
-    restore() {
-      if (!ours) return;
-      ours = false;
-      try { run('set-mute', SINK, '0'); } catch (e) { warn(e); }
+    restore() { if (n > 0 && --n === 0) unmute(); },
+    // Unconditional, for exit and signals: unmute now whatever the count is.
+    restoreAll() { n = 0; unmute(); },
+    // Startup safety net: a marker left by a Jarvis that died while muting means the sink is muted by us, not by the user.
+    recover() {
+      if (!marker || !existsSync(marker)) return;
+      const alive = (() => { try { process.kill(Number(readFileSync(marker, 'utf8')), 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } })();
+      if (alive) return; // another Jarvis is running and owns the mute
+      let muted = false;
+      try { muted = /\[MUTED\]/.test(run('get-volume', SINK)); } catch (e) { return warn(e); }
+      if (!muted) return void rmSync(marker, { force: true }); // the user unmuted it since: nothing to undo
+      ours = true; unmute();
+      if (!ours) console.error('voice: restored the output mute left by a previous run');
     },
   };
-  process.on('exit', m.restore);
+  process.on('exit', m.restoreAll);
+  for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP'] as const) process.once(sig, () => { m.restoreAll(); process.kill(process.pid, sig); }); // the default action (exit) runs once the handler is gone
   return m;
 }
 
@@ -152,13 +171,15 @@ export function createRecorder(cmd: string[], opts: { maxMs?: number; leaseMs?: 
       if (take) return no(fail('already recording', 409));
       if (!found(cmd[0])) return no(fail(`${cmd[0]} not found`, 500)); // checked here: behind setpriv a missing command would only show as an exit code
       muter?.engage();
+      let held = !!muter;
+      const release = () => { if (held) { held = false; muter!.restore(); } }; // once per engage
       const args = [...SETPRIV, ...cmd];
       const child = spawn(args[0], args.slice(1), { stdio: ['ignore', 'pipe', 'pipe'] });
       live.add(child);
       let settled = false;
-      const t: Take = { id: randomUUID(), child, chunks: [], bytes: 0, tail: Buffer.alloc(0), err: '', open: false, dead: false, gone: new Promise((r) => child.once('close', () => { live.delete(child); muter?.restore(); r(); })), refuse: (e) => { if (!settled) { settled = true; no(e); } } };
+      const t: Take = { id: randomUUID(), child, chunks: [], bytes: 0, tail: Buffer.alloc(0), err: '', open: false, dead: false, gone: new Promise((r) => child.once('close', () => { live.delete(child); release(); r(); })), refuse: (e) => { if (!settled) { settled = true; no(e); } } };
       take = t;
-      const lose = (e: Error) => { muter?.restore(); if (take === t) take = undefined; t.dead = true; reap(t); t.refuse(e); };
+      const lose = (e: Error) => { release(); if (take === t) take = undefined; t.dead = true; reap(t); t.refuse(e); };
       child.on('error', (e) => lose(fail(`cannot start ${cmd[0]}: ${e.message}`, 500)));
       child.stderr!.on('data', (d) => { t.err = (t.err + d).slice(-500); });
       child.stdout!.on('data', (d: Buffer) => {
@@ -234,7 +255,7 @@ export async function initVoice(): Promise<Voice | undefined> {
   let muter: ReturnType<typeof createMuter> | undefined;
   if (process.env.JARVIS_VOICE_MUTE_OUTPUT !== '0') {
     const mc = process.env.JARVIS_VOICE_MUTE_CMD?.trim().split(/\s+/).filter(Boolean) ?? MUTE;
-    if (found(mc[0])) muter = createMuter(mc); else console.error(`voice: ${mc[0]} not found, the output is not muted while recording`);
+    if (found(mc[0])) { muter = createMuter(mc, join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis', 'voice-muted')); muter.recover(); } else console.error(`voice: ${mc[0]} not found, the output is not muted while recording`);
   }
   const rec = createRecorder(capture, { maxMs, leaseMs: secs('JARVIS_VOICE_LEASE_S', 4), muter });
   // an empty clip (nothing captured) is no speech, not an error

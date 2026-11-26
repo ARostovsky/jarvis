@@ -1,8 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawnSync, spawn } from 'node:child_process';
 import { join } from 'node:path';
-import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createSidecar, createRecorder, createMuter, withDebugDump } from '../src/voice.ts';
 
@@ -101,7 +101,7 @@ test('JARVIS_VOICE unset: voice is off and the /voice routes are 404', async () 
   const data = mkdtempSync(join(tmpdir(), 'jarvis-voice-'));
   const { spawn } = await import('node:child_process');
   const { JARVIS_VOICE: _, ...base } = process.env;
-  const env = { ...base, PORT: String(port), XDG_DATA_HOME: data, JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_VOICE_CMD: `${process.execPath} ${stub}`, JARVIS_VOICE_CAPTURE_CMD: `${process.execPath} ${capture}` }; // the stubs must not switch voice on by itself
+  const env = { ...base, JARVIS_ENV_FILE: '/dev/null', PORT: String(port), XDG_DATA_HOME: data, JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_VOICE_CMD: `${process.execPath} ${stub}`, JARVIS_VOICE_CAPTURE_CMD: `${process.execPath} ${capture}` }; // the stubs must not switch voice on by itself
   const srv = spawn(process.execPath, [join(import.meta.dirname, '..', 'src', 'server.ts')], { env, stdio: ['ignore', 'pipe', 'inherit'] });
   try {
     await new Promise((ok) => srv.stdout.on('data', (d) => /jarvis UI/.test(String(d)) && ok(0)));
@@ -250,12 +250,14 @@ test('debug dump: private modes, and a symlink at last.wav is replaced, not writ
 });
 
 // Output mute: the stub keeps the sink state in a file and logs every set-mute.
-const mutedRec = (mode = 'tone', premuted = false) => {
-  const file = join(mkdtempSync(join(tmpdir(), 'jv-mute-')), 'sink');
+const mutedRec = (mode = 'tone', premuted = false, o: { leaseMs?: number } = {}) => {
+  const dir = mkdtempSync(join(tmpdir(), 'jv-mute-'));
+  const file = join(dir, 'sink'), marker = join(dir, 'voice-muted'), pidfile = join(dir, 'pid');
   if (premuted) writeFileSync(file, '1');
-  const muter = createMuter([process.execPath, join(import.meta.dirname, '..', 'e2e', 'fake-mute.ts'), file]);
-  const r = createRecorder([process.execPath, capture, mode], { muter });
-  return { r, muted: () => existsSync(file) && readFileSync(file, 'utf8') === '1', log: () => existsSync(`${file}.log`) ? readFileSync(`${file}.log`, 'utf8').trim().split('\n') : [] };
+  const mk = () => createMuter([process.execPath, join(import.meta.dirname, '..', 'e2e', 'fake-mute.ts'), file], marker);
+  const muter = mk();
+  const r = createRecorder([process.execPath, capture, mode, pidfile], { muter, ...o });
+  return { r, muter, mk, marker, kill: () => process.kill(Number(readFileSync(pidfile, 'utf8')), 'SIGKILL'), fail: (on: boolean) => on ? writeFileSync(`${file}.fail`, '') : rmSync(`${file}.fail`), muted: () => existsSync(file) && readFileSync(file, 'utf8') === '1', log: () => existsSync(`${file}.log`) ? readFileSync(`${file}.log`, 'utf8').trim().split('\n') : [] };
 };
 
 test('mute: the output is muted while recording and restored by stop', async () => {
@@ -291,4 +293,114 @@ test('mute: a sink the user muted stays muted', async () => {
 test('mute: restore is idempotent and a missing command never throws', () => {
   const m = createMuter(['/nonexistent/wpctl']);
   m.engage(); m.restore(); m.restore();
+});
+
+test('mute: two back-to-back recordings each mute and restore', async () => {
+  const { r, muted, log, marker } = mutedRec();
+  for (let i = 0; i < 3; i++) {
+    const id = await r.start();
+    assert.equal(muted(), true);
+    await r.stop(id);
+    assert.equal(muted(), false);
+  }
+  assert.deepEqual(log(), ['1', '0', '1', '0', '1', '0']);
+  assert.equal(existsSync(marker), false);
+});
+
+test('mute: a start while the previous child is still closing stays muted until the last one ends', async () => {
+  const { r, muted, log } = mutedRec();
+  r.cancel(await r.start()); // SIGKILL sent, close not yet seen
+  const id = await r.start();
+  await sleep(150); // the first child has closed by now
+  assert.equal(muted(), true);
+  await r.stop(id);
+  assert.equal(muted(), false);
+  assert.deepEqual(log(), ['1', '0']);
+});
+
+test('mute: the capture child dying mid-recording restores', async () => {
+  const { r, kill, muted } = mutedRec();
+  const id = await r.start();
+  kill();
+  await sleep(200);
+  assert.equal(muted(), false);
+  await r.stop(id); // the dead take still stops cleanly, no second restore
+});
+
+test('mute: a vanished client (lease expiry) restores', async () => {
+  const { r, muted } = mutedRec('tone', false, { leaseMs: 300 });
+  await r.start();
+  assert.equal(muted(), true);
+  await sleep(700);
+  assert.equal(muted(), false);
+});
+
+test('mute: a failed unmute stays pending and the next recording does not mistake it for the user', async () => {
+  const { r, muted, fail } = mutedRec();
+  fail(true);
+  await r.stop(await r.start());
+  assert.equal(muted(), true); // wpctl failed
+  fail(false);
+  await r.stop(await r.start());
+  assert.equal(muted(), false);
+});
+
+test('mute: a failed unmute is retried on its own', async () => {
+  const { r, muted, fail } = mutedRec();
+  fail(true);
+  await r.stop(await r.start());
+  assert.equal(muted(), true);
+  fail(false);
+  for (let i = 0; i < 30 && muted(); i++) await sleep(100);
+  assert.equal(muted(), false);
+});
+
+const deadPid = () => { const r = spawnSync(process.execPath, ['-e', '']); return String(r.pid); }; // a pid that existed a moment ago
+
+test('mute: a marker of a running Jarvis, or of a sink that is no longer muted, is not acted on', () => {
+  const { mk, marker, muted } = mutedRec();
+  writeFileSync(marker, String(process.pid)); // alive
+  writeFileSync(join(marker, '..', 'sink'), '1');
+  mk().recover();
+  assert.equal(muted(), true);
+  assert.equal(existsSync(marker), true);
+  writeFileSync(marker, deadPid());
+  writeFileSync(join(marker, '..', 'sink'), '0'); // the user unmuted it
+  mk().recover();
+  assert.equal(muted(), false);
+  assert.equal(existsSync(marker), false);
+  assert.equal(existsSync(join(marker, '..', 'sink.log')), false); // no set-mute call
+});
+
+test('mute: a marker left by a dead Jarvis is undone at startup', () => {
+  const { mk, marker, muted } = mutedRec();
+  writeFileSync(marker, deadPid());
+  writeFileSync(join(marker, '..', 'sink'), '1');
+  assert.equal(muted(), true);
+  mk().recover();
+  assert.equal(muted(), false);
+  assert.equal(existsSync(marker), false);
+});
+
+test('mute: restoreAll (exit and signal hooks) unmutes whatever is active', async () => {
+  const { r, muter, muted } = mutedRec();
+  const id = await r.start();
+  muter.restoreAll();
+  assert.equal(muted(), false);
+  await r.stop(id);
+});
+
+test('mute: SIGTERM unmutes before the process dies', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'jv-mute-'));
+  const file = join(dir, 'sink');
+  const src = `import { createMuter } from ${JSON.stringify(join(import.meta.dirname, '..', 'src', 'voice.ts'))};
+createMuter([process.execPath, ${JSON.stringify(join(import.meta.dirname, '..', 'e2e', 'fake-mute.ts'))}, ${JSON.stringify(file)}], ${JSON.stringify(join(dir, 'm'))}).engage(); console.log('ready'); setInterval(() => {}, 1e6);`;
+  const script = join(dir, 'child.ts'); writeFileSync(script, src);
+  const c = spawn(process.execPath, [script], { stdio: ['ignore', 'pipe', 'inherit'] });
+  await new Promise((ok) => c.stdout.once('data', ok));
+  assert.equal(readFileSync(file, 'utf8'), '1');
+  c.kill('SIGTERM');
+  await new Promise((ok) => c.once('close', ok));
+  assert.equal(c.signalCode, 'SIGTERM'); // the default action still ends the process
+  assert.equal(readFileSync(file, 'utf8'), '0');
 });
