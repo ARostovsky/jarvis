@@ -111,6 +111,18 @@ test('with 12 rows the panel is capped at 40%, scrolls inside, keeps its header 
   await expect(page.locator('#dinput')).toBeInViewport();
 });
 
+test('an expanded panel with one row is as tall as its content, with no reserved blank space', async ({ page }) => {
+  const p = await jobsWorkspace(page);
+  p.set('h1', { state: 'running', step: 'step', progress: { done: 1, total: 4 }, costUsd: 1.5 });
+  await watchJobs(page, p.ws, p.name, ['h1']);
+  await expect(jobsBlock(page).locator('li.jr')).toHaveCount(1);
+  const gap = await jobsBlock(page).locator('.pn-body').evaluate((b) => b.clientHeight - b.scrollHeight);
+  expect(gap).toBe(0);
+  const body = (await jobsBlock(page).locator('.pn-body').boundingBox())!;
+  const row = (await jobsBlock(page).locator('li.jr').boundingBox())!;
+  expect(body.height).toBeLessThan(row.height + 24); // list padding only, not two more rows
+});
+
 test('rows sort failed, waiting, running, done, newest change first; a quiet poll keeps the order; a failure moves to the top', async ({ page }) => {
   const p = await jobsWorkspace(page);
   p.set('s-done', { state: 'done' }); p.set('s-run1', { state: 'running' });

@@ -182,7 +182,6 @@
   #panels { flex: none; display: flex; flex-direction: column; max-height: 40%; min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-width: thin; scrollbar-color: var(--cyan-dim) var(--line); border-bottom: 1px solid var(--line); container-type: inline-size; }
   #panels[hidden] { display: none; }
   .pn { flex: 0 1 auto; min-height: 0; display: flex; flex-direction: column; }
-  .pn.collapsed { flex: none; } /* a folded block is its header row and never shrinks under the cap */
   .pn + .pn { border-top: 1px solid var(--line); }
   .pn.stale { box-shadow: inset 0 1px 0 var(--amber); }
   .pn-h { flex: none; min-height: 28px; display: flex; align-items: center; gap: 6px; padding-right: 8px; background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .06)); clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); }
@@ -200,8 +199,7 @@
   .pn.stale .pn-sum { color: var(--amber); opacity: 1; }
   .pn-btn { flex: none; border: 1px solid var(--line) !important; padding: 1px 8px; font-size: 11px; letter-spacing: .1em !important; text-transform: uppercase; line-height: 16px; }
   .pn-wrap { flex: 0 1 auto; min-height: 0; display: grid; grid-template-rows: minmax(0, 1fr); transition: grid-template-rows .16s ease-out; }
-  .pn:not(.collapsed) { min-height: 104px; } /* header 28 + two rows (76): an expanded panel is never squeezed below this by its neighbour; in a short panel the stack scrolls instead of clipping a header */
-  .pn:not(.collapsed) .pn-wrap { min-height: 76px; }
+  .pn:not(.collapsed) { min-height: 28px; } /* header only: the body follows its content, and a crowded stack may squeeze a body but never clip a header */
   .pn.collapsed .pn-wrap { grid-template-rows: 0fr; }
   .pn-body { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
   .pn.collapsed .pn-body { visibility: hidden; overflow: hidden; transition: visibility 0s .16s; } /* a folded body must not stay in the tab order */
