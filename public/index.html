@@ -265,6 +265,11 @@
   #providers { border-color: var(--cyan); min-width: 480px; }
   #provList > div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #provList .pi { flex: 1; min-width: 0; } #provList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
+  #provDetails { border-color: var(--cyan); min-width: 480px; max-width: min(720px, 94vw); }
+  #pdBody small { display: block; opacity: .7; margin-top: 8px; } #pdBody div { overflow-wrap: anywhere; } #pdBody pre { max-height: 40vh; overflow: auto; margin: 4px 0; }
+  #pdBody .pd-shot img { max-width: 100%; max-height: 40vh; display: block; border: 1px solid var(--line); margin-top: 4px; }
+  #provList .pthumb { width: 64px; height: 40px; object-fit: cover; border: 1px solid var(--line); flex: none; }
+  #pdBody .bad, #pdBody .pd-warn { color: var(--red); } #pdBody .good { color: var(--cyan); }
   #provList label { cursor: pointer; } #provList input { width: auto; flex: none; accent-color: var(--cyan); padding: 0; margin-right: 8px; }
 </style>
 </head>
@@ -327,6 +332,12 @@
   <h3 id="provTitle" style="color:var(--cyan)">JOB PROVIDERS</h3>
   <div id="provList"></div>
   <form method="dialog"><button id="provSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
+</dialog>
+
+<dialog id="provDetails">
+  <h3 id="pdTitle" style="color:var(--cyan)"></h3>
+  <div id="pdBody"></div>
+  <form method="dialog"><button value="">CLOSE</button></form>
 </dialog>
 
 <aside id="panel">
@@ -1873,6 +1884,7 @@ function renderProviders() {
   const boxes = [], pend = pendingProps().filter((n) => !list.some((p) => p.name === n && p.status === 'approved'));
   $('provList').replaceChildren(...(pend.length ? [h('p', 'warn', `${pend.length} waiting for approval: ${pend.join(', ')} (see the cards above the chat)`)] : []), ...(list.length ? list.map((p) => {
     const row = h('div'), info = h('span', 'pi', p.name, h('small', '', [p.status, p.description, p.error].filter(Boolean).join(' · ')));
+    if (p.screenshot) { const t = h('img', 'pthumb'); t.alt = `${p.name} screenshot`; t.loading = 'lazy'; t.src = `/providers/screenshot?name=${encodeURIComponent(p.name)}&v=${p.hash ?? ''}`; t.onerror = () => t.remove(); row.append(t); }
     if (w) {
       const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: provSel.get(p.name) ?? (!w.providers?.length || w.providers.includes(p.name)), disabled: p.status !== 'approved' });
       c.dataset.name = p.name; c.onchange = () => provSel.set(p.name, c.checked); boxes.push(c);
@@ -1889,6 +1901,8 @@ function renderProviders() {
         row.append(show, b, view);
       }
     }
+    const det = h('button', 'pdet', 'DETAILS'); det.type = 'button'; det.title = 'Show the manifest and approval state (read-only)'; det.dataset.name = p.name; det.onclick = () => showProvDetails(p.name);
+    row.append(det);
     return row;
   }) : [h('p', '', 'No providers yet.')]));
   $('provSave').onclick = async (ev) => {
@@ -1897,6 +1911,29 @@ function renderProviders() {
     if (!on.length) return toast('Pick at least one provider');
     if (await post('/workspaces/providers', { ws: w.id, providers: on.length === boxes.filter((c) => !c.disabled).length ? [] : on })) { $('providers').close(); refreshTabs(); }
   };
+}
+function shotLink(name, v) {
+  const a = h('a'), img = h('img'); a.href = `/providers/screenshot?name=${encodeURIComponent(name)}&v=${v ?? ''}`; a.target = '_blank'; a.rel = 'noopener';
+  img.alt = `${name} screenshot`; img.src = a.href; a.append(img); return a;
+}
+// Read-only details of one provider: manifest (env values masked by the server), files, approval state and hashes.
+async function showProvDetails(name) {
+  $('pdTitle').textContent = `PROVIDER ${name}`; $('pdBody').replaceChildren(h('p', '', 'Loading…'));
+  if (!$('provDetails').open) $('provDetails').showModal();
+  try {
+    const r = await fetch(`/providers/details?name=${encodeURIComponent(name)}`);
+    if (!r.ok) throw new Error(await r.text() || r.statusText);
+    const d = await r.json(), ST = { approved: ['Approved', 'good'], 'not-approved': ['Not approved', 'bad'], changed: ['Changed since approval, needs re-approval', 'bad'], invalid: ['Invalid', 'bad'] }[d.status] ?? [d.status, ''];
+    // replaceChildren renders undefined/null/0 as text, so drop the empty slots (h() does this for its own children only)
+    $('pdBody').replaceChildren(...[
+      h('div', 'pd-state ' + ST[1], d.status === 'approved' && d.approvedAt ? `${ST[0]} · ${new Date(d.approvedAt).toLocaleString()}` : ST[0]), d.error && h('div', 'bad', d.error),
+      ...(d.warnings ?? []).map((x) => h('div', 'pd-warn', `Warning: ${x}`)),
+      d.screenshot ? h('div', 'pd-shot', h('small', '', 'Screenshot (click for full size)'), shotLink(name, d.currentHash)) : null,
+      h('small', '', 'Folder'), h('div', 'pd-folder', d.folder),
+      h('small', '', 'Manifest (env values are masked; args are shown as written)'), h('pre', 'pd-manifest', d.manifestText ?? d.manifestError ?? ''),
+      h('small', '', 'Files'), h('div', 'pd-files', (d.files ?? []).length ? d.files.join(', ') : 'none'),
+      d.docs.length && h('small', '', `Docs: ${d.docs.join(', ')}`)].filter(Boolean));
+  } catch (e) { $('pdBody').replaceChildren(h('p', 'bad', `Cannot load: ${e.message}`)); }
 }
 function openProviders(w = null) { if (!$('providers').open) provSel.clear(); provFor = w; renderProviders(); if (!$('providers').open) $('providers').showModal(); loadProviders(); }
 

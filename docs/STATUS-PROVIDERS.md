@@ -125,6 +125,7 @@ Rules:
 | `env.pass`, `env.set` | none | Names passed through from the server env; fixed values. `set` values are shown in the approval card, so no secrets. Refused in both: `ANTHROPIC_*` and `CLAUDE*`. Also refused in `set`: `PATH`, `PYTHONPATH`, `NODE_OPTIONS`, `LD_PRELOAD`, `LD_LIBRARY_PATH`, `NODE_PATH`, `PYTHONHOME`, `PERL5LIB`, `RUBYLIB`, `BASH_ENV`, `LD_AUDIT`, `LD_*`, `DYLD_*` |
 | `needs` | none | Human prerequisites (VPN, a login), shown with errors |
 | `notify` | `any` | When the arbiter is told, batched per poll: `any` (every job state change), `terminal` (only `done`, `failed`, `stopped`), `failed` (only `failed`), `none` |
+| `screenshot` | none | Optional relative path of an image in the provider folder (`screenshot.png`; png, webp or jpg, at most 1 MB, no `..`, no absolute path, no symlink). Shown in the Providers dialog, never run. The `screenshot` member is not part of the approval hash, but the picture file is like any other file: changing it after approval needs a re-approval. An invalid value is ignored with a warning |
 
 A manifest holds no values of one user in the code: URLs, project names and namespaces go to `env.set`, logic goes to the program.
 

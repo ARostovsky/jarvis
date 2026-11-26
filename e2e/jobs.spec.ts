@@ -317,3 +317,74 @@ test.describe('restart', () => {
     await expect(row(page, p.name, 'u1')).toHaveClass(/st-failed/);
   });
 });
+
+test('provider details: manifest with masked env, approval state, changed manifest, traversal rejected', async ({ page }) => {
+  const p = fakeProvider({ args: ['{ids}', '--flag'], env: { pass: ['HOME'], set: { FAKE_JOBS_DIR: '/tmp/x', MY_SECRET: 'hunter2' } } });
+  await page.goto('/');
+  const open = async () => {
+    await page.evaluate(() => (window as any).openProviders());
+    await page.locator(`#provList button.pdet[data-name="${p.name}"]`).click();
+  };
+  await p.approve(page);
+  await open();
+  const body = page.locator('#pdBody');
+  await expect(body.locator('.pd-state')).toHaveText(/^Approved · \S/);
+  await expect(body).not.toContainText(/Approved.*Approved/s);
+  // no error, warning, screenshot or docs: no stray "undefined", "null" or "0" text next to the state line
+  await expect(body.locator('.pd-state + small')).toHaveText('Folder');
+  await expect(body.locator('.pd-manifest')).toContainText('"--flag"');
+  await expect(body.locator('.pd-manifest')).toContainText('"node"');
+  await expect(body.locator('.pd-manifest')).toContainText('"MY_SECRET": "••••"');
+  await expect(body.locator('.pd-manifest')).not.toContainText('hunter2');
+  const hash = (await p.info(page)).hash;
+  await expect(body).not.toContainText(hash);
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+  writeFileSync(join(p.dir, 'README.md'), 'changed');
+  await open();
+  await expect(body.locator('.pd-state')).toHaveText('Changed since approval, needs re-approval');
+  await expect(body.locator('.pd-state')).toHaveClass(/bad/);
+  await expect(body).not.toContainText(/[0-9a-f]{64}/);
+  await expect(body.locator('.pd-files')).toContainText('README.md');
+  for (const n of ['../x', '..%2Fx', 'nope']) expect((await page.request.get(`/providers/details?name=${n}`)).status()).toBe(404);
+});
+
+test('provider screenshot: thumbnail in the list, image in the details, approval kept, traversal and bad field handled', async ({ page }) => {
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+  const p = fakeProvider(), bare = fakeProvider();
+  await page.goto('/');
+  const m = JSON.parse(readFileSync(join(p.dir, 'manifest.json'), 'utf8'));
+  writeFileSync(join(p.dir, 'screenshot.png'), PNG);
+  writeFileSync(join(p.dir, 'manifest.json'), JSON.stringify({ ...m, screenshot: 'screenshot.png' }));
+  await p.approve(page); await bare.approve(page);
+  expect((await p.info(page)).status).toBe('approved');
+  const r = await page.request.get(`/providers/screenshot?name=${p.name}`);
+  expect(r.status()).toBe(200);
+  expect(r.headers()['content-type']).toBe('image/png');
+  expect((await r.body()).equals(PNG)).toBe(true);
+  for (const n of ['../x', '..%2Fx', 'nope', bare.name]) expect((await page.request.get(`/providers/screenshot?name=${n}`)).status()).toBe(404);
+
+  await page.evaluate(() => (window as any).openProviders());
+  await expect(page.locator(`#provList img.pthumb[alt="${p.name} screenshot"]`)).toBeVisible();
+  await expect(page.locator(`#provList img.pthumb[alt="${bare.name} screenshot"]`)).toHaveCount(0);
+  await page.locator(`#provList button.pdet[data-name="${p.name}"]`).click();
+  const img = page.locator('#pdBody .pd-shot img');
+  await expect(img).toBeVisible();
+  await expect.poll(() => img.evaluate((e: HTMLImageElement) => e.naturalWidth)).toBe(1);
+  await expect(page.locator('#pdBody .pd-shot a')).toHaveAttribute('target', '_blank');
+  await page.keyboard.press('Escape'); await page.keyboard.press('Escape');
+
+  // the picture is part of the approval: changing it needs a new approval
+  writeFileSync(join(p.dir, 'screenshot.png'), Buffer.concat([PNG, Buffer.from('x')]));
+  expect((await p.info(page)).status).toBe('changed');
+  writeFileSync(join(p.dir, 'screenshot.png'), PNG);
+  expect((await p.info(page)).status).toBe('approved');
+
+  // a bad field: warning in the details, no image (the member is not hashed and the file is unchanged, so still approved)
+  writeFileSync(join(p.dir, 'manifest.json'), JSON.stringify({ ...m, screenshot: '../x.png' }));
+  expect((await p.info(page)).status).toBe('approved');
+  expect((await page.request.get(`/providers/screenshot?name=${p.name}`)).status()).toBe(404);
+  await page.evaluate(() => (window as any).openProviders());
+  await page.locator(`#provList button.pdet[data-name="${p.name}"]`).click();
+  await expect(page.locator('#pdBody .pd-warn')).toContainText('screenshot ignored');
+  await expect(page.locator('#pdBody .pd-shot')).toHaveCount(0);
+});

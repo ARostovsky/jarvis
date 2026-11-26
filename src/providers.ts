@@ -1,7 +1,7 @@
 // Status providers: manifest validation, folder hashing and file rules, location rules, registry with staging and hash-pinned approval.
 // Pure Node, no SDK and no import of agents.ts. The server runs only approved, unchanged provider code (invariant 11).
 import { createHash, randomBytes } from 'node:crypto';
-import { cpSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, lstatSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve, sep } from 'node:path';
 
@@ -23,6 +23,7 @@ export type Manifest = {
   idPattern: string; maxIds: number;
   env: { pass: string[]; set: Record<string, string> };
   needs: string[]; notify: (typeof NOTIFY)[number];
+  screenshot?: string;
 };
 // Where providers must not live or run: notes folders, project folders, and Jarvis's own data.
 export type Locations = { data: string; notes: string[]; projects: string[] };
@@ -40,6 +41,12 @@ export function limits() {
 }
 
 const sha = (b: string | Buffer) => createHash('sha256').update(b).digest('hex');
+// Streamed, for a file that is not read whole into memory.
+function shaFile(p: string): string {
+  const h = createHash('sha256'), buf = Buffer.alloc(65536), fd = openSync(p, 'r');
+  try { for (let n; (n = readSync(fd, buf, 0, buf.length, null)) > 0;) h.update(buf.subarray(0, n)); } finally { closeSync(fd); }
+  return h.digest('hex');
+}
 const clamp = (n: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, n));
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 const strList = (v: unknown, what: string, max: number, len: number): string[] => {
@@ -121,9 +128,73 @@ export function validateManifest(raw: unknown, folderName?: string): { manifest:
   const needs = raw.needs === undefined ? [] : strList(raw.needs, 'needs', 10, 200);
   const notify = raw.notify ?? 'any';
   if (!NOTIFY.includes(notify as never)) throw new Error(`manifest: notify must be one of ${NOTIFY.join(', ')}`);
-  const known = new Set(['schema', 'name', 'kind', 'description', 'command', 'args', 'cwd', 'pollS', 'timeoutS', 'slow_fields', 'idPattern', 'maxIds', 'env', 'needs', 'notify']);
+  const known = new Set(['schema', 'name', 'kind', 'description', 'command', 'args', 'cwd', 'pollS', 'timeoutS', 'slow_fields', 'idPattern', 'maxIds', 'env', 'needs', 'notify', 'screenshot']);
   for (const k of Object.keys(raw)) if (!known.has(k)) warnings.push(`manifest: unknown field "${k}" ignored`);
-  return { manifest: { schema: 1, name, kind: 'jobs', description: description.trim(), command, args, mode: withIds.length ? 'ids' : 'id', cwd, pollS, timeoutS, slow, idPattern, maxIds, env: { pass, set }, needs, notify: notify as Manifest['notify'] }, warnings };
+  const manifest: Manifest = { schema: 1, name, kind: 'jobs', description: description.trim(), command, args, mode: withIds.length ? 'ids' : 'id', cwd, pollS, timeoutS, slow, idPattern, maxIds, env: { pass, set }, needs, notify: notify as Manifest['notify'] };
+  // An invalid screenshot never invalidates the provider: it is dropped with a warning.
+  if (raw.screenshot !== undefined) {
+    const s = screenshotRel(raw.screenshot);
+    if ('rel' in s) manifest.screenshot = s.rel; else warnings.push(`manifest: screenshot ignored (${s.warn})`);
+  }
+  return { manifest, warnings };
+}
+
+// The screenshot is only displayed, never run: png, webp or jpg, at most 1 MB, a plain file inside the provider folder.
+export const SHOT_TYPES: Record<string, string> = { png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
+const MAGIC: Record<string, (b: Buffer) => boolean> = {
+  'image/png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
+  'image/jpeg': (b) => b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff,
+  'image/webp': (b) => b.subarray(0, 4).toString('latin1') === 'RIFF' && b.subarray(8, 12).toString('latin1') === 'WEBP',
+};
+// Syntax only (no disk): a relative path without `..`, with an image extension.
+export function screenshotRel(v: unknown): { rel: string } | { warn: string } {
+  if (typeof v !== 'string' || !v || v.length > 200 || v.includes('\0') || v.includes('\\')) return { warn: 'must be a relative path string' };
+  if (isAbsolute(v) || /^[A-Za-z]:/.test(v)) return { warn: 'must not be an absolute path' };
+  const segs = v.split('/');
+  if (segs.some((x) => !x || x === '.' || x === '..')) return { warn: 'must stay inside the provider folder (no "..", "." or empty parts)' };
+  if (!SHOT_TYPES[segs[segs.length - 1].split('.').pop()!.toLowerCase()] || !segs[segs.length - 1].includes('.')) return { warn: 'must be a .png, .webp or .jpg file' };
+  return { rel: segs.join('/') };
+}
+// Full check on disk for the manifest field `screenshot` of a folder. `abs` is only set for a valid file.
+export function checkScreenshot(dir: string, raw: unknown): { rel: string; abs: string; type: string; size: number } | { warn: string; exclude?: string } | null {
+  if (!isObj(raw) || raw.screenshot === undefined) return null;
+  const s = screenshotRel(raw.screenshot);
+  if ('warn' in s) return s;
+  try {
+    let abs = dir;
+    const segs = s.rel.split('/');
+    for (const [i, seg] of segs.entries()) {
+      abs = join(abs, seg);
+      const st = lstatSync(abs);
+      if (st.isSymbolicLink()) return { warn: 'is or passes a symlink (not allowed)' };
+      if (i === segs.length - 1) {
+        if (!st.isFile()) return { warn: 'is not a plain file' };
+        if (st.size > MAX_BYTES) return { warn: 'is larger than 1 MB', exclude: s.rel }; // too big to show, and must not make the folder invalid
+        const type = SHOT_TYPES[seg.split('.').pop()!.toLowerCase()];
+        const head = Buffer.alloc(12), fd = openSync(abs, 'r');
+        try { readSync(fd, head, 0, 12, 0); } finally { closeSync(fd); }
+        if (!MAGIC[type](head)) return { warn: 'content does not match its extension' };
+        // A file the program runs or reads as an argument must stay in the hash.
+        if (isObj(raw) && [...(Array.isArray(raw.command) ? raw.command : []), ...(Array.isArray(raw.args) ? raw.args : [])].some((e) => typeof e === 'string' && !isAbsolute(e) && resolve(dir, e) === resolve(abs))) return { warn: 'is used by command or args (not allowed)' };
+        return { rel: s.rel, abs, type, size: st.size };
+      }
+      if (!st.isDirectory()) return { warn: 'is not inside a folder' };
+    }
+  } catch { return { warn: 'file not found' }; }
+  return { warn: 'file not found' };
+}
+// manifest.json as hashed: without the `screenshot` member (the picture file itself is hashed). Text without that member is hashed as is.
+function manifestForHash(text: string): string {
+  let o: unknown;
+  try { o = JSON.parse(text); } catch { return text; }
+  if (!isObj(o) || !('screenshot' in o)) return text;
+  const { screenshot: _s, ...rest } = o, want = JSON.stringify(rest);
+  const member = '"screenshot"\\s*:\\s*"(?:[^"\\\\]|\\\\.)*"';
+  for (const re of [new RegExp(`\\s*,\\s*${member}`), new RegExp(`${member}\\s*,\\s*`), new RegExp(member)]) {
+    const t = text.replace(re, '');
+    try { if (JSON.stringify(JSON.parse(t)) === want) return t; } catch {}
+  }
+  return want;
 }
 
 // An id is valid when the default rule and the manifest rule both match: the manifest can only narrow.
@@ -134,7 +205,12 @@ export function idOk(m: Pick<Manifest, 'idPattern'>, id: unknown): id is string 
 // Sorted `path NUL size NUL sha256(file)` over every file; only plain files and folders, within the size limits.
 export function hashFolder(dir: string): { sha256: string; files: FileInfo[] } {
   const files: FileInfo[] = [];
-  let total = 0;
+  let total = 0, mtext: string | undefined, skip: string | undefined;
+  try {
+    const raw = JSON.parse(mtext = readFileSync(join(dir, 'manifest.json'), 'utf8'));
+    const c = checkScreenshot(dir, raw);
+    if (c && 'exclude' in c) skip = c.exclude;
+  } catch {}
   const walk = (abs: string, rel: string) => {
     for (const e of readdirSync(abs).sort()) {
       const p = join(abs, e), r = rel ? `${rel}/${e}` : e, st = lstatSync(p);
@@ -143,10 +219,12 @@ export function hashFolder(dir: string): { sha256: string; files: FileInfo[] } {
         if (BANNED_DIRS.has(e)) throw new Error(`provider folder: ${r} is not allowed (dependencies come from a tool cache, e.g. uv run --with)`);
         walk(p, r);
       } else if (st.isFile()) {
+        // The screenshot file stays in the hash (approved code may read it), but an oversize one only needs hashing, not the 1 MB folder limit.
+        if (r === skip) { files.push({ path: r, size: st.size, sha256: shaFile(p) }); continue; }
         if (files.length >= MAX_FILES) throw new Error(`provider folder: more than ${MAX_FILES} files`);
         total += st.size;
         if (total > MAX_BYTES) throw new Error('provider folder: more than 1 MB');
-        files.push({ path: r, size: st.size, sha256: sha(readFileSync(p)) });
+        if (r === 'manifest.json' && mtext !== undefined) { const t = manifestForHash(mtext); files.push({ path: r, size: Buffer.byteLength(t), sha256: sha(t) }); } else files.push({ path: r, size: st.size, sha256: sha(readFileSync(p)) });
       } else throw new Error(`provider folder: ${r} is not a plain file`);
     }
   };
@@ -203,6 +281,10 @@ export function loadProvider(folder: string, opts: { loc?: Locations; name?: str
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')); } catch (e) { throw new Error(`manifest.json: ${(e as Error).message}`); }
   const { manifest, warnings } = validateManifest(raw, opts.name);
+  if (manifest.screenshot) {
+    const c = checkScreenshot(folder, raw);
+    if (c && 'warn' in c) { delete manifest.screenshot; warnings.push(`manifest: screenshot ignored (${c.warn})`); }
+  }
   const { sha256, files } = hashFolder(folder);
   if (opts.loc) warnings.push(...checkLocations(folder, manifest, opts.loc));
   return { folder: real(folder), manifest, sha256, files, warnings };

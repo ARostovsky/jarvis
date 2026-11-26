@@ -17,7 +17,7 @@ import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry 
 import { createOpenItems, OPEN_ITEMS_PANEL_ID, openItemsFile, type OpenItemsSource } from './openitems.ts';
 import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
-import { HASH_RE, providerFiles, providerList } from './provider-admin.ts';
+import { HASH_RE, providerDetails, providerFiles, providerList, providerScreenshot } from './provider-admin.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -1852,6 +1852,8 @@ export function listProviders() {
   return { providers: providerList(reg), proposals: [...seen.values()].map(({ type, at, ...p }) => p) };
 }
 export const listProviderFiles = (name: string, hash: string) => providerFiles(registry(), name, hash);
+export const getProviderDetails = (name: string) => providerDetails(registry(), name);
+export const getProviderScreenshot = (name: string) => providerScreenshot(registry(), name);
 
 // Tells the workspaces that hold the proposal (the card hides there too). Only the user's click gets here (POST with the Origin check); no tool approves.
 function decided(name: string, hash: string, approved: boolean, text: string, reason?: string) {

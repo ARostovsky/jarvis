@@ -1,8 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync, readFileSync, existsSync, readdirSync, realpathSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync, readFileSync, existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { providerDetails, providerScreenshot } from '../src/provider-admin.ts';
 import { hashFolder, validateManifest, checkLocations, loadProvider, createRegistry, idOk, limits, type Locations } from '../src/providers.ts';
 
 const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'jarvis-prov-')));
@@ -252,4 +253,150 @@ test('loadProvider reads manifest and hash; folder name must match', () => {
   fail(() => loadProvider(d, { name: 'other' }), /folder name/);
   writeFileSync(join(d, 'manifest.json'), '{nope');
   fail(() => loadProvider(d), /manifest\.json/);
+});
+
+test('providerDetails: masks env values, shows approval state and both hashes, rejects unknown and traversal names', async () => {
+  const { providerDetails } = await import('../src/provider-admin.ts');
+  const r = setupLocs(), g = reg(r);
+  const s = g.stage(folder(join(r, 'ok'), 'demo', { args: ['{ids}', '--x'], env: { pass: ['HOME'], set: { TOKEN: 'sekret' } } }));
+  g.approve('demo', s.sha256);
+  writeFileSync(join(r, 'prov', 'demo', 'README.md'), 'hi');
+  let d = providerDetails(g, 'demo');
+  assert.equal(d.status, 'changed'); // README added after approval
+  assert.equal(d.approvedHash, s.sha256);
+  assert.notEqual(d.currentHash, d.approvedHash);
+  assert.deepEqual(d.docs, ['README.md']);
+  assert.ok(d.manifestText?.includes('"TOKEN": "••••"') && !d.manifestText.includes('sekret'));
+  assert.ok(d.manifestText?.includes('"--x"') && d.manifestText.includes('node'));
+  rmSync(join(r, 'prov', 'demo', 'README.md'));
+  d = providerDetails(g, 'demo');
+  assert.equal(d.status, 'approved');
+  assert.equal(d.currentHash, d.approvedHash);
+  for (const n of ['../x', 'nope', '..', 'demo/../demo']) assert.throws(() => providerDetails(g, n), /unknown provider/);
+});
+
+// --- screenshot ---
+const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32)]);
+const shotFolder = (r: string, shot: unknown, file?: { path: string; data: Buffer }) => {
+  const d = folder(r, 'demo', shot === undefined ? {} : { screenshot: shot });
+  if (file) { mkdirSync(join(d, file.path, '..'), { recursive: true }); writeFileSync(join(d, file.path), file.data); }
+  return d;
+};
+
+test('screenshot: a valid file inside the folder is kept', () => {
+  for (const [p, data] of [['screenshot.png', PNG], ['img/a.jpg', Buffer.from([0xff, 0xd8, 0xff, 0, 0])], ['a.webp', Buffer.from('RIFF\0\0\0\0WEBPVP8 ')]] as const) {
+    const l = loadProvider(shotFolder(tmp(), p, { path: p, data }), { name: 'demo' });
+    assert.equal(l.manifest.screenshot, p);
+    assert.deepEqual(l.warnings, []);
+  }
+});
+
+test('screenshot: bad values are ignored with a warning and the provider stays valid', () => {
+  const big = Buffer.concat([PNG, Buffer.alloc(1024 * 1024)]);
+  const cases: [unknown, { path: string; data: Buffer } | undefined][] = [
+    ['../x.png', undefined], ['/etc/x.png', undefined], ['a/../b.png', undefined], ['s.gif', { path: 's.gif', data: PNG }], ['s.png', { path: 's.png', data: Buffer.from('not an image') }],
+    ['s.png', { path: 's.png', data: big }], ['missing.png', undefined], [42, undefined], ['s.png', undefined],
+  ];
+  for (const [shot, file] of cases) {
+    const l = loadProvider(shotFolder(tmp(), shot, file), { name: 'demo' });
+    assert.equal(l.manifest.screenshot, undefined, String(shot));
+    assert.ok(l.warnings.some((w) => /screenshot ignored/.test(w)), String(shot));
+    assert.equal(l.manifest.name, 'demo');
+  }
+});
+
+test('screenshot: a symlink (file or folder) is ignored; a file used by command or args is not excluded', () => {
+  const r = tmp(), d = shotFolder(r, 'l.png');
+  writeFileSync(join(r, 'real.png'), PNG);
+  symlinkSync(join(r, 'real.png'), join(d, 'l.png'));
+  // hashFolder refuses symlinks anyway, so the provider fails as a whole, never serves the link
+  fail(() => loadProvider(d, { name: 'demo' }), /symlink/);
+  const e = shotFolder(tmp(), 's.png', { path: 's.png', data: PNG });
+  writeFileSync(join(e, 'manifest.json'), JSON.stringify({ ...manifest(), screenshot: 's.png', command: ['node', 's.png'] }));
+  const l = loadProvider(e, { name: 'demo' });
+  assert.equal(l.manifest.screenshot, undefined);
+  assert.ok(l.files.some((f) => f.path === 's.png'));
+});
+
+test('screenshot: the hash covers the picture file but not the manifest member', () => {
+  const r = tmp(), d = shotFolder(r, undefined);
+  const base = hashFolder(d).sha256;
+  writeFileSync(join(d, 'screenshot.png'), PNG);
+  const m = JSON.parse(readFileSync(join(d, 'manifest.json'), 'utf8'));
+  const pretty = JSON.stringify(m, null, 2);
+  const h0 = hashFolder(d).sha256;
+  // the member alone changes nothing, whatever its position or formatting
+  writeFileSync(join(d, 'manifest.json'), JSON.stringify({ ...m, screenshot: 'screenshot.png' }));
+  assert.equal(hashFolder(d).sha256, h0);
+  writeFileSync(join(d, 'manifest.json'), pretty);
+  const hp = hashFolder(d).sha256;
+  writeFileSync(join(d, 'manifest.json'), pretty.replace(/\n}$/, ',\n  "screenshot": "screenshot.png"\n}'));
+  assert.equal(hashFolder(d).sha256, hp);
+  assert.notEqual(h0, base);
+  // changing the picture changes the hash
+  writeFileSync(join(d, 'screenshot.png'), Buffer.concat([PNG, Buffer.from('more')]));
+  assert.notEqual(hashFolder(d).sha256, hp);
+  // an oversize picture is ignored as a screenshot but still hashed
+  const big = Buffer.concat([PNG, Buffer.alloc(1024 * 1024)]);
+  writeFileSync(join(d, 'screenshot.png'), big);
+  const h1 = hashFolder(d).sha256;
+  writeFileSync(join(d, 'screenshot.png'), Buffer.concat([big, Buffer.from('x')]));
+  assert.notEqual(hashFolder(d).sha256, h1);
+});
+
+test('screenshot: changing the picture or adding the member after approval makes the state changed', () => {
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
+  const d = folder(join(r, 'prov'));
+  writeFileSync(join(d, 'screenshot.png'), PNG);
+  const m = JSON.parse(readFileSync(join(d, 'manifest.json'), 'utf8'));
+  writeFileSync(join(d, 'manifest.json'), JSON.stringify({ ...m, screenshot: 'screenshot.png' }));
+  reg.approve('demo', reg.list()[0].sha256!);
+  assert.equal(reg.list()[0].state, 'approved');
+  writeFileSync(join(d, 'screenshot.png'), Buffer.concat([PNG, Buffer.from('x')]));
+  assert.equal(reg.list()[0].state, 'changed');
+  // a screenshot member added afterwards, pointing at a data file the code reads
+  const r2 = tmp(), reg2 = createRegistry({ data: join(r2, 'data'), dir: join(r2, 'prov'), locations: () => locs(r2) });
+  const e = folder(join(r2, 'prov'));
+  writeFileSync(join(e, 'data.png'), PNG);
+  reg2.approve('demo', reg2.list()[0].sha256!);
+  assert.equal(reg2.list()[0].state, 'approved');
+  writeFileSync(join(e, 'manifest.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(e, 'manifest.json'), 'utf8')), screenshot: 'data.png' }));
+  assert.equal(reg2.list()[0].state, 'approved'); // the member itself is not hashed, the file was already
+  writeFileSync(join(e, 'data.png'), Buffer.concat([PNG, Buffer.from('y')]));
+  assert.equal(reg2.list()[0].state, 'changed');
+});
+
+test('screenshot endpoint data: serves only the validated file, 404 otherwise', () => {
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
+  const d = folder(join(r, 'prov'), 'demo', { screenshot: 'screenshot.png' });
+  writeFileSync(join(r, 'secret.png'), PNG);
+  writeFileSync(join(d, 'screenshot.png'), PNG);
+  const s = providerScreenshot(reg, 'demo');
+  assert.equal(s.type, 'image/png');
+  assert.ok(s.data.equals(PNG));
+  for (const n of ['../demo', '..', 'nope', 'demo/../demo', '']) assert.throws(() => providerScreenshot(reg, n), (e: any) => e.status === 404);
+  writeFileSync(join(d, 'manifest.json'), JSON.stringify({ ...manifest(), screenshot: '../secret.png' }));
+  assert.throws(() => providerScreenshot(reg, 'demo'), (e: any) => e.status === 404);
+  assert.equal(providerDetails(reg, 'demo').screenshot, undefined);
+  assert.ok(providerDetails(reg, 'demo').warnings?.some((w) => /screenshot ignored/.test(w)));
+});
+
+test('providerDetails: a malformed env.set masks the whole env', async () => {
+  const { providerDetails } = await import('../src/provider-admin.ts');
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
+  const d = folder(join(r, 'prov'), 'demo', { env: { set: 'TOKEN=abc' } });
+  const t = providerDetails(reg, 'demo').manifestText ?? '';
+  assert.ok(t.includes('"env"') && !t.includes('abc'), t);
+});
+
+test('providerScreenshot: a symlink swapped in after validation is rejected', async () => {
+  const { providerScreenshot } = await import('../src/provider-admin.ts');
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
+  const d = folder(join(r, 'prov'), 'demo', { screenshot: 'screenshot.png' });
+  writeFileSync(join(d, 'screenshot.png'), PNG);
+  writeFileSync(join(r, 'real.png'), PNG);
+  assert.equal(providerScreenshot(reg, 'demo').data.length, PNG.length);
+  rmSync(join(d, 'screenshot.png'));
+  symlinkSync(join(r, 'real.png'), join(d, 'screenshot.png'));
+  assert.throws(() => providerScreenshot(reg, 'demo'), (e: any) => e.status === 404);
 });

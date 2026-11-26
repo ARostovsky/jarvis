@@ -3,7 +3,7 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listProviders, listProviderFiles, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -73,10 +73,15 @@ createServer(async (req, res) => {
     if (!w) return void res.writeHead(404).end();
     w.refreshOpenItems(); // re-read the file: the watcher may lag
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(w.panels.panels()));
-  } else if (req.method === 'GET' && (url.pathname === '/providers' || url.pathname === '/providers/files')) {
+  } else if (req.method === 'GET' && (url.pathname === '/providers' || url.pathname === '/providers/files' || url.pathname === '/providers/details')) {
     try {
-      const out = url.pathname === '/providers' ? listProviders() : listProviderFiles(url.searchParams.get('name') ?? '', url.searchParams.get('hash') ?? '');
+      const out = url.pathname === '/providers' ? listProviders() : url.pathname === '/providers/details' ? getProviderDetails(url.searchParams.get('name') ?? '') : listProviderFiles(url.searchParams.get('name') ?? '', url.searchParams.get('hash') ?? '');
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
+    } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
+  } else if (req.method === 'GET' && url.pathname === '/providers/screenshot') {
+    try {
+      const { type, data } = getProviderScreenshot(url.searchParams.get('name') ?? '');
+      res.writeHead(200, { 'content-type': type, 'content-length': data.length, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-cache' }).end(data);
     } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
   } else if (req.method === 'GET' && url.pathname === '/recent') {
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(recentFolders()));
