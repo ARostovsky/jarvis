@@ -88,3 +88,9 @@ test('notesSizeWarnings warns over the caps, never edits, and reaches the arbite
     try { assert.match(arbiterNotesPrompt({ id: 'w-ab12', name: 'W', notes: d } as never, `${d}/workspaces/w-ab12`), /Size warning: CLAUDE\.md .*; access\.md .*\. Shorten them before you add anything\./); } finally { console.warn = warn; }
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
+
+test('arbiter prompt: files for the user are absolute paths in backticks, copied into a served folder when outside', () => {
+  for (const s of ['as its full absolute path in backticks, one per line', 'never relative paths', 'also from agent reports', 'copy it into ~/Documents/jarvis-shared/ (never overwrite, add a suffix)']) {
+    assert.ok(ARBITER_PROMPT.includes(s), s);
+  }
+});
