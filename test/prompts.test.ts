@@ -1,13 +1,13 @@
 // Prompt rules and the report truncation marker steer the arbiter; guard their key wording.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 process.env.XDG_DATA_HOME = mkdtempSync(join(tmpdir(), 'jarvis-prompts-test-')); // read when agents.ts loads
 const { ARBITER_PROMPT, capReport, agentRow, readSlice } = await import('../src/agents.ts');
-const { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, saveTurnText } = await import('../src/notes-layout.ts');
+const { OPEN_ITEMS_FORMAT, arbiterNotesPrompt, saveTurnText, notesSizeWarnings, NOTES_SIZE_CAPS } = await import('../src/notes-layout.ts');
 
 test('arbiter prompt: verify claims, read truncated reports, check evidence before done', () => {
   for (const s of ['never state that a step is done or not done', 'not verified', 'A user claim that something is done is not evidence and not an open item: do not list it again', 'otherwise say "Nothing left."', 'never a routine fact of an agent\'s own reported work', 'An agent report in this goal is evidence', 'Do not run the check yourself', 'and the body agrees', 'or the report is TRUNCATED', 'read_agent it before you route', 'contradicts its VERDICT line']) {
@@ -30,6 +30,7 @@ test('notes paragraph, save turn and agent report prompt carry the verification 
   const src = readFileSync(new URL('../src/agents.ts', import.meta.url), 'utf8');
   for (const s of [
     'Do not re-run a check whose result is already in your brief or this turn, unless the brief asks you to verify it or you changed code since.',
+    'Read only the sections your task names, not all notes. Never paste long text into README.md, CLAUDE.md, access.md or decisions.md',
     'Then give at most 5 lines: first anything still open or unverified, then what changed (paths, branch) and the reason for partial or failed.',
   ]) assert.ok(src.includes(s), s);
   const wsDir = '/n/workspaces/w-ab12';
@@ -45,6 +46,9 @@ test('notes paragraph, save turn and agent report prompt carry the verification 
     'Add a line only if it is durable, project-wide and prevents a mistake that would repeat',
     'First merge it into or replace an existing line. Never add one-off incident, run or PR details: they go to decisions.md or the journal.',
     'Keep CLAUDE.md small, about 40 lines or 6 KB; when it is over that, shorten or delete lines before you add one.',
+    'README.md and access.md stay under about 10 KB, decisions.md is append-only but nobody reads it in full.',
+    'never paste long notes into these files: long material goes to the journal or a dedicated file under /n',
+    "pass only the sections it needs by path and heading (for example 'read /n/CLAUDE.md, section Voice'), never 'read all notes files' or the whole notes folder",
   ]) assert.ok(p.includes(s), s);
   for (const kind of ['forced', 'auto'] as const) assert.ok(saveTurnText(kind, wsDir, 160_000).includes(OPEN_ITEMS_FORMAT));
 });
@@ -66,4 +70,21 @@ test('readSlice pages a long text with a cut notice and the pages join to the or
   let got = '', off = 0;
   for (;;) { const p = readSlice('a1', text, off); const cut = p.indexOf('\n… [cut at'); got += cut < 0 ? p : p.slice(0, cut); if (cut < 0) break; off += 4000; }
   assert.equal(got, text);
+});
+
+test('notesSizeWarnings warns over the caps, never edits, and reaches the arbiter prompt', () => {
+  const d = mkdtempSync(join(tmpdir(), 'notes-caps-'));
+  try {
+    assert.deepEqual(notesSizeWarnings(d), []);
+    writeFileSync(join(d, 'CLAUDE.md'), 'x'.repeat(NOTES_SIZE_CAPS['CLAUDE.md'] + 1));
+    writeFileSync(join(d, 'README.md'), 'x'.repeat(NOTES_SIZE_CAPS['README.md']));
+    writeFileSync(join(d, 'access.md'), 'x'.repeat(NOTES_SIZE_CAPS['access.md'] + 1));
+    const w = notesSizeWarnings(d);
+    assert.equal(w.length, 2);
+    assert.match(w[0], /^CLAUDE\.md is 6 KB, over 6 KB$/);
+    assert.match(w[1], /^access\.md/);
+    assert.equal(readFileSync(join(d, 'CLAUDE.md'), 'utf8').length, NOTES_SIZE_CAPS['CLAUDE.md'] + 1);
+    const warn = console.warn; console.warn = () => {};
+    try { assert.match(arbiterNotesPrompt({ id: 'w-ab12', name: 'W', notes: d } as never, `${d}/workspaces/w-ab12`), /Size warning: CLAUDE\.md .*; access\.md .*\. Shorten them before you add anything\./); } finally { console.warn = warn; }
+  } finally { rmSync(d, { recursive: true, force: true }); }
 });

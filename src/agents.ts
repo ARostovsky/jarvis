@@ -1476,7 +1476,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (meta.notes && a.id === ARBITER) ensureOwnNotes();
     const notes = !meta.notes ? '' : a.id === ARBITER
       ? arbiterNotesPrompt(meta as WorkspaceMeta & { notes: string }, wsDir)
-      : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Do not run git there: Jarvis commits the changes. Each workspace keeps its own files in ${meta.notes}/workspaces/<id>/; do not edit them.`;
+      : `\nProject notes: ${meta.notes}. Edit them only when your task asks for it. Always use absolute paths there, also in Bash commands. Read only the sections your task names, not all notes. Never paste long text into README.md, CLAUDE.md, access.md or decisions.md: long material goes to a file under the notes folder. Do not run git there: Jarvis commits the changes. Each workspace keeps its own files in ${meta.notes}/workspaces/<id>/; do not edit them.`;
     const prompt = (a.id === ARBITER ? ARBITER_PROMPT + project : team ? `${LEAD_PROMPT}\n${BOARD_PROMPT}` : BOARD_PROMPT) + notes + (a.id === ARBITER ? jobsPrompt(meta.notes) + openItemsPrompt(meta.notes) : '');
     return {
       ...(meta.notes ? { additionalDirectories: [meta.notes] } : {}),
