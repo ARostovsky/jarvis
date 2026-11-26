@@ -456,6 +456,8 @@ During the snapshot replay `replaying` is true, so pulses are not animated. `rea
 | `JARVIS_VOICE_MAX_S` | `60` | Recording cap in seconds; capture stops, the samples stay for `/voice/stop` |
 | `JARVIS_VOICE_LEASE_S` | `4` | A recording whose `/voice/level` is not polled for this long is killed and discarded |
 | `JARVIS_VOICE_CAPTURE_CMD` | `pw-record ...` | Tests only: whole capture command (`node e2e/fake-capture.ts`); it must write raw 16 kHz mono s16le to stdout. Its executable is the one the preflight looks for |
+| `JARVIS_VOICE_MUTE_OUTPUT` | `1` | `0` turns off the output mute (`createMuter` in `src/voice.ts`: `wpctl get-volume`, then `set-mute @DEFAULT_AUDIO_SINK@ 1` right before the capture child spawns; restore on child close, failed start and the `exit` hook, only if Jarvis did the muting) |
+| `JARVIS_VOICE_MUTE_CMD` | `wpctl` | Tests only: command prefix standing in for `wpctl` (`node e2e/fake-mute.ts <statefile>`: state file plus `<statefile>.log` of every `set-mute`) |
 | `JARVIS_VOICE_CMD` | unset | Tests only: whole spawn command of the sidecar, skips the Python preflight (`node e2e/fake-voice.ts`) |
 | `JARVIS_JOBS` | `1` | `0` turns off the Jobs panel: nothing is polled or spawned, `watch_jobs` fails, the arbiter gets no jobs tools or prompt text |
 | `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text (no source, no watcher) |

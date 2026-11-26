@@ -168,6 +168,7 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_VOICE_AUTOSEND` | `1` | On release the transcript is sent at once to the agent that was selected when recording started (like a Telegram voice message); your draft stays untouched. `0` inserts it into the input box instead, without sending |
 | `JARVIS_VOICE_MAX_S` | `60` | Seconds after which the server stops a recording by itself (the audio so far is still transcribed on release) |
 | `JARVIS_VOICE_LEASE_S` | `4` | Seconds without a level poll from the page after which the server discards a recording and closes the microphone |
+| `JARVIS_VOICE_MUTE_OUTPUT` | `1` | `0` keeps the speakers on while recording. By default Jarvis mutes the default output with `wpctl set-mute @DEFAULT_AUDIO_SINK@ 1` while it records, so sound from speakers does not bleed into the microphone, and unmutes it when the recording ends for any reason (stop, cancel, error, lease, exit). An output you had muted before stays muted. Without `wpctl` it logs one line and does nothing. If Jarvis is killed with SIGKILL during a recording the output stays muted: `wpctl set-mute @DEFAULT_AUDIO_SINK@ 0` |
 | `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Python with `faster-whisper` for the voice sidecar |
 | `JARVIS_VOICE_MODEL` | `large-v3` | Whisper model of the sidecar |
 | `JARVIS_VOICE_LANGS` | `en,ru` | Languages the sidecar picks from |

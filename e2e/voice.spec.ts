@@ -1,6 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { PORT as MAIN_PORT } from '../playwright.config.ts';
 import { test, expect, open, uniq, tmp, tab, type Page } from './helpers.ts';
@@ -609,5 +609,32 @@ test.describe('voice off', () => {
     expect(reqs).toEqual([]);
     for (const path of ['/voice/start', '/voice/stop', '/voice/cancel', '/voice/level']) expect((await page.request.post(path, { headers: { origin: MAIN, 'content-type': 'application/json' }, data: {} })).status()).toBe(404);
     expect((await page.request.post('/voice/level', { headers: { origin: MAIN, 'content-type': 'application/json' }, data: {} })).status()).toBe(404);
+  });
+});
+
+test.describe('voice mutes the output while recording', () => {
+  const P = MAIN_PORT + 1006, U = `http://127.0.0.1:${P}`;
+  const sink = join(tmp('voicemute'), 'sink');
+  const muted = () => existsSync(sink) && readFileSync(sink, 'utf8') === '1';
+  let srv: ChildProcess;
+  test.beforeAll(async () => {
+    srv = start(P, { JARVIS_VOICE_MUTE_CMD: `${process.execPath} ${join(import.meta.dirname, 'fake-mute.ts')} ${sink}` });
+    await expect.poll(() => fetch(`${U}/workspaces`).then((r) => r.json()).then((b) => b.voice, () => false), { timeout: 15_000 }).toBe(true);
+  });
+  test.afterAll(async () => { const exit = once(srv, 'exit'); srv.kill(); await exit; });
+  test.use({ baseURL: U });
+
+  test('muted from the start of the recording, restored by stop, tap and Esc', async ({ page }) => {
+    const name = uniq('vmute');
+    expect((await page.request.post('/workspaces', { headers: { origin: U }, data: { name } })).ok()).toBe(true);
+    await open(page, name);
+    await page.locator('#core').click({ force: true });
+    await page.focus('#dinput');
+    const hold = async (ms: number) => { await page.keyboard.down('Alt'); await page.keyboard.down('KeyV'); await expect(page.locator('#mic')).toHaveClass('rec'); expect(muted()).toBe(true); await page.waitForTimeout(ms); };
+    const release = async () => { await page.keyboard.up('KeyV'); await page.keyboard.up('Alt'); await expect(page.locator('#mic')).not.toHaveClass(/rec|busy/); await expect.poll(muted).toBe(false); };
+    await hold(0); await release(); // tap
+    await hold(600); await page.keyboard.press('Escape'); await release(); // Esc
+    await hold(600); await release(); // stop
+    expect(readFileSync(`${sink}.log`, 'utf8').trim().split('\n')).toEqual(['1', '0', '1', '0', '1', '0']);
   });
 });

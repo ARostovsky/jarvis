@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { join } from 'node:path';
 import { mkdtempSync, readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { createSidecar, createRecorder, withDebugDump } from '../src/voice.ts';
+import { createSidecar, createRecorder, createMuter, withDebugDump } from '../src/voice.ts';
 
 const stub = join(import.meta.dirname, '..', 'e2e', 'fake-voice.ts');
 const mk = (idleMs = 60_000) => createSidecar(process.execPath, [stub], idleMs);
@@ -247,4 +247,48 @@ test('debug dump: private modes, and a symlink at last.wav is replaced, not writ
   const fresh = join(mkdtempSync(join(tmpdir(), 'jv-dump-')), 'new');
   await withDebugDump(async () => 'x', fresh)(Buffer.alloc(2));
   assert.equal(statSync(fresh).mode & 0o777, 0o700);
+});
+
+// Output mute: the stub keeps the sink state in a file and logs every set-mute.
+const mutedRec = (mode = 'tone', premuted = false) => {
+  const file = join(mkdtempSync(join(tmpdir(), 'jv-mute-')), 'sink');
+  if (premuted) writeFileSync(file, '1');
+  const muter = createMuter([process.execPath, join(import.meta.dirname, '..', 'e2e', 'fake-mute.ts'), file]);
+  const r = createRecorder([process.execPath, capture, mode], { muter });
+  return { r, muted: () => existsSync(file) && readFileSync(file, 'utf8') === '1', log: () => existsSync(`${file}.log`) ? readFileSync(`${file}.log`, 'utf8').trim().split('\n') : [] };
+};
+
+test('mute: the output is muted while recording and restored by stop', async () => {
+  const { r, muted, log } = mutedRec();
+  const id = await r.start();
+  assert.equal(muted(), true);
+  await r.stop(id);
+  assert.equal(muted(), false);
+  assert.deepEqual(log(), ['1', '0']);
+});
+
+test('mute: cancel (tap and Esc end here) restores', async () => {
+  const { r, muted } = mutedRec();
+  r.cancel(await r.start());
+  await sleep(100);
+  assert.equal(muted(), false);
+});
+
+test('mute: a failed start restores', async () => {
+  const { r, muted, log } = mutedRec('exit');
+  await assert.rejects(r.start(), /exited/);
+  assert.equal(muted(), false);
+  assert.deepEqual(log(), ['1', '0']);
+});
+
+test('mute: a sink the user muted stays muted', async () => {
+  const { r, muted, log } = mutedRec('tone', true);
+  await r.stop(await r.start());
+  assert.equal(muted(), true);
+  assert.deepEqual(log(), []);
+});
+
+test('mute: restore is idempotent and a missing command never throws', () => {
+  const m = createMuter(['/nonexistent/wpctl']);
+  m.engage(); m.restore(); m.restore();
 });
