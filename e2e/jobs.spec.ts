@@ -187,6 +187,26 @@ test('providers dialog: Approve again of a changed provider works with one click
   await expect.poll(async () => (await p.info(page)).status).toBe('approved');
 });
 
+test('providers dialog: a changed provider with files, screenshot and a long status keeps its name and status line readable', async ({ page }) => {
+  const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==', 'base64');
+  const p = await setup(page);
+  const m = JSON.parse(readFileSync(join(p.dir, 'manifest.json'), 'utf8'));
+  writeFileSync(join(p.dir, 'screenshot.png'), PNG);
+  writeFileSync(join(p.dir, 'long.ts'), `// ${'x'.repeat(400)}\n`); // an unbreakable wide line in the files view
+  writeFileSync(join(p.dir, 'manifest.json'), JSON.stringify({ ...m, screenshot: 'screenshot.png', description: 'ZenML pipeline runs: state, current step and a long tail of words so the status line needs more than one line of the dialog' }));
+  await expect.poll(async () => (await p.info(page)).status).toBe('changed');
+  await page.setViewportSize({ width: 1480, height: 1880 });
+  await page.goto('/');
+  await page.waitForFunction('typeof openProviders === "function" && es.readyState === 1');
+  await page.evaluate(() => (window as any).openProviders());
+  const row = page.locator('#provList > div', { hasText: p.name });
+  await expect(row.getByRole('button', { name: 'APPROVE AGAIN' })).toBeEnabled(); // the files are shown
+  if (process.env.SHOT_DIR) await page.locator('#providers').screenshot({ path: `${process.env.SHOT_DIR}/providers-changed.png` });
+  const b = (await row.locator('small').boundingBox())!;
+  expect(b.width).toBeGreaterThan(200);
+  expect(b.height).toBeLessThan(150); // a few lines (about 7 in the 640px dialog), not one character per line
+});
+
 test('editing an installed provider file asks for approval again and stops polling until then', async ({ page }) => {
   const p = await setup(page);
   p.set('c1', { state: 'running' });

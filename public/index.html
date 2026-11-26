@@ -291,8 +291,9 @@
   .ask.prov .pf { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } .ask.prov .pf button { margin: 0; padding: 2px 8px; font-size: 12px; letter-spacing: 0; }
   .ask.prov input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; margin: 6px 0; }
   #providers { border-color: var(--cyan); min-width: 480px; }
-  #provList > div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-  #provList .pi { flex: 1; min-width: 0; } #provList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
+  #provList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #provList pre { flex: 1 1 100%; order: 1; min-width: 0; margin: 0; } /* the files view takes its own line under the row; as a plain flex item its text width squeezed the name and status to zero */
+  #provList .pi { flex: 1 1 200px; min-width: 0; } #provList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
   #provDetails { border-color: var(--cyan); min-width: 480px; max-width: min(720px, 94vw); }
   #pdBody small { display: block; opacity: .7; margin-top: 8px; } #pdBody div { overflow-wrap: anywhere; } #pdBody pre { max-height: 40vh; overflow: auto; margin: 4px 0; }
   #pdBody .pd-shot img { max-width: 100%; max-height: 40vh; display: block; border: 1px solid var(--line); margin-top: 4px; }
