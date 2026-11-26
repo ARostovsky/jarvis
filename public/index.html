@@ -80,6 +80,12 @@
   #pgrip:hover, #pgrip.dragging, #pgripR:hover, #pgripR.dragging { background: linear-gradient(90deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
   #pgripT:hover, #pgripT.dragging, #pgripB:hover, #pgripB.dragging { background: linear-gradient(180deg, transparent 4px, var(--cyan) 4px, var(--cyan) 6px, transparent 6px); }
   #panel header button { cursor: pointer; }
+  /* cross buttons: the cross is two rotated bars centred in the box, so font metrics, letter-spacing and padding cannot shift it; the glyph text stays for copy and tests */
+  .xg { position: relative; font-size: 0; letter-spacing: 0; color: var(--text); }
+  .xg::before, .xg::after { content: ''; position: absolute; left: 50%; top: 50%; width: 12px; height: 2px; margin: -1px 0 0 -6px; background: currentColor; transform: rotate(45deg); }
+  .xg::after { transform: rotate(-45deg); }
+  #pclose { width: 32px; height: 32px; padding: 0; border-left: 0; box-shadow: inset 1px 0 var(--line); color: var(--cyan); } /* the divider is a shadow so it does not shift the centre of the box */
+  #toast #toastClose { flex: none; width: 28px; height: 28px; padding: 0; }
   #panel header { cursor: move; padding: 12px 16px; border-bottom: 1px solid var(--line); display: flex; gap: 8px; align-items: center; }
   #panel h2 { margin: 0; font-size: 20px; letter-spacing: .1em; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #pmeta { font-size: 12px; letter-spacing: .1em; color: var(--cyan-dim); }
@@ -248,7 +254,7 @@
   .jr .lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
   .jr .prov { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
   .jr .dur { flex: none; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; opacity: .85; }
-  .jr .x { flex: none; position: absolute; right: 0; top: 2px; bottom: 2px; min-width: 30px; margin: 0; padding: 0 6px; color: var(--text); opacity: .5; font-size: 16px; line-height: 1; border-left: 0; } /* the plate spans the row like the status bar (same 2px inset) */
+  .jr .x { flex: none; position: absolute; right: 0; top: 2px; bottom: 2px; min-width: 30px; margin: 0; padding: 0; opacity: .5; border-left: 0; } /* the plate spans the row like the status bar (same 2px inset) */
   .jr:has(> .l1 > .x) .l1, .jr:has(> .l1 > .x) .l2 { padding-right: 34px; } /* narrow: the plate is pinned to the row's right edge, full height */
   .jr .x:hover, .jr .x:focus-visible { opacity: 1; background: rgba(255, 90, 90, .16); box-shadow: inset 0 0 0 1px var(--red); }
   .jr:not(:hover):not(:focus-within) .x:not(:hover) { opacity: .35; }
@@ -333,7 +339,7 @@
 
 <div id="asks"></div>
 <div id="note" role="status"></div>
-<div id="toast" role="alert"><span id="toastText"></span><button id="toastClose" aria-label="Dismiss error">×</button></div>
+<div id="toast" role="alert"><span id="toastText"></span><button id="toastClose" class="xg" aria-label="Dismiss error">×</button></div>
 <dialog id="newws">
   <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
   <form method="dialog" id="newwsForm">
@@ -374,7 +380,7 @@
 
 <aside id="panel">
   <div id="pgrip" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripT" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripB" class="grip" title="Drag to resize · double-click to reset"></div><div id="pgripR" class="grip" title="Drag to resize · double-click to reset"></div>
-  <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="preset" title="Fresh session from the notes and a short summary">RESET</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" aria-label="Close">✕</button></header>
+  <header title="Drag to move · double-click to reset"><div style="flex:1;min-width:0"><h2 id="ptitle"></h2><div id="pmeta"></div></div><button id="pview" title="What to show in the log">VIEW</button><button id="pcompact" title="Summarize the conversation to free context (/compact)">COMPACT</button><button id="preset" title="Fresh session from the notes and a short summary">RESET</button><button id="pstop">STOP</button><button id="pdelete" class="danger">DELETE</button><button id="pclose" class="xg" aria-label="Close">✕</button></header>
   <div id="viewMenu"></div>
   <div id="panels" hidden></div>
   <div id="log"></div>
@@ -1747,7 +1753,7 @@ function jobRow(r, o) {
   if (Date.parse(r.startedAt) && (!end || Date.parse(r.finishedAt))) {
     const d = h('span', 'dur'); d.dataset.s = r.startedAt; if (end) d.dataset.f = r.finishedAt; tickDur(d); l1.append(d);
   }
-  if (end) { const x = h('button', 'x', '×'); x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.label || r.id}`); x.dataset.fk = `x:${o.key}`; x.onclick = () => o.act('unwatch', { ids: [r.id], provider: r.provider }); l1.append(x); }
+  if (end) { const x = h('button', 'x xg', '×'); x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.label || r.id}`); x.dataset.fk = `x:${o.key}`; x.onclick = () => o.act('unwatch', { ids: [r.id], provider: r.provider }); l1.append(x); }
   const l2 = h('div', 'l2');
   if (r.label) l2.append(idEl);
   if (r.step) l2.append(h('span', 'step', r.step));
