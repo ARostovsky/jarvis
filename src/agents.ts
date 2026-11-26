@@ -813,12 +813,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   async function pump(a: Agent, q: Query, s: Session) {
-    // total_cost_usd counts from the start of this SDK session; earlier sessions (before a resume) are in the base.
-    const base = a.costUsd;
+    // total_cost_usd is cumulative per SDK session, and a resumed session continues from the total its transcript saved, so earlier spend is already in it.
+    // Only a fresh session (no resume id, e.g. after a reset) starts at 0: then the spend so far is the base.
+    const base = a.sessionId ? 0 : a.costUsd;
     const current = () => !sessions.has(a.id) || sessions.get(a.id) === s; // false once kill() made room for a newer session: this pump must not touch its state
     let resetPhase = 'none' as ResetPhase, forced = false, ctx = 0, floor = 0, floorSet = false, blocked = false; // ctx: size of the last top-level call; floor: size of a reset session's first turn
     let apiError: string | undefined, ttft = 0, ttftFrom = 0, userAt = 0; // health dot: the SDK's error of this turn (the text of an 'unknown' one), the longest wait for a first token, and the send or tool result it was measured from
-    let ctxAlerted = false, budgetAlerted = base >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
+    let ctxAlerted = false, budgetAlerted = a.costUsd >= BUDGET_ALERT_USD; // a resumed agent over budget was already alerted
     const bash = new Map<string, () => void>(); // Bash calls in flight that may change notes: tool_use id -> claims the notes files the call changed; key '' is a sub-agent's whole turn
     // One quiet second after an arbiter result (no push, no message from the SDK): nothing is running, so it is safe to ask for the notes or reset.
     const settleCheck = () => {
@@ -914,7 +915,9 @@ export function createWorkspace(meta: WorkspaceMeta) {
           ttft = 0;
           s.interrupting = false;
           clearTimeout(s.timer);
-          const spent = base + m.total_cost_usd - a.costUsd;
+          const raw = base + m.total_cost_usd - a.costUsd;
+          if (raw < 0) console.warn(`agent ${a.id}: total_cost_usd ${m.total_cost_usd} is below the logged cost ${a.costUsd} (base ${base}); costUsd stays`); // a transcript without a saved total restarts at 0
+          const spent = Math.max(0, raw);
           a.costUsd += spent;
           if (!agents.has(a.id)) { // deleted mid-turn: the turn's spend still counts for the workspace
             removedUsd += spent;

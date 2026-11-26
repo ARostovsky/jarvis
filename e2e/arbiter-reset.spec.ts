@@ -1,4 +1,4 @@
-import { spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
 import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -179,6 +179,56 @@ test('after a reset a restart resumes the new session', async ({ page }) => {
     server = await startServer(page, port, data, {});
     await page.request.post(`${server.url}/say`, { headers: { origin: server.url }, data: { ws, text: 'option resume' } });
     await expect.poll(() => logOf(data, ws).some((e) => e.type === 'text' && e.text === `resume="${fresh}"`)).toBe(true);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('a restart resumes the session without counting its earlier cost twice, a reset keeps it as the base', async ({ page }) => {
+  const data = tmp('rstcost'), port = MAIN_PORT + 1100;
+  let server = await startServer(page, port, data, {});
+  try {
+    const headers = { origin: server.url };
+    const ws = (await (await page.request.post(`${server.url}/workspaces`, { headers, data: { name: uniq('rstcost') } })).json()).id;
+    const costs = () => logOf(data, ws).filter((e) => e.type === 'result' && e.agentId === 'arbiter').map((e) => e.costUsd);
+    await page.request.post(`${server.url}/say`, { headers, data: { ws, text: 'cost 2\nsay one' } });
+    await expect.poll(() => costs().at(-1)).toBe(2);
+    await server.stop();
+    server = await startServer(page, port, data, {});
+    await page.request.post(`${server.url}/say`, { headers: { origin: server.url }, data: { ws, text: 'say two' } }); // the resumed session reports its saved total, 2
+    await expect.poll(() => costs().length).toBe(2);
+    expect(costs().at(-1)).toBe(2);
+    await page.request.post(`${server.url}/say`, { headers: { origin: server.url }, data: { ws, text: 'usage 210000\nsay three' } });
+    await expect.poll(() => logOf(data, ws).some((e) => e.type === 'text' && e.text?.includes('[context reset]')), { timeout: 15_000 }).toBe(true);
+    await page.request.post(`${server.url}/say`, { headers: { origin: server.url }, data: { ws, text: 'cost 0.5\nsay four' } }); // the fresh session starts at 0: its spend is added to the base
+    await expect.poll(() => costs().at(-1), { timeout: 15_000 }).toBe(2.5);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('an agent over the budget is alerted once, not again after a restart and resume', async ({ page }) => {
+  const data = tmp('rstbudget'), port = MAIN_PORT + 1100, repo = tmp('rstrepo');
+  const g = (...args: string[]) => execFileSync('git', ['-C', repo, ...args], { encoding: 'utf8', stdio: 'pipe' });
+  g('init', '-q');
+  g('-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '--allow-empty', '-m', 'init');
+  let server = await startServer(page, port, data, {});
+  try {
+    const headers = { origin: server.url };
+    const ws = (await (await page.request.post(`${server.url}/workspaces`, { headers, data: { name: uniq('rstbudget'), project: repo } })).json()).id;
+    const task = 'cost 11\nsay big done';
+    await page.request.post(`${server.url}/say`, { headers, data: { ws, text: `tool mcp__jarvis__spawn_agent ${JSON.stringify({ name: 'big', task })}` } });
+    const alerts = () => logOf(data, ws).filter((e) => e.type === 'routed' && /^\[agent \S+ cost \$11\.00, over \$10\]/.test(e.text ?? ''));
+    const results = () => logOf(data, ws).filter((e) => e.type === 'result' && e.agentId !== 'arbiter');
+    await expect.poll(() => alerts().length).toBe(1);
+    const id = results()[0].agentId;
+    await server.stop();
+    server = await startServer(page, port, data, {});
+    await page.request.post(`${server.url}/say`, { headers: { origin: server.url }, data: { ws, text: `tool mcp__jarvis__send_to_agent ${JSON.stringify({ id, message: 'say again' })}` } });
+    await expect.poll(() => results().length, { timeout: 15_000 }).toBe(2);
+    await new Promise((r) => setTimeout(r, 1000));
+    expect(results().at(-1).costUsd).toBe(11);
+    expect(alerts()).toHaveLength(1);
   } finally {
     await server.stop();
   }

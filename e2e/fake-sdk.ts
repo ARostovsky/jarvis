@@ -19,7 +19,7 @@
 //   savedelay <ms> [fold]   later turns that carry the server's save-notes request last <ms> (with fold, sends that arrive meanwhile run inside it)
 //   savefail <subtype>      later turns that carry the server's save-notes request end with this error result (savefail off clears it)
 //   resetusage <tokens>     the turn on a reset seed starts with this many tokens; shared by all sessions of the process, 0 switches it off
-//   cost <usd>              the result reports this total_cost_usd
+//   cost <usd>              the result reports this total_cost_usd; a resumed session starts from the total saved for its id (a file in XDG_DATA_HOME, so a test's data dir holds it)
 //   fail <subtype>          ends the turn with an error result, e.g. fail error_during_execution; the session lives on
 //   apierror <code> [text]  an assistant message with this error code (e.g. authentication_failed, unknown) and text, then an is_error result with that text, as the CLI ends a failed API call
 //   apithrow <code>         an assistant message with this error code, then the query throws an unclassifiable error (no result), as the CLI does for an invalid API key
@@ -33,9 +33,10 @@
 // Messages come in the real SDK's order: system init, then per tool an assistant tool_use, the tool runs, a user tool_result; then the result.
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import type { query as sdkQuery, Query, SDKAssistantMessage, SDKMessage, SDKPartialAssistantMessage, SDKResultError, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
@@ -52,6 +53,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   if (typeof prompt === 'string') throw new Error('fake sdk: only streaming input, as the server uses');
   const inbox = prompt;
   const session_id = options.resume ?? randomUUID();
+  const totalFile = join(process.env.XDG_DATA_HOME || tmpdir(), `fake-sdk-total-${session_id}`); // the real SDK keeps the total in the transcript
   const cwd = options.cwd ?? process.cwd();
   // The real SDK rejects with this when its abortController fires (stop, archive).
   const aborted = new Promise<never>((_, reject) => {
@@ -66,7 +68,7 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
   let interrupted = false, inTurn = false, wake = () => {};
   let woken = Promise.resolve();
   let n = 0;
-  let windowSize = 200_000, tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = 0;
+  let windowSize = 200_000, tokens = 0, lastUsage = 0, usageTokens = 0, costUsd = Number(existsSync(totalFile) ? readFileSync(totalFile, 'utf8') : 0);
   const base = { session_id, parent_tool_use_id: null };
   const assistant = (content: Assistant['content']): SDKAssistantMessage =>
     ({ ...base, uuid: randomUUID(), type: 'assistant', message: { id: `msg_fake_${++n}`, type: 'message', role: 'assistant', model: 'claude-fake', content, stop_reason: null, stop_sequence: null, container: null, context_management: null, diagnostics: null, stop_details: null, usage: { input_tokens: usageTokens } as Usage } });
@@ -188,6 +190,8 @@ export const query: typeof sdkQuery = ({ prompt, options = {} }) => {
         windowSize = Number(rest);
       } else if (cmd === 'cost') {
         costUsd = Number(rest);
+        mkdirSync(dirname(totalFile), { recursive: true });
+        writeFileSync(totalFile, String(costUsd));
       } else if (cmd === 'slowinterrupt') {
         interruptDelay = Number(rest);
       } else if (cmd === 'pace') {
