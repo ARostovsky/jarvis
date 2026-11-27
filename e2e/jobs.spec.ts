@@ -53,7 +53,7 @@ test('propose_job_source shows the card, Approve installs it and the arbiter is 
   await page.getByRole('button', { name: 'Settings' }).click();
   await page.getByRole('menuitem', { name: 'Job sources…' }).click();
   await expect(page.locator('#jobSourceList')).toContainText(`${draft.name}`); // pending proposals are listed in the dialog
-  await page.locator('#job-sources').getByRole('button', { name: 'CLOSE' }).click();
+  await page.locator('#job-sources').getByRole('button', { name: 'Close' }).click();
   await card.getByRole('button', { name: 'Approve', exact: true }).click();
   await expect(card).toHaveCount(0);
   await expect.poll(async () => (await draft.info(page))?.status).toBe('approved');

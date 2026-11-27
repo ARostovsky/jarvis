@@ -158,7 +158,17 @@
   dialog h3 { margin: 0 0 8px; letter-spacing: .15em; color: var(--amber); }
   dialog pre { font-size: 12px; color: #e8d2a8; max-height: 200px; overflow: auto; }
   dialog button { border: 1px solid var(--line); padding: 8px 14px 8px calc(14px + .15em); margin-right: 6px; }
-  dialog > form[method=dialog]:not(#newwsForm) { margin-top: 14px; } /* air between the list or text above and the CLOSE / footer buttons */
+  /* Archived / Job sources / Connections: title bar, intro and actions stay fixed; only the .dlg-list of entries scrolls (its scrollbar spans just the rows) */
+  dialog.dlg[open] { display: flex; flex-direction: column; overflow: hidden; padding: 0; }
+  .dlg-head { flex: none; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 20px 24px 12px; border-bottom: 1px solid var(--line); }
+  .dlg-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow-y: auto; padding: 12px 24px 20px; } /* intro and actions stay put; the overflow is only a fallback for a tall form in a short window */
+  .dlg-list { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+  .dlg-head h3 { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  dialog button.dlg-x { flex: none; margin: 0; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; line-height: 0; color: var(--cyan); border: 1px solid var(--cyan); background: rgba(79, 216, 255, .08); }
+  .dlg-x svg { position: static; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; pointer-events: none; }
+  .dlg-x:focus-visible { outline: 1px solid var(--cyan); outline-offset: 2px; }
+  .dlg-x:hover { background: rgba(79, 216, 255, .22); } .dlg-x:active { background: rgba(79, 216, 255, .42); }
+  dialog form[method=dialog]:not(#newwsForm) { margin-top: 14px; } /* air between the list or text above and the CLOSE / footer buttons */
   #toast { position: fixed; top: 48px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--red); color: #ffd0d0; padding: 10px 16px; font-size: 14px; max-width: 60vw; display: none; user-select: text; z-index: 5; }
   #toast.show { display: flex; gap: 12px; align-items: flex-start; }
   #note { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--panel); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; display: none; pointer-events: none; z-index: 5; }
@@ -209,7 +219,7 @@
   #newws li.on { background: rgba(79, 216, 255, .12); border-left-color: var(--cyan); }
   #newws li[aria-selected=true] { color: var(--cyan); }
   #newws li[aria-selected=true]::after { content: ' \2713'; font-size: 12px; }
-  #archived { border-color: var(--cyan); min-width: 480px; }
+  #archived { border-color: var(--cyan); min-width: min(480px, 94vw); }
   #archivedList div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #archivedList span { flex: 1; }
   #archivedList small { color: var(--cyan-dim); display: block; }
@@ -340,7 +350,7 @@
   .ask.job-source .warn { color: var(--red); } .ask.job-source small { display: block; opacity: .7; margin: 4px 0; }
   .ask.job-source .pf { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } .ask.job-source .pf button { margin: 0; padding: 2px 8px; font-size: 12px; letter-spacing: 0; }
   .ask.job-source input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; margin: 6px 0; }
-  #job-sources { border-color: var(--cyan); min-width: 480px; }
+  #job-sources { border-color: var(--cyan); min-width: min(480px, 94vw); }
   #jobSourceList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #jobSourceList pre { flex: 1 1 100%; order: 1; min-width: 0; margin: 0; } /* the files view takes its own line under the row; as a plain flex item its text width squeezed the name and status to zero */
   #jobSourceList .pi { flex: 1 1 200px; min-width: 0; } #jobSourceList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
@@ -421,23 +431,27 @@
   <p id="choiceQuestion"></p>
   <form method="dialog" id="choiceButtons"></form>
 </dialog>
-<dialog id="archived">
-  <h3 style="color:var(--cyan)">ARCHIVED WORKSPACES</h3>
+<dialog id="archived" class="dlg">
+  <div class="dlg-head"><h3 style="color:var(--cyan)">ARCHIVED WORKSPACES</h3><button type="button" class="dlg-x" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div class="dlg-body">
   <p style="font-size:13px;opacity:.8">Restoring brings back the graph, logs and conversations, and re-creates agent worktrees from their jarvis/&lt;id&gt; branches.</p>
-  <div id="archivedList"></div>
-  <form method="dialog"><button value="">CLOSE</button></form>
+  <div id="archivedList" class="dlg-list"></div>
+  </div>
 </dialog>
 
-<dialog id="job-sources">
-  <h3 id="jobSourceTitle" style="color:var(--cyan)">JOB SOURCES</h3>
-  <div id="jobSourceList"></div>
-  <form method="dialog"><button id="jobSourceSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
+<dialog id="job-sources" class="dlg">
+  <div class="dlg-head"><h3 id="jobSourceTitle" style="color:var(--cyan)">JOB SOURCES</h3><button type="button" class="dlg-x" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div class="dlg-body">
+  <div id="jobSourceList" class="dlg-list"></div>
+  <form method="dialog"><button id="jobSourceSave" value="ok" hidden>SAVE</button></form>
+  </div>
 </dialog>
 
-<dialog id="connections">
-  <h3 style="color:var(--cyan)">CONNECTIONS</h3>
+<dialog id="connections" class="dlg">
+  <div class="dlg-head"><h3 style="color:var(--cyan)">CONNECTIONS</h3><button type="button" class="dlg-x" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <div class="dlg-body">
   <p class="sub">How agents reach an LLM</p>
-  <div id="connList"></div>
+  <div id="connList" class="dlg-list"></div>
   <form id="connForm" hidden autocomplete="off">
     <label for="cfName">NAME</label><input id="cfName" required maxlength="60" placeholder="Company gateway">
     <label for="cfUrl">BASE URL</label><input id="cfUrl" required placeholder="https://litellm.example.com">
@@ -451,7 +465,8 @@
     <div class="acts"><button type="submit" id="cfSave">SAVE</button><button type="button" id="cfTest">TEST CONNECTION</button><button type="button" id="cfDefault">SET AS DEFAULT</button><button type="button" id="cfDelete" class="danger">DELETE</button><button type="button" id="cfCancel">CANCEL</button></div>
     <p id="connResult" role="status"></p>
   </form>
-  <form method="dialog"><button type="button" id="connAdd">ADD CONNECTION</button><button value="">CLOSE</button></form>
+  <form method="dialog"><button type="button" id="connAdd">ADD CONNECTION</button></form>
+  </div>
 </dialog>
 
 <dialog id="jobSourceDetails">
@@ -1473,6 +1488,7 @@ function toast(text) {
   $('toast').classList.add('show');
 }
 // Error toasts stay until dismissed, so the text can be read and copied.
+document.querySelectorAll('.dlg-x').forEach((b) => { b.onclick = () => b.closest('dialog').close(); });
 $('toastClose').onclick = () => { document.activeElement?.blur(); $('toast').classList.remove('show'); };
 
 // Brief non-blocking status (success); errors use toast().
@@ -1566,7 +1582,7 @@ $('core').oncontextmenu = (ev) => menu(ev, [
 ]);
 $('core').onkeydown = (e) => { if (e.key === 'Enter') select(ARBITER); };
 document.onkeydown = (e) => {
-  if (e.key === 'Escape') $('pclose').onclick();
+  if (e.key === 'Escape') { if (!document.querySelector('dialog[open]')) $('pclose').onclick(); } // an open dialog takes the Esc itself (the browser closes it); the chat behind it stays
   // With the panel closed, Enter or / brings back the arbiter chat.
   else if ((e.key === 'Enter' || e.key === '/') && WS && !selected && !e.target.closest('input, textarea, dialog') && !(e.key === 'Enter' && e.target.closest('button'))) { e.preventDefault(); select(ARBITER); }
 };
