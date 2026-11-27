@@ -1,5 +1,6 @@
 // Web UI server: SSE stream of bus events + JSON POST commands. Loopback only.
 import './local-env.ts';
+import { resolveFlag } from './env-flag.ts';
 import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -19,7 +20,7 @@ function ownPage(req: IncomingMessage): boolean {
   const from = req.headers.origin ?? req.headers.referer; // no fetch metadata (old clients, tests): a sent Origin/Referer must be ours
   return !from || ORIGINS.has(from.replace(/^(https?:\/\/[^/]+).*$/, '$1'));
 }
-// Voice input is opt-in: voice.ts is not even loaded unless JARVIS_VOICE is set. The /voice routes and `voice` in /workspaces appear once its preflight passed (after listen, so a slow preflight never delays the start).
+// Voice input is opt-in: voice.ts is not even loaded unless JARVIS_VOICE is on. The /voice routes and `voice` in /workspaces appear once its preflight passed (after listen, so a slow preflight never delays the start).
 let voice: { maxS: number } | undefined;
 const PAGE = resolve(import.meta.dirname, '..', 'public', 'index.html');
 
@@ -168,7 +169,7 @@ createServer(async (req, res) => {
 
 loadWorkspaces();
 startGuard(() => workspaces.values());
-if (process.env.JARVIS_VOICE) {
+if (resolveFlag('JARVIS_VOICE', 'cpu').enabled) {
   import('./voice.ts').then((m) => m.initVoice()).then((v) => {
     if (!v) return;
     // Same Origin and content-type checks as every POST (the commands table), level included: it renews the lease. One recording at a time; start returns an id that the other calls must pass.
@@ -182,4 +183,4 @@ if (process.env.JARVIS_VOICE) {
   }, (e) => console.error(`voice disabled: ${(e as Error).message}`));
 }
 // Telegram bridge: opt-in like voice, on when JARVIS_TELEGRAM is set (shell or the Jarvis env file). It runs as a child process and dies with Jarvis; a failure is one log line.
-if (process.env.JARVIS_TELEGRAM) startTelegram();
+if (resolveFlag('JARVIS_TELEGRAM').enabled) startTelegram();

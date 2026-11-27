@@ -5,6 +5,7 @@ import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_pro
 import { resolve, delimiter, join } from 'node:path';
 import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { resolveFlag } from './env-flag.ts';
 import { randomUUID } from 'node:crypto';
 
 type Job = { pcm: Buffer; ok: (text: string) => void; fail: (e: Error) => void };
@@ -353,7 +354,7 @@ export type Voice = { maxS: number; start: () => Promise<string>; stop: (id: unk
 
 // Returns the voice backend, or undefined (after one log line) when voice cannot work. Never throws.
 export async function initVoice(): Promise<Voice | undefined> {
-  const mode = process.env.JARVIS_VOICE;
+  const mode = resolveFlag('JARVIS_VOICE', 'cpu').mode;
   const secs = (name: string, dflt: number) => { const n = Number(process.env[name] ?? dflt); return (Number.isFinite(n) && n > 0 ? n : dflt) * 1000; }; // invalid values fall back
   const idleMs = secs('JARVIS_VOICE_IDLE_S', 600), timeoutMs = secs('JARVIS_VOICE_TIMEOUT_S', 120);
   const capture = process.env.JARVIS_VOICE_CAPTURE_CMD?.trim().split(/\s+/).filter(Boolean) ?? CAPTURE;

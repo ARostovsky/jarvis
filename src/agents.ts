@@ -17,6 +17,7 @@ import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry 
 import { createOpenItems, OPEN_ITEMS_PANEL_ID, openItemsFile, type OpenItemsSource } from './openitems.ts';
 import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
 import { voiceVocab } from './voice-vocab.ts';
+import { resolveFlag } from './env-flag.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
 import { claudeTmpDir, removeAgentTmp } from './tmpguard.ts';
 import { hasConnection, resolveConnection, withConnection, deleteConnection, connectionKey } from './connections.ts';
@@ -562,7 +563,7 @@ const ok = (v: unknown) => ({ content: [{ type: 'text' as const, text: typeof v 
 
 const BOARD_TOOLS = ['board_post', 'board_read'].map((t) => `mcp__jarvis__${t}`);
 const NOTES_TOOLS = ['notes_message'].map((t) => `mcp__jarvis__${t}`);
-const VOICE_TOOLS = process.env.JARVIS_VOICE ? ['mcp__jarvis__voice_vocab'] : [];
+const VOICE_TOOLS = resolveFlag('JARVIS_VOICE', 'cpu').enabled ? ['mcp__jarvis__voice_vocab'] : [];
 const INTERCOM_TOOLS = ['list_workspaces', 'tell_workspace', 'create_workspace'].map((t) => `mcp__jarvis__${t}`);
 const TEAM_TOOLS = ['spawn_agent', 'send_to_agent', 'list_agents', 'read_agent', 'stop_agent'].map((t) => `mcp__jarvis__${t}`);
 
@@ -1472,7 +1473,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           const next = createWorkspaceFor(name, task, project);
           return ok(`created workspace ${next.name} (${next.id}) and sent it the task`);
         }),
-      ] : []), ...(owner === ARBITER && process.env.JARVIS_VOICE ? [
+      ] : []), ...(owner === ARBITER && resolveFlag('JARVIS_VOICE', 'cpu').enabled ? [
         tool('voice_vocab', 'Edit the voice dictionary (words added to the speech recognizer prompt). Use it when the user asks to add or remove a word that voice input gets wrong. Write each word exactly as the user spelled it. Applies from the next recording.', {
           action: z.enum(['add', 'remove', 'list']),
           words: z.array(z.string()).optional().describe('words or short phrases, for add and remove'),

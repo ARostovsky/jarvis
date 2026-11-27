@@ -24,7 +24,7 @@ This page is the reference for voice: use, setup, configuration and internals. [
 3. On release the UI posts `/voice/stop`. The server ends the capture and writes the audio to the sidecar as one frame. The sidecar cuts the silence (Silero VAD), runs Whisper and filters likely hallucinations. The server returns `{text}`.
 4. The UI sends the text to the agent that was selected at press time (`POST /send`), or inserts it into the input box (`JARVIS_VOICE_AUTOSEND=0`).
 
-Voice is off unless `JARVIS_VOICE` is set. Then `src/voice.ts` is not even loaded, there are no `/voice` routes and no process. The server calls `listen` first and runs the preflight afterwards, so a slow preflight never delays the start; the mic button appears a moment later (reload the page if it is missing right after a start).
+Voice is off unless `JARVIS_VOICE` is `1` or `cpu` (`0` or unset: off; any other value is reported in the log and ignored, and the next source decides (shell, then env file, then off)). Then `src/voice.ts` is not even loaded, there are no `/voice` routes and no process. The server calls `listen` first and runs the preflight afterwards, so a slow preflight never delays the start; the mic button appears a moment later (reload the page if it is missing right after a start).
 
 The sidecar (`voice/server.py`) starts on the first recording, handles one job at a time and exits after `JARVIS_VOICE_IDLE_S` without work (this frees the VRAM). A crash or a job over `JARVIS_VOICE_TIMEOUT_S` fails that one recording; the next one starts a fresh sidecar. Protocol: on stdin, frames of a 4-byte big-endian length and that many bytes of 16 kHz mono s16le PCM; on stdout, one JSON line per frame (`{"text"}`, `""` meaning no speech, or `{"error"}`); stderr is for logs (never audio or text); EOF on stdin ends it. A frame over 4 MiB (about 131 s) is answered with an error and the sidecar exits.
 
@@ -32,7 +32,7 @@ The sidecar (`voice/server.py`) starts on the first recording, handles one job a
 
 1. Linux with PipeWire and `pw-record` (package `pipewire`, or `pipewire-bin` / `pipewire-utils`). Jarvis records the default input of the sound server: the one `wpctl status` marks with `*` under Sources. A GPU with about 4 GB of free VRAM is needed for the default model; without one use `cpu`.
 2. Run `voice/setup.sh`. It creates `voice/.venv`, installs `faster-whisper`, `numpy` and the CUDA 12 libraries, and downloads `large-v3` (or `$JARVIS_VOICE_MODEL`) and `large-v3-turbo`. This is the only network step; the sidecar never downloads. `npm ci` does not touch `voice/`. To use another Python, set `JARVIS_VOICE_PYTHON` to one that has `faster-whisper`.
-3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces the CPU). To have it on after every restart, put `JARVIS_VOICE=1` on a line in `$XDG_CONFIG_HOME/jarvis/env` (`~/.config/jarvis/env`): Jarvis reads that optional file of `KEY=value` lines at start. A variable in the environment wins over the file. `JARVIS_ENV_FILE` points at another file.
+3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces the CPU). To have it on after every restart, put `JARVIS_VOICE=1` on a line in `$XDG_CONFIG_HOME/jarvis/env` (`~/.config/jarvis/env`): Jarvis reads that optional file of `KEY=value` lines at start. A variable in the shell wins over the file, so `JARVIS_VOICE=0` switches voice off even when the file says `1`. `JARVIS_ENV_FILE` points at another file.
 
 Preflight: `pw-record` must be in `PATH`, and `<python> -I -c "import faster_whisper"` must work (checked once). If a check fails, Jarvis starts as usual, logs one `voice disabled: ...` line to `server.log` (for example `voice disabled: pw-record not found`) and shows no mic button.
 
@@ -77,7 +77,7 @@ Whisper gets a prompt that biases it toward English names and developer terms, w
 
 Whisper keeps only the last 223 prompt tokens (`PROMPT_TOKENS`, estimated by `est_tokens`), so the vocabulary file words are cut from their end to fit.
 
-**By chat.** With voice on, the arbiter has the tool `voice_vocab` (`add`, `remove`, `list`). Tell Jarvis "add the word X to the voice dictionary". It writes the word as you spelled it. `src/voice-vocab.ts` skips a word that is empty, starts with `#`, contains a newline, is over 80 characters, is already there (case-insensitive) or would push the file over 8 KiB; `remove` matches case-insensitively; writes go through a temp file and rename. When the words probably exceed the prompt it returns a warning (a fixed estimate of about 150 tokens, not the exact budget). The tool and a line of the arbiter prompt exist only when `JARVIS_VOICE` is set.
+**By chat.** With voice on, the arbiter has the tool `voice_vocab` (`add`, `remove`, `list`). Tell Jarvis "add the word X to the voice dictionary". It writes the word as you spelled it. `src/voice-vocab.ts` skips a word that is empty, starts with `#`, contains a newline, is over 80 characters, is already there (case-insensitive) or would push the file over 8 KiB; `remove` matches case-insensitively; writes go through a temp file and rename. When the words probably exceed the prompt it returns a warning (a fixed estimate of about 150 tokens, not the exact budget). The tool and a line of the arbiter prompt exist only when `JARVIS_VOICE` is on.
 
 **Echo filter.** `echoes_prompt` in `voice/stt.py` drops a result that equals or nearly equals the prompt, starts like it, or repeats a run of 2 or more of its terms (a prompt under 4 words only when repeated whole). Other filters: segments with a high `no_speech` probability, a low log-probability or a high compression ratio; known subtitle-credit hallucinations ("thanks for watching" and Russian equivalents); and short phrases that are also real speech ("thank you", "спасибо") when they are the whole clip and Whisper doubts them or the voiced part is short. Speech shorter than 0.25 s counts as no speech.
 
@@ -89,7 +89,7 @@ All variables are optional. They can go into the env file (see [Setup](#setup)).
 
 | Variable | Default | What it does |
 |----------|---------|--------------|
-| `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces the CPU. Unset: no route, no process, `voice: false` |
+| `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces the CPU. `0` or unset: no route, no process, `voice: false` |
 | `JARVIS_VOICE_AUTOSEND` | `1` | `0` inserts the transcript into the input box instead of sending it. Reported to the UI as `voiceAutosend` |
 | `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Interpreter for the preflight and the sidecar |
 | `JARVIS_VOICE_MODEL` | `large-v3` | Sidecar model (on the CPU the default is `large-v3-turbo`) |
@@ -134,7 +134,7 @@ Every `/voice` POST has the same Host, Origin and content-type checks as other P
 
 | Path | What it is |
 |------|------------|
-| `src/voice.ts` | Backend, imported by `server.ts` only when `JARVIS_VOICE` is set: `createRecorder` (capture, one recording, ids, cap, lease), `createMuter` (output mute), `createSidecar` (lazy spawn, one job at a time, idle kill, per-job timeout), `withDebugDump`, `initVoice` (preflight and wiring). The capture child also dies when Jarvis exits (`exit` hook, plus `setpriv --pdeathsig TERM` when `/usr/bin/setpriv` exists, which covers SIGKILL) |
+| `src/voice.ts` | Backend, imported by `server.ts` only when `JARVIS_VOICE` is on: `createRecorder` (capture, one recording, ids, cap, lease), `createMuter` (output mute), `createSidecar` (lazy spawn, one job at a time, idle kill, per-job timeout), `withDebugDump`, `initVoice` (preflight and wiring). The capture child also dies when Jarvis exits (`exit` hook, plus `setpriv --pdeathsig TERM` when `/usr/bin/setpriv` exists, which covers SIGKILL) |
 | `src/voice-vocab.ts` | The vocabulary file and its `voice_vocab` rules (pure Node) |
 | `src/server.ts` | Loads `voice.ts`, adds the `/voice` routes and the `voice*` fields of `GET /workspaces` |
 | `src/agents.ts` | The `voice_vocab` MCP tool and the arbiter prompt line, both only with voice on |
