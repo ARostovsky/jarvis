@@ -340,6 +340,21 @@
   #jobSourceList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #jobSourceList pre { flex: 1 1 100%; order: 1; min-width: 0; margin: 0; } /* the files view takes its own line under the row; as a plain flex item its text width squeezed the name and status to zero */
   #jobSourceList .pi { flex: 1 1 200px; min-width: 0; } #jobSourceList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
+  #connections { border-color: var(--cyan); width: min(640px, 94vw); }
+  #connections .sub { margin: -4px 0 10px; font-size: 13px; opacity: .7; }
+  #connList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #connList .cn { flex: 1 1 260px; min-width: 0; overflow-wrap: anywhere; } #connList small { display: block; opacity: .7; }
+  #connList button, #connForm button { margin: 0; padding: 4px 10px; font-size: 13px; letter-spacing: .08em; border: 1px solid var(--line); }
+  #connForm { margin: 12px 0 0; padding: 4px 0 0; border-top: 1px solid var(--cyan-dim); }
+  #connForm label { display: block; margin: 12px 0 4px; font-size: 12px; letter-spacing: .15em; color: #5fa6c2; }
+  #connForm input { width: 100%; height: 36px; border: 1px solid var(--line); padding: 0 10px; background: rgba(79, 216, 255, .03); font-size: 15px; }
+  #connForm input:focus { border-color: var(--cyan); box-shadow: 0 0 0 1px var(--cyan); }
+  #connForm input::placeholder { color: #3d6e84; }
+  #connForm .models { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; } #connForm .models label { margin-top: 0; }
+  #connForm .note { font-size: 12px; opacity: .65; margin: 6px 0 0; }
+  #connForm .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; } #connForm .acts button { padding: 8px 14px; }
+  #connResult { margin: 10px 0 0; min-height: 1.2em; font-size: 13px; overflow-wrap: anywhere; } #connResult.bad { color: var(--red); } #connResult.good { color: var(--cyan); }
+  #via { font-size: 12px; letter-spacing: .12em; color: var(--cyan-dim); cursor: pointer; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; } #via:hover { color: var(--cyan); }
   #jobSourceDetails { border-color: var(--cyan); min-width: 480px; max-width: min(720px, 94vw); }
   #pdBody small { display: block; opacity: .7; margin-top: 8px; } #pdBody div { overflow-wrap: anywhere; } #pdBody pre { max-height: 40vh; overflow: auto; margin: 4px 0; }
   #pdBody .pd-shot img { max-width: 100%; max-height: 40vh; display: block; border: 1px solid var(--line); margin-top: 4px; }
@@ -354,7 +369,7 @@
 <nav id="tabs" aria-label="Workspaces"></nav>
 <div id="empty"><h2>NO WORKSPACES</h2><p>Create a workspace to start.</p><div><button id="emptyNew">NEW WORKSPACE</button><button id="emptyArchive" hidden>ARCHIVE</button></div></div>
 <div id="menu" role="menu"></div>
-<div id="status"><div id="conn">LINK…</div><a id="health" href="https://status.claude.com" target="_blank" rel="noopener" aria-label="Claude health" title="Claude health: checking…"></a></div>
+<div id="status"><div id="conn">LINK…</div><div id="via" role="button" tabindex="0" title="Connection of this workspace: click to change"></div><a id="health" href="https://status.claude.com" target="_blank" rel="noopener" aria-label="Claude health" title="Claude health: checking…"></a></div>
 <div id="hint">DRAG TO PAN · WHEEL TO ZOOM · DOUBLE-CLICK TO RESET</div>
 <svg id="view" viewBox="-600 -400 1200 800" preserveAspectRatio="xMidYMid meet" aria-label="Agent graph">
   <defs>
@@ -391,6 +406,7 @@
       <div><label for="wsModelBtn">JARVIS MODEL</label><div class="dd"><select id="wsModel" hidden><option value="">default (sonnet)</option><option>opus</option><option>sonnet</option><option>haiku</option></select><button type="button" class="ddb" id="wsModelBtn"></button><ul hidden></ul></div></div>
       <div><label for="wsEffortBtn">JARVIS EFFORT</label><div class="dd"><select id="wsEffort" hidden><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select><button type="button" class="ddb" id="wsEffortBtn"></button><ul hidden></ul></div></div>
     </div>
+    <div><label for="wsConnBtn">CONNECTION<span class="hint">how agents reach an LLM</span></label><div class="dd"><select id="wsConn" hidden><option value="">Anthropic login (default)</option></select><button type="button" class="ddb" id="wsConnBtn"></button><ul hidden></ul></div></div>
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
   </form>
 </dialog>
@@ -413,6 +429,26 @@
   <form method="dialog"><button id="jobSourceSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
 </dialog>
 
+<dialog id="connections">
+  <h3 style="color:var(--cyan)">CONNECTIONS</h3>
+  <p class="sub">How agents reach an LLM</p>
+  <div id="connList"></div>
+  <form id="connForm" hidden autocomplete="off">
+    <label for="cfName">NAME</label><input id="cfName" required maxlength="60" placeholder="Company gateway">
+    <label for="cfUrl">BASE URL</label><input id="cfUrl" required placeholder="https://litellm.example.com">
+    <label for="cfKey">API KEY (REQUIRED)</label><input id="cfKey" type="password" autocomplete="new-password" spellcheck="false">
+    <div class="models">
+      <div><label for="cfHaiku">MODEL FOR HAIKU</label><input id="cfHaiku" placeholder="claude-haiku-4-5"></div>
+      <div><label for="cfSonnet">MODEL FOR SONNET</label><input id="cfSonnet" placeholder="claude-sonnet-4-5"></div>
+      <div><label for="cfOpus">MODEL FOR OPUS</label><input id="cfOpus" placeholder="claude-opus-4-1"></div>
+    </div>
+    <p class="note">Name the model the gateway serves for each alias. Claude Code officially supports only Claude-named models through a gateway; other names may work, with no guarantee.</p>
+    <div class="acts"><button type="submit" id="cfSave">SAVE</button><button type="button" id="cfTest">TEST CONNECTION</button><button type="button" id="cfDefault">SET AS DEFAULT</button><button type="button" id="cfDelete" class="danger">DELETE</button><button type="button" id="cfCancel">CANCEL</button></div>
+    <p id="connResult" role="status"></p>
+  </form>
+  <form method="dialog"><button type="button" id="connAdd">ADD CONNECTION</button><button value="">CLOSE</button></form>
+</dialog>
+
 <dialog id="jobSourceDetails">
   <h3 id="pdTitle" style="color:var(--cyan)"></h3>
   <div id="pdBody"></div>
@@ -433,6 +469,8 @@
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
 const wsJobSources = new Map(); // workspace id -> its job source allow-list (empty or unset = all approved)
 const wsNames = new Map(); // workspace id -> name, for messages between workspaces
+const wsConn = new Map(); // workspace id -> its own connection id (none = the default)
+let connList = { default: null, connections: [] }; // from /connections; the API never sends a key
 const wsNotes = new Map(); // workspace id -> notes folder, for the RESET warning
 const wsLive = new Set(); // workspaces whose arbiter has a live session: only then RESET asks it to save first
 const who = (id) => (id === ARBITER ? 'jarvis' : wsNames.get(id) ?? id);
@@ -718,6 +756,7 @@ function renderTitle() {
   const cfg = [modelLabel(a.agent), a.agent.effort ?? 'medium'].filter(Boolean).join(' · ');
   const own = a.agent.costUsd ?? 0, total = subtreeCost(selected);
   $('ptitle').textContent = name;
+  renderVia();
   $('ptitle').title = `${cfg}\n$${own.toFixed(3)} own${total > own ? `, $${total.toFixed(3)} with sub-agents` : ''}`;
   const ctx = a.agent.context;
   $('pmeta').textContent = `${cfg} · $${own.toFixed(2)}${total > own + 0.0005 ? ` (Σ $${total.toFixed(2)})` : ''}${ctx ? ` · ctx ${kTok(ctx.tokens)}/${kTok(ctx.max)} (${ctxPct(a.agent)}%)` : ''}`;
@@ -1081,14 +1120,16 @@ async function refreshTabs() {
   try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
   $('mic').hidden = !voice;
   if (Date.now() - jobSrcAt > 30000) loadJobSources(); // the server hashes every job source folder per call: not on each 2 s poll
-  wsNames.clear(); wsJobSources.clear();
+  wsNames.clear(); wsJobSources.clear(); wsConn.clear();
   wsNotes.clear(); wsLive.clear();
-  list.forEach((w) => (wsNames.set(w.id, w.name), w.jobSources?.length && wsJobSources.set(w.id, w.jobSources), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
+  list.forEach((w) => (wsNames.set(w.id, w.name), w.jobSources?.length && wsJobSources.set(w.id, w.jobSources), w.connectionId && wsConn.set(w.id, w.connectionId), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
   renderTitle();
+  renderVia(); // the label of the open workspace, also at load before the first connections answer
   renderArchived(archived);
   if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
     if (WS) $('pclose').onclick();
     WS = null;
+    renderVia();
     es?.close();
     es = null;
   } else {
@@ -1133,12 +1174,14 @@ async function refreshTabs() {
     b.oncontextmenu = (ev) => menu(ev, [
       ['Rename', () => renameWs(w)],
       ['Notes folder…', () => notesWs(w)],
+      ['Connection…', () => connectionWs(w.id)],
       ...(jobSrcList.length ? [['Job sources…', () => openJobSources(w)]] : []),
       ['Stop all agents', () => stopAllWs(w.id)],
       ['Archive workspace', () => archiveWs(w), true],
     ]);
     return b;
   }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
+  Object.assign(document.createElement('button'), { textContent: 'CONNECTIONS', title: 'How agents reach an LLM', onclick: openConnections }),
   ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []),
   ...(jobSrcList.length || pendingProps().length ? [Object.assign(document.createElement('button'), { textContent: `JOB SOURCES${pendingProps().length ? ` (${pendingProps().length})` : ''}`, title: pendingProps().length ? `Job sources, ${pendingProps().length} waiting for approval` : 'Job sources', onclick: () => openJobSources() })] : []));
   if ($('job-sources').open) renderJobSources();
@@ -1341,7 +1384,7 @@ for (const [id, list] of [['wsProject', 'recentProject'], ['wsNotes', 'recentNot
   dropdown(input.closest('.cb'), { editable: true, items: () => [...$(list).children].map((o) => ({ value: o.value })), current: () => input.value, pick: (v) => { input.value = v; input.dispatchEvent(new Event('input', { bubbles: true })); } });
   input.addEventListener('input', () => syncShort(input));
 }
-for (const id of ['wsModel', 'wsEffort']) {
+for (const id of ['wsModel', 'wsEffort', 'wsConn']) {
   const sel = $(id), btn = $(id + 'Btn'), paint = () => { btn.textContent = sel.selectedOptions[0].textContent; };
   dropdown(btn.closest('.dd'), { items: () => [...sel.options].map((o) => ({ value: o.value, label: o.textContent })), current: () => sel.value, pick: (v) => { sel.value = v; paint(); } });
   btn.setAttribute('aria-labelledby', `${btn.parentElement.parentElement.querySelector('label').id ||= id + 'Lbl'} ${id}Btn`);
@@ -1359,6 +1402,7 @@ async function openNewWs() {
     for (const [id, k] of [['recentProject', 'project'], ['recentNotes', 'notes']]) $(id).replaceChildren(...recent[k].map((p) => Object.assign(document.createElement('option'), { value: p })));
     projectNotes = recent.projectNotes ?? {}; prefilled = '';
   } catch {}
+  await loadConnections(); // local and quick: the dropdown is complete before the dialog opens, so a pick cannot be reset under the user
   syncNewWs();
   $('newws').showModal();
 }
@@ -1377,7 +1421,7 @@ $('emptyNew').onclick = openNewWs;
 $('emptyArchive').onclick = () => $('archived').showModal();
 $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
-  const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), notes: $('wsNotes').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
+  const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), notes: $('wsNotes').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value, connectionId: $('wsConn').value });
   if (!r.ok) return toast(`create failed: ${await r.text()}`);
   $('wsName').value = $('wsProject').value = $('wsNotes').value = ''; prefilled = ''; syncNewWs();
   switchTo((await r.json()).id);
@@ -2290,6 +2334,111 @@ function renderJobSources() {
     if (await post('/workspaces/job-sources', { ws: w.id, jobSources: on.length === boxes.filter((c) => !c.disabled).length ? [] : on })) { $('job-sources').close(); refreshTabs(); }
   };
 }
+// ---- connections: how agents reach an LLM (gateway or Anthropic login) ----
+const connLabel = (id) => (connList.connections.find((c) => c.id === id) ?? connList.connections.find((c) => c.id === connList.default))?.name ?? 'Anthropic login';
+function renderVia() {
+  $('via').hidden = !WS;
+  $('via').textContent = WS ? `via ${connLabel(wsConn.get(WS))}` : '';
+}
+$('via').onclick = () => WS && connectionWs(WS);
+$('via').onkeydown = (ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); $('via').click(); } };
+async function loadConnections() {
+  try { connList = await (await fetch('/connections', { cache: 'no-store' })).json(); } catch {}
+  const sel = $('wsConn'), d = connList.connections.find((c) => c.id === connList.default), keep = sel.value;
+  sel.replaceChildren(Object.assign(document.createElement('option'), { value: '', textContent: d ? `Default: ${d.name}` : 'Anthropic login (default)' }), ...connList.connections.map((c) => Object.assign(document.createElement('option'), { value: c.id, textContent: c.name })));
+  if ([...sel.options].some((o) => o.value === keep)) sel.value = keep; // a rebuild must not reset the user's pick
+  $('wsConnBtn').textContent = sel.selectedOptions[0].textContent;
+  if (cfEditing) $('cfDefault').disabled = !!connList.connections.find((c) => c.id === cfEditing)?.isDefault;
+  renderVia();
+  if ($('connections').open) renderConnections();
+}
+let cfEditing = null; // connection id being edited, '' = a new one, null = form closed
+const cfResult = (text, cls = '') => { $('connResult').textContent = text; $('connResult').className = cls; };
+// An error shows in the form; when the form is hidden (the Anthropic login row) nobody sees it there, so it is a toast.
+const cfFail = (text) => { cfResult(text, 'bad'); if ($('connForm').hidden) toast(text); };
+function renderConnections() {
+  const rows = [h('div', '', h('span', 'cn', 'Anthropic login', h('small', '', 'built-in: the Claude login of this computer')), connList.default === null ? h('span', 'pbadge active', 'DEFAULT') : Object.assign(h('button', '', 'SET AS DEFAULT'), { type: 'button', onclick: () => setDefault('') }))];
+  for (const c of connList.connections) {
+    const alias = [['haiku', c.modelHaiku], ['sonnet', c.modelSonnet], ['opus', c.modelOpus]].filter(([, m]) => m).map(([a, m]) => `${a} → ${m}`).join(' · ');
+    const edit = Object.assign(h('button', '', 'EDIT'), { type: 'button', onclick: () => editConnection(c) });
+    rows.push(h('div', '', h('span', 'cn', c.name, c.isDefault && h('span', 'pbadge active', 'DEFAULT'), h('small', '', c.baseUrl), h('small', '', `${c.hasKey ? `key stored${c.keyTail ? ` …${c.keyTail}` : ''}` : 'no key'}${alias ? ` · ${alias}` : ''}`)), edit));
+  }
+  $('connList').replaceChildren(...rows);
+}
+function editConnection(c, focus = true) {
+  cfEditing = c ? c.id : '';
+  $('connForm').hidden = false;
+  $('cfName').value = c?.name ?? ''; $('cfUrl').value = c?.baseUrl ?? ''; $('cfKey').value = '';
+  $('cfKey').placeholder = c?.hasKey ? 'stored, leave empty to keep' : '';
+  $('cfKey').required = !c?.hasKey;
+  $('cfHaiku').value = c?.modelHaiku ?? ''; $('cfSonnet').value = c?.modelSonnet ?? ''; $('cfOpus').value = c?.modelOpus ?? '';
+  $('cfDefault').hidden = $('cfDelete').hidden = !c; $('cfDefault').disabled = !!c?.isDefault;
+  cfResult('');
+  if (focus) $('cfName').focus();
+}
+function closeConnForm() { cfEditing = null; $('connForm').hidden = true; $('cfKey').value = ''; cfResult(''); }
+async function connCall(path, data) {
+  const r = await postJson(path, data).catch((e) => e);
+  if (r instanceof Error) { cfFail(`${path.slice(1)} failed: ${r.message}`); return null; }
+  const text = await r.text();
+  if (!r.ok) { cfFail(text || `failed (${r.status})`); return null; }
+  await loadConnections(); refreshTabs();
+  return text ? JSON.parse(text) : {};
+}
+// Create or update from the form; the key field is cleared as soon as it is sent, so no secret stays in the page.
+async function saveConnection() {
+  const body = { name: $('cfName').value, baseUrl: $('cfUrl').value, apiKey: $('cfKey').value, modelHaiku: $('cfHaiku').value, modelSonnet: $('cfSonnet').value, modelOpus: $('cfOpus').value };
+  const was = cfEditing && connList.connections.find((x) => x.id === cfEditing), n = was && was.baseUrl.replace(/\/+$/, '').replace(/\/v1$/i, '') !== body.baseUrl.trim().replace(/\/+$/, '').replace(/\/v1$/i, '') ? connUsers(was.id).length : 0;
+  if (n && await choose('CHANGE THE ADDRESS?', '', `${n} workspace${n > 1 ? 's use' : ' uses'} "${was.name}". A new base URL is another endpoint: ${sessionsNote(n)} Files and worktrees stay.`, [{ value: 'ok', label: 'SAVE AND RESTART', danger: true }]) !== 'ok') return null;
+  const c = await connCall(cfEditing ? '/connections/update' : '/connections/create', cfEditing ? { id: cfEditing, ...body } : body);
+  if (!c) return null;
+  if (n) toast(`Sessions of ${n} workspace${n > 1 ? 's' : ''} restarted`);
+  $('cfKey').value = ''; cfEditing = c.id; editConnection(connList.connections.find((x) => x.id === c.id), false);
+  return c;
+}
+$('connForm').onsubmit = async (ev) => { ev.preventDefault(); if (await saveConnection()) cfResult('Saved', 'good'); };
+$('cfTest').onclick = async () => {
+  if (!$('connForm').reportValidity()) return;
+  const c = await saveConnection(); if (!c) return;
+  cfResult('Saved. Testing…');
+  const t = await connCall('/connections/test', { id: c.id });
+  if (t) cfResult(t.ok ? `Saved. Works: HTTP ${t.status}${t.model ? `, model ${t.model}` : ''}` : `Saved. Failed${t.status ? ` (HTTP ${t.status})` : ''}: ${t.error || 'no answer'}`, t.ok ? 'good' : 'bad');
+};
+// Workspaces whose agents use this connection now: their own pick, or no valid pick and this one is the default ('' = Anthropic login).
+const connUsers = (id) => [...wsNames.keys()].filter((w) => { const own = wsConn.get(w); return (own && connList.connections.some((c) => c.id === own) ? own : connList.default ?? '') === id; });
+const sessionsNote = (n) => `Agents of ${n} workspace${n > 1 ? 's' : ''} stop and start new sessions without their earlier conversation.`;
+async function setDefault(id) {
+  const now = connList.default ?? '', n = connUsers(now).filter((w) => !(wsConn.get(w) && connList.connections.some((c) => c.id === wsConn.get(w)))).length;
+  if (id === now) return;
+  if (n && await choose('CHANGE THE DEFAULT?', '', `${n} workspace${n > 1 ? 's use' : ' uses'} the default connection. ${sessionsNote(n)} Files and worktrees stay.`, [{ value: 'ok', label: 'CHANGE AND RESTART', danger: true }]) !== 'ok') return;
+  if (!await connCall('/connections/default', { id })) return;
+  const msg = `Default connection: ${connLabel(id || undefined)}${n ? `. Sessions of ${n} workspace${n > 1 ? 's' : ''} restarted` : ''}`;
+  cfResult(msg, 'good'); toast(msg);
+}
+$('cfDefault').onclick = () => setDefault(cfEditing);
+$('cfDelete').onclick = async () => {
+  const c = connList.connections.find((x) => x.id === cfEditing); if (!c) return;
+  if (await choose('DELETE CONNECTION', '', `Delete "${c.name}"? Its key is removed from this computer.`, [{ value: 'ok', label: 'DELETE', danger: true }]) !== 'ok') return;
+  if (await connCall('/connections/delete', { id: c.id })) closeConnForm();
+};
+$('cfCancel').onclick = closeConnForm;
+$('connAdd').onclick = () => editConnection(null);
+$('connections').addEventListener('close', closeConnForm);
+async function openConnections() { await loadConnections(); renderConnections(); closeConnForm(); $('connections').showModal(); }
+// Changing it ends every session of the workspace: a transcript must not continue under another provider.
+async function connectionWs(id) {
+  await loadConnections();
+  const cur = wsConn.get(id) ?? '', d = connList.connections.find((c) => c.id === connList.default);
+  const pick = await choose('CONNECTION', `Workspace ${wsNames.get(id) ?? id}. Now: ${connLabel(cur || undefined)}.`, 'How should its agents reach an LLM?', [
+    { value: '__default', label: d ? `DEFAULT (${d.name})` : 'ANTHROPIC LOGIN (DEFAULT)' }, ...connList.connections.map((c) => ({ value: c.id, label: c.name }))]);
+  if (!pick || (pick === '__default' ? '' : pick) === cur) return;
+  if (await choose('RESTART SESSIONS?', '', 'All agents of this workspace stop and start new sessions without their earlier conversation. Files and worktrees stay.', [{ value: 'ok', label: 'CHANGE AND RESTART', danger: true }]) !== 'ok') return;
+  const r = await wsPost('/workspaces/connection', { ws: id, connectionId: pick === '__default' ? '' : pick });
+  if (!r.ok) toast(`connection failed: ${r.text}`);
+  refreshTabs();
+}
+loadConnections();
+
 function shotLink(name, v) {
   const a = h('a'), img = h('img'); a.href = `/job-sources/screenshot?name=${encodeURIComponent(name)}&v=${v ?? ''}`; a.target = '_blank'; a.rel = 'noopener';
   img.alt = `${name} screenshot`; img.src = a.href; a.append(img); return a;
