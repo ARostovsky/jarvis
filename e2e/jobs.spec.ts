@@ -49,8 +49,9 @@ test('propose_job_source shows the card, Approve installs it and the arbiter is 
   await expect(card).toBeVisible();
   expect(await draft.info(page)).toBeUndefined(); // nothing installed before the click
   await expect(card.locator('pre', { hasText: '── manifest.json' })).toContainText('manifest.json'); // the files are on the card before Approve works
-  await expect(page.getByRole('button', { name: /^JOB SOURCES \(1\)$/ })).toBeVisible();
-  await page.getByRole('button', { name: /^JOB SOURCES/ }).click();
+  await expect(page.getByRole('button', { name: 'Settings' })).toHaveAttribute('title', 'Settings, 1 job sources waiting for approval');
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('menuitem', { name: 'Job sources…' }).click();
   await expect(page.locator('#jobSourceList')).toContainText(`${draft.name}`); // pending proposals are listed in the dialog
   await page.locator('#job-sources').getByRole('button', { name: 'CLOSE' }).click();
   await card.getByRole('button', { name: 'Approve', exact: true }).click();

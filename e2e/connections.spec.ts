@@ -35,7 +35,13 @@ test('Connections dialog: add, test against a gateway, keep the key on edit, set
   let id = '';
   try {
     await page.goto('/');
-    await page.getByRole('button', { name: 'CONNECTIONS' }).click();
+    const gear = page.getByRole('button', { name: 'Settings' });
+    // the icon is centered in its button by geometry, not by font metrics
+    const [b, i] = await Promise.all([gear.boundingBox(), page.locator('#gear svg').boundingBox()]);
+    expect(Math.abs(b!.x + b!.width / 2 - (i!.x + i!.width / 2))).toBeLessThanOrEqual(0.5);
+    expect(Math.abs(b!.y + b!.height / 2 - (i!.y + i!.height / 2))).toBeLessThanOrEqual(0.5);
+    await gear.click();
+    await page.getByRole('menuitem', { name: 'Connections…' }).click();
     await expect(page.locator('#connections .sub')).toHaveText('How agents reach an LLM');
     await expect(page.locator('#connList')).toContainText('Anthropic login');
     await page.locator('#connAdd').click();

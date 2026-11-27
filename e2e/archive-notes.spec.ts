@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect, createWs, open, uniq, tmp, tab } from './helpers.ts';
+import { test, expect, createWs, open, uniq, tmp, tab, openArchive } from './helpers.ts';
 
 test('archiving moves the notes folder, names the open items, and restore brings it back', async ({ page }) => {
   const notes = tmp('archnotes'), name = uniq('arn');
@@ -19,7 +19,7 @@ test('archiving moves the notes folder, names the open items, and restore brings
   expect(readFileSync(join(archived, 'open-items.md'), 'utf8')).toContain('second');
   expect(readFileSync(join(notes, 'workspaces', 'index.md'), 'utf8')).not.toContain(ws);
 
-  await page.locator('#tabs button[title="Archived workspaces"]').click();
+  await openArchive(page);
   await page.locator('#archivedList div').filter({ hasText: name }).getByRole('button', { name: 'RESTORE' }).click();
   await expect(tab(page, name)).toHaveClass('active');
   expect(readFileSync(join(dir, 'open-items.md'), 'utf8')).toContain('second');

@@ -166,10 +166,14 @@
   #toast span { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 50vh; overflow: auto; }
   #toast button { border: 1px solid var(--line); padding: 0 8px; }
   #hint { position: fixed; bottom: 36px; left: 16px; font-size: 11px; letter-spacing: .2em; color: var(--cyan-dim); opacity: .6; pointer-events: none; white-space: nowrap; }
-  #tabs { position: fixed; top: 8px; left: 16px; right: 16px; display: flex; gap: 4px; align-items: flex-end; overflow-x: auto; scroll-padding-inline: 0 32px; scrollbar-width: none; padding: 4px 24px 4px 0; z-index: 2; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  #tabs { position: fixed; top: 8px; left: 16px; right: 56px; display: flex; gap: 4px; align-items: flex-end; overflow-x: auto; scroll-padding-inline: 0 32px; scrollbar-width: none; padding: 4px 24px 4px 0; z-index: 2; -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
   #health { flex: none; width: 10px; height: 10px; border-radius: 50%; background: var(--gray); }
   #health.ok { background: #4be38a; box-shadow: 0 0 6px #4be38a; } #health.minor { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
   #health.major { background: var(--red); box-shadow: 0 0 6px var(--red); } #health.critical { background: #a01818; box-shadow: 0 0 6px #a01818; }
+  #gear { position: fixed; top: 8px; right: 16px; z-index: 3; width: 32px; height: 32px; padding: 0; display: grid; place-items: center; line-height: 0; color: var(--cyan); border: 1px solid var(--cyan); background: rgba(79, 216, 255, .08); }
+  #gear svg { position: static; width: 20px; height: 20px; cursor: inherit; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; pointer-events: none; }
+  #gear:hover { background: rgba(79, 216, 255, .22); }
+  #gear.pending::after { content: ''; position: absolute; top: 3px; right: 3px; width: 7px; height: 7px; border-radius: 50%; background: var(--amber); animation: blink .8s steps(2) infinite; }
   #tabs::-webkit-scrollbar { display: none; }
   #tabs button { flex: none; white-space: nowrap; border: 0; border-bottom: 2px solid var(--line); background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .05)); clip-path: polygon(0 0, calc(100% - 8px) 0, 100% 8px, 100% 100%, 0 100%); padding: 6px 16px 6px 12px; display: flex; gap: 8px; align-items: center; color: var(--cyan-dim); font-size: 14px; letter-spacing: .08em; transition: color .15s, background .15s, border-color .15s; }
   #tabs button:hover { color: var(--text); border-bottom-color: var(--cyan-dim); background: rgba(79, 216, 255, .1); }
@@ -367,6 +371,7 @@
 <div id="grid"></div>
 <div id="tip" role="tooltip" hidden></div>
 <nav id="tabs" aria-label="Workspaces"></nav>
+<button id="gear" aria-label="Settings" title="Settings" aria-haspopup="menu"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg></button>
 <div id="empty"><h2>NO WORKSPACES</h2><p>Create a workspace to start.</p><div><button id="emptyNew">NEW WORKSPACE</button><button id="emptyArchive" hidden>ARCHIVE</button></div></div>
 <div id="menu" role="menu"></div>
 <div id="status"><div id="conn">LINK…</div><div id="via" role="button" tabindex="0" title="Connection of this workspace: click to change"></div><a id="health" href="https://status.claude.com" target="_blank" rel="noopener" aria-label="Claude health" title="Claude health: checking…"></a></div>
@@ -1115,6 +1120,7 @@ let shownWs = null;
 let dragId = null;
 const clearDrop = () => $('tabs').querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
 const dropAfter = (ev, b) => ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
+let archivedCount = 0;
 async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
@@ -1138,6 +1144,10 @@ async function refreshTabs() {
   }
   document.body.classList.toggle('empty', !list.length);
   $('emptyArchive').hidden = !archived.length;
+  archivedCount = archived.length;
+  const pend = pendingProps().length;
+  $('gear').title = pend ? `Settings, ${pend} job sources waiting for approval` : 'Settings';
+  $('gear').classList.toggle('pending', !!pend);
   // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
   const sig = JSON.stringify([WS, list, archived.length, jobSrcList.map((p) => [p.name, p.status])]);
   if (sig === tabsSig || dragId) return; // a rebuild mid-drag would drop the dragged tab; ondragend catches up
@@ -1180,10 +1190,7 @@ async function refreshTabs() {
       ['Archive workspace', () => archiveWs(w), true],
     ]);
     return b;
-  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
-  Object.assign(document.createElement('button'), { textContent: 'CONNECTIONS', title: 'How agents reach an LLM', onclick: openConnections }),
-  ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []),
-  ...(jobSrcList.length || pendingProps().length ? [Object.assign(document.createElement('button'), { textContent: `JOB SOURCES${pendingProps().length ? ` (${pendingProps().length})` : ''}`, title: pendingProps().length ? `Job sources, ${pendingProps().length} waiting for approval` : 'Job sources', onclick: () => openJobSources() })] : []));
+  }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }));
   if ($('job-sources').open) renderJobSources();
   $('tabs').scrollLeft = keepScroll;
   if (shownWs !== WS) $('tabs').querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
@@ -1229,6 +1236,14 @@ function menu(ev, items) {
   m.style.top = `${Math.min(ev.clientY, innerHeight - m.offsetHeight - 8)}px`;
   (m.querySelector('button:not(:disabled)') ?? m.querySelector('button')).focus();
 }
+$('gear').onclick = (ev) => {
+  const r = ev.currentTarget.getBoundingClientRect();
+  menu({ preventDefault() {}, stopPropagation() {}, clientX: r.right, clientY: r.bottom + 4 }, [
+    ['Archived workspaces…', archivedCount ? () => $('archived').showModal() : null, false, 'No archived workspaces'],
+    ['Job sources…', () => openJobSources()],
+    ['Connections…', openConnections],
+  ]);
+};
 function closeMenu() {
   const m = $('menu'), was = m.classList.contains('open'), f = menuFrom;
   m.classList.remove('open'); menuFrom = null;

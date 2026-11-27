@@ -1,11 +1,10 @@
-import { test, expect, tab, uniq, createWs } from './helpers.ts';
+import { test, expect, tab, uniq, createWs, openArchive } from './helpers.ts';
 
 // One workspace goes through its whole life: the steps build on each other.
 test.describe.configure({ mode: 'serial' });
 
 const name = uniq('life'), renamed = uniq('ren');
 const archivedRow = (page: import('@playwright/test').Page, n: string) => page.locator('#archivedList div').filter({ hasText: n });
-const archiveButton = (page: import('@playwright/test').Page) => page.locator('#tabs button[title="Archived workspaces"]');
 
 test('create through the dialog', async ({ page }) => {
   await page.goto('/');
@@ -40,14 +39,16 @@ test('archive moves it from the tabs to the archive', async ({ page }) => {
   await page.getByRole('menuitem', { name: 'Archive workspace' }).click();
   await page.locator('#choiceButtons button', { hasText: /^ARCHIVE$/ }).click();
   await expect(tab(page, renamed)).toHaveCount(0);
-  await expect(archiveButton(page)).toBeVisible();
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await expect(page.getByRole('menuitem', { name: 'Archived workspaces…' })).toBeEnabled(); // something is archived now
+  await page.keyboard.press('Escape');
   await expect(archivedRow(page, renamed)).toHaveCount(1);
   await expect(page.locator('#tabs button.active')).toHaveCount(1); // the page moved on to another workspace
 });
 
 test('restore brings it back and opens it', async ({ page }) => {
   await page.goto('/');
-  await archiveButton(page).click();
+  await openArchive(page);
   await archivedRow(page, renamed).getByRole('button', { name: 'RESTORE' }).click();
   await expect(tab(page, renamed)).toHaveClass('active');
   await expect(archivedRow(page, renamed)).toHaveCount(0);
@@ -62,7 +63,7 @@ test('delete from the archive needs the right name', async ({ page }) => {
   await expect(archivedRow(page, renamed)).toHaveCount(1);
 
   const del = async (typed: string) => {
-    await archiveButton(page).click();
+    await openArchive(page);
     await archivedRow(page, renamed).getByRole('button', { name: 'DELETE' }).click();
     page.once('dialog', (d) => { expect(d.message()).toContain(renamed); void d.accept(typed); });
     await page.locator('#choiceButtons button', { hasText: 'DELETE FOREVER' }).click();
