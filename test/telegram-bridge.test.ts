@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { configFromEnv, lock, describePair, redact, split, startBridge as start, pair, type Cfg } from '../src/telegram-bridge.ts';
+import { configFromEnv, lock, describePair, redact, split, mdToHtml, wellFormed, startBridge as start, pair, type Cfg } from '../src/telegram-bridge.ts';
 
 const TOKEN = '123456:FAKE-token_for-tests';
 const USER = 111, CHAT = -100222;
@@ -34,6 +34,7 @@ function fakeTelegram(opts: { forum?: boolean } = {}) {
   const updates: any[] = [];
   const failNext: { code: number; retry?: number; description?: string; migrate?: number; method?: string; delayMs?: number; drop?: boolean }[] = [];
   let thread = 100, paths: string[] = [];
+  const reject = { html: false }; // answer 400 to every HTML message
   const slow: Record<string, number> = {}; // method -> ms to wait before answering
   const server = createServer(async (req, res) => {
     paths.push(req.url!);
@@ -48,6 +49,7 @@ function fakeTelegram(opts: { forum?: boolean } = {}) {
       if (f.delayMs) await new Promise((r) => setTimeout(r, f.delayMs));
       return reply({ ok: false, error_code: f.code, description: f.description ?? 'Too Many Requests', parameters: f.retry ? { retry_after: f.retry } : f.migrate ? { migrate_to_chat_id: f.migrate } : undefined });
     }
+    if (reject.html && params.parse_mode === 'HTML') return reply({ ok: false, error_code: 400, description: "Bad Request: can't parse entities: Unsupported start tag" });
     if (method === 'getUpdates') {
       await new Promise((r) => setTimeout(r, 30));
       const off = params.offset ?? 0;
@@ -59,7 +61,7 @@ function fakeTelegram(opts: { forum?: boolean } = {}) {
   });
   const msgs = (th?: number) => calls.filter((c) => c.method === 'sendMessage' && (th === undefined || c.params.message_thread_id === th)).map((c) => c.params.text as string);
   const msg = (text: string, o: any = {}) => ({ update_id: updates.length + 1, message: { message_id: updates.length + 1, text, chat: { id: CHAT }, from: { id: USER }, ...o } });
-  return { server, calls, updates, failNext, slow, msgs, msg, paths: () => paths };
+  return { server, calls, updates, failNext, slow, reject, msgs, msg, paths: () => paths };
 }
 
 function fakeJarvis(wss: { id: string; name: string }[], archived: { id: string }[] = []) {
@@ -203,7 +205,7 @@ test('bursts merge, agent-finished notices are dropped, long text is split and s
   const parts = s.t.msgs(101).slice(1);
   assert.ok(parts.every((p) => p.length <= 4096));
   assert.ok(parts.join('\n').includes('line 99 '));
-  assert.ok(s.t.calls.filter((c) => c.method === 'sendMessage').every((c) => c.params.parse_mode === undefined));
+  assert.ok(s.t.calls.filter((c) => c.method === 'sendMessage').every((c) => c.params.parse_mode === 'HTML'));
   await b.stop();
   await s.end();
 });
@@ -244,7 +246,7 @@ test('inbound: only the allowed user in the allowed chat reaches /say, routed by
 
   u.push(m('/help'));
   await until(() => s.t.msgs().length === 1);
-  assert.match(s.t.msgs()[0], /One\n- Two/);
+  assert.match(s.t.msgs()[0], /One\n• Two/);
   assert.equal(s.t.calls.find((c) => c.method === 'sendMessage')!.params.message_thread_id, undefined);
   assert.equal(JSON.parse(readFileSync(s.cfg.stateFile, 'utf8')).offset, u.length + 1, 'offset persisted');
   await b.stop();
@@ -669,7 +671,7 @@ test('a workspace that stays away for several syncs loses its topic and cursor; 
   s.t.updates.push(s.t.msg('/help'));
   const help = () => s.t.calls.filter((c) => c.method === 'sendMessage' && c.params.message_thread_id === undefined).map((c) => c.params.text as string);
   await until(() => help().length === 1);
-  assert.match(help()[0], /- One/);
+  assert.match(help()[0], /• One/);
   assert.ok(!help()[0].includes('Two'));
   await b.stop();
   await s.end();
@@ -1040,4 +1042,105 @@ test('stopping the bridge during a delete logs nothing and does not close the to
   assert.ok(!errs.some((e) => /topic of|delete topic/.test(e)), errs.join('\n'));
   assert.ok(stateOf(s.cfg).pending.w1, 'still pending for the next start');
   await s.end();
+});
+
+test('mdToHtml: escaping, code, emphasis, links, headings, lists, quotes, tables', () => {
+  assert.equal(mdToHtml('a < b & c > d'), 'a &lt; b &amp; c &gt; d');
+  assert.equal(mdToHtml('**bold** *it* _it2_ ~~gone~~'), '<b>bold</b> <i>it</i> <i>it2</i> <s>gone</s>');
+  assert.equal(mdToHtml('use `a<b` here'), 'use <code>a&lt;b</code> here');
+  assert.equal(mdToHtml('```js\nlet a = \"**x**\" < 1;\n```'), '<pre><code class="language-js">let a = \"**x**\" &lt; 1;</code></pre>');
+  assert.equal(mdToHtml('```\nplain\n```'), '<pre><code>plain</code></pre>');
+  assert.equal(mdToHtml('`**not bold**` and `_x_`'), '<code>**not bold**</code> and <code>_x_</code>');
+  assert.equal(mdToHtml('snake_case_word and my_var_name'), 'snake_case_word and my_var_name');
+  assert.equal(mdToHtml('2 * 3 * 4 and a*b'), '2 * 3 * 4 and a*b');
+  assert.equal(mdToHtml('[site](https://x.com/a?b=1&c="2")'), '<a href="https://x.com/a?b=1&amp;c=&quot;2&quot;">site</a>');
+  assert.equal(mdToHtml('[bad](javascript:alert(1))'), '[bad](javascript:alert(1))');
+  assert.equal(mdToHtml('[t](tg://user?id=1)'), '<a href="tg://user?id=1">t</a>');
+  assert.equal(mdToHtml('see https://x.com/_a_b_ now'), 'see https://x.com/_a_b_ now');
+  assert.equal(mdToHtml('# Title\n## **Sub** x'), '<b>Title</b>\n<b>Sub x</b>');
+  assert.equal(mdToHtml('- one\n* two\n  - **three**'), '• one\n• two\n  • <b>three</b>');
+  assert.equal(mdToHtml('> quoted <b>\n> more\nafter'), '<blockquote>quoted &lt;b&gt;\nmore</blockquote>\nafter');
+  assert.equal(mdToHtml('| a | b |\n|---|---|\n| 1 | **2** |\nend'), '<pre>| a | b |\n|---|---|\n| 1 | **2** |</pre>\nend');
+  // unbalanced markers stay literal
+  assert.equal(mdToHtml('**open and *lone and ~~x and `tick and [t](u'), '**open and *lone and ~~x and `tick and [t](u');
+  assert.equal(mdToHtml('```\nnever closed'), '```\nnever closed');
+  assert.equal(mdToHtml('a\u0000b'), 'ab');
+});
+
+test('split keeps fenced code blocks whole per piece: the fence closes at a cut and reopens in the next piece', () => {
+  const code = Array.from({ length: 40 }, (_, i) => `line ${i} ${'c'.repeat(50)}`).join('\n');
+  const text = `intro\n\n\`\`\`py\n${code}\n\`\`\`\n\nafter`;
+  const parts = split(text, 600);
+  assert.ok(parts.length > 3 && parts.every((p) => p.length <= 600));
+  for (const p of parts.slice(0, -1)) if (p.includes('\`\`\`py')) assert.ok(p.trimEnd().endsWith('\`\`\`'));
+  const fences = (p: string) => p.split('\n').filter((l) => /^\s*\`\`\`/.test(l)).length;
+  assert.ok(parts.every((p) => fences(p) % 2 === 0), 'every piece has balanced fences');
+  assert.ok(parts[1].startsWith('\`\`\`py\n'));
+  const lines = parts.flatMap((p) => p.split('\n')).filter((l) => /^line \d+ /.test(l));
+  assert.equal(lines.length, 40, 'no code line lost or repeated');
+});
+
+test('messages go out as HTML, a long message stays under 4096 after conversion, a rejected markup is resent as plain Markdown', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge(s.cfg);
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.text('w1', '**hi** <b> & `x`');
+  await until(() => s.t.msgs(101).length === 1);
+  const first = s.t.calls.find((c) => c.method === 'sendMessage')!;
+  assert.equal(first.params.parse_mode, 'HTML');
+  assert.equal(first.params.text, '<b>hi</b> &lt;b&gt; &amp; <code>x</code>');
+  await new Promise((r) => setTimeout(r, 100));
+  s.j.text('w1', ['```', ...Array.from({ length: 300 }, () => `<<<&&& ${'<'.repeat(30)}`), '```'].join('\n'));
+  await until(() => s.t.msgs(101).length >= 4);
+  const sent = s.t.calls.filter((c) => c.method === 'sendMessage').slice(1);
+  assert.ok(sent.every((c) => c.params.text.length <= 4096), 'every converted or plain part fits');
+  s.t.reject.html = true;
+  const n = s.t.msgs(101).length;
+  s.j.text('w1', '**raw** md');
+  await until(() => s.t.msgs(101).length === n + 2);
+  const [bad, ok] = s.t.calls.filter((c) => c.method === 'sendMessage').slice(-2);
+  assert.equal(bad.params.parse_mode, 'HTML');
+  assert.equal(ok.params.parse_mode, undefined);
+  assert.equal(ok.params.text, '**raw** md');
+  await b.stop();
+  await s.end();
+});
+
+test('split always ends: one very long line in a fence, fence-only pieces, tiny limits; every piece fits and no text is lost', () => {
+  assert.deepEqual(split('a\n```\n' + 'x'.repeat(100) + '\n```', 50).every((p) => p.length <= 50), true);
+  const repro = split('a\n```\n' + 'x'.repeat(100) + '\n```', 50);
+  assert.equal(repro.join('').replace(/[`\n]/g, '').replace(/^a/, '').length, 100, 'all 100 x kept');
+  const bits = ['x'.repeat(130), 'y', '', '```', '```js', 'text with words', '`', '\u{1F600}'.repeat(20), '```', '  ```  '];
+  let seed = 7;
+  const rnd = (n: number) => (seed = (seed * 1103515245 + 12345) % 2147483648) % n;
+  for (let k = 0; k < 400; k++) {
+    const text = Array.from({ length: 1 + rnd(12) }, () => bits[rnd(bits.length)]).join('\n');
+    const limit = 12 + rnd(120);
+    const parts = split(text, limit);
+    assert.ok(parts.every((p) => p.length <= limit), `limit ${limit}: ${JSON.stringify(text)}`);
+    const real = (x: string) => x.replace(/[`\s]|js/g, '');
+    assert.equal(parts.map(real).join(''), real(text), `no content lost: ${JSON.stringify(text)}`);
+  }
+  assert.ok(split('```\n```', 4).length <= 1);
+  assert.deepEqual(split('```js\n```', 50), [], 'a fence with nothing in it sends nothing');
+  assert.doesNotThrow(() => split('```js\n' + 'z'.repeat(40), 8)); // a limit too small to keep the fence
+});
+
+test('mdToHtml: nesting, flanking, tables, bare URLs and fences', () => {
+  assert.equal(mdToHtml('***x***'), '<b><i>x</i></b>');
+  assert.equal(mdToHtml('**bold *it***'), '<b>bold <i>it</i></b>');
+  for (const t of ['**a *b** c*', '*a **b* c**', '**a _b** c_', '~~a **b~~ c**', '***a** b*', '__a *b__ c*'])
+    assert.ok(wellFormed(mdToHtml(t)), `well nested: ${t} -> ${mdToHtml(t)}`);
+  assert.equal(mdToHtml('src/*.ts and test/*.ts'), 'src/*.ts and test/*.ts');
+  assert.equal(mdToHtml('2**10 and 3**4'), '2**10 and 3**4');
+  assert.equal(mdToHtml('(*it*) and "**b**".'), '(<i>it</i>) and "<b>b</b>".');
+  assert.equal(mdToHtml('| a | `c` |\n|---|---|\n| `x` | _y_ |'), '<pre>| a | `c` |\n|---|---|\n| `x` | _y_ |</pre>');
+  assert.equal(mdToHtml('**see https://x.com/a**'), '<b>see https://x.com/a</b>');
+  assert.equal(mdToHtml('(see https://x.com/a_b). Then https://x.com/w_(v), ok'), '(see https://x.com/a_b). Then https://x.com/w_(v), ok');
+  assert.equal(mdToHtml('```js\n```'), '');
+  assert.equal(mdToHtml('a\n```js title\ncode\n```\nb'), 'a\n<pre><code class="language-js">code</code></pre>\nb');
+  assert.equal(mdToHtml('```\n```js\nx\n```'), '<pre><code>```js\nx</code></pre>', 'an opener line inside a block is content');
+  assert.equal(wellFormed('<b>x</i>'), false);
+  assert.equal(wellFormed('<b>x</b> &lt; <code>a</code>'), true);
+  assert.equal(wellFormed('a < b'), false);
 });
