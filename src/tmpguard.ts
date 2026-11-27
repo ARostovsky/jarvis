@@ -10,7 +10,7 @@ import { join } from 'node:path';
 const TEST_PREFIXES = ['jarvis-tmp-e2e-', 'jarvis-tmp-test-', 'jarvis-tmp-guard-test-', 'jarvis-notes-test-', 'jarvis-oi-wiring-test-', 'jarvis-jobs-', 'jarvis-jobs-wiring-test-', 'jarvis-argv-', 'jarvis-layout-', 'jarvis-jobsrc-', 'jarvis-prov-', 'jarvis-e2e-folders-', 'jv-cap-', 'jv-mute-', 'jv-dump-', 'jv-victim-'];
 // The random part must hold a capital or digit: a plain lower-case word such as `backup` is not taken for one (costs 0.5% of our own dirs, which then wait for the next run's root).
 const RAND = '(?=[a-z]*[A-Z0-9])[A-Za-z0-9]{6}';
-const OWN_NAME = new RegExp(`^(?:(?:${TEST_PREFIXES.join('|')})${RAND}|jarvis-e2e-[a-z0-9]+-${RAND}|jarvis-e2e-(?:data|job-sources)-\\d+)$`);
+const OWN_NAME = new RegExp(`^(?:(?:${TEST_PREFIXES.join('|')})${RAND}|jarvis-e2e-[a-z0-9]+-${RAND}|jarvis-e2e-(?:data|config|job-sources)-\\d+)$`);
 export const isOwnName = (n: string) => OWN_NAME.test(n);
 const HOUR = 3_600_000;
 const num = (v: string | undefined, d: number) => (v !== undefined && v !== '' && Number.isFinite(Number(v)) ? Number(v) : d);

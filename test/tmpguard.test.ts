@@ -17,7 +17,7 @@ const mk = (dir: string, name: string, ageMs = 0) => {
   return p;
 };
 
-const OWN = ['jarvis-tmp-e2e-aB3dE9', 'jarvis-tmp-test-aB3dE9', 'jarvis-notes-test-aB3dE9', 'jarvis-oi-wiring-test-aB3dE9', 'jarvis-jobs-aB3dE9', 'jarvis-layout-aB3dE9', 'jarvis-jobsrc-aB3dE9', 'jarvis-prov-aB3dE9', 'jv-cap-aB3dE9', 'jv-mute-aB3dE9', 'jarvis-e2e-repo-aB3dE9', 'jarvis-e2e-data-7846', 'jarvis-e2e-job-sources-9600'];
+const OWN = ['jarvis-tmp-e2e-aB3dE9', 'jarvis-tmp-test-aB3dE9', 'jarvis-notes-test-aB3dE9', 'jarvis-oi-wiring-test-aB3dE9', 'jarvis-jobs-aB3dE9', 'jarvis-layout-aB3dE9', 'jarvis-jobsrc-aB3dE9', 'jarvis-prov-aB3dE9', 'jv-cap-aB3dE9', 'jv-mute-aB3dE9', 'jarvis-e2e-repo-aB3dE9', 'jarvis-e2e-data-7846', 'jarvis-e2e-config-7846', 'jarvis-e2e-job-sources-9600'];
 // What a user could name a folder: similar, but not what mkdtemp makes.
 const USERS = ['jarvis-jobs', 'jarvis-jobs-old', 'jarvis-jobs-aB3dE9x', 'jarvis-jobs-report', 'jarvis-job-source-notes', 'jarvis-layout', 'jv-cap', 'jv-capture-2024', 'jarvis-e2e-data-backup', 'jarvis-notes', 'jarvis-tmp-', 'jarvis-index-1-2', 'jarvis'];
 

@@ -35,20 +35,23 @@ export const DATA_HOME = join(tmpdir(), `jarvis-e2e-data-${PORT}`);
 // The open stub (e2e/fake-open.sh) appends the paths it gets here; the real xdg-open never runs in tests.
 export const OPEN_LOG = join(tmpdir(), `jarvis-e2e-open-${PORT}.log`);
 // Where the job-source specs install copies of e2e/fake-job-source (outside the data folder, as the location rules need); one per worker like the data dir.
+// connections.json lives under XDG_CONFIG_HOME/jarvis; one config home per worker, never the real ~/.config.
+export const CONFIG_HOME = join(tmpdir(), `jarvis-e2e-config-${PORT}`);
 export const JOB_SOURCES_DIR = join(tmpdir(), `jarvis-e2e-job-sources-${PORT}`);
 // Servers a spec spawns inherit this: none may read the real ~/.config/jarvis/job-sources.
 process.env.JARVIS_JOB_SOURCES_DIR ??= JOB_SOURCES_DIR;
+process.env.XDG_CONFIG_HOME ??= CONFIG_HOME;
 process.env.JARVIS_ENV_FILE ??= '/dev/null'; // never read the real local env file
 
 const server = (i: number) => {
   const port = BASE + STRIDE * i;
   return {
     // The data dir is wiped on every run; never the real ~/.local/share/jarvis.
-    command: `node -e "for (const d of [process.env.XDG_DATA_HOME, process.env.JARVIS_JOB_SOURCES_DIR]) fs.rmSync(d,{recursive:true,force:true})" && node src/server.ts`,
+    command: `node -e "for (const d of [process.env.XDG_DATA_HOME, process.env.JARVIS_JOB_SOURCES_DIR, process.env.XDG_CONFIG_HOME]) fs.rmSync(d,{recursive:true,force:true})" && node src/server.ts`,
     url: `http://127.0.0.1:${port}/workspaces`,
     // Nothing listens on port 1: the status poll fails fast and no spec touches the network.
     // Agent sessions run on a scripted fake of the SDK: no API calls, no cost.
-    env: { PORT: String(port), XDG_DATA_HOME: join(tmpdir(), `jarvis-e2e-data-${port}`), JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_HEALTH_PROBE: '0', JARVIS_JOB_SOURCES_DIR: join(tmpdir(), `jarvis-e2e-job-sources-${port}`), JARVIS_JOBS_MIN_POLL_S: '1', JARVIS_OPEN_CMD: join(import.meta.dirname, 'e2e', 'fake-open.sh'), JARVIS_OPEN_LOG: join(tmpdir(), `jarvis-e2e-open-${port}.log`) },
+    env: { PORT: String(port), XDG_DATA_HOME: join(tmpdir(), `jarvis-e2e-data-${port}`), XDG_CONFIG_HOME: join(tmpdir(), `jarvis-e2e-config-${port}`), JARVIS_FAKE_SDK: join(import.meta.dirname, 'e2e', 'fake-sdk.ts'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/', JARVIS_HEALTH_PROBE: '0', JARVIS_JOB_SOURCES_DIR: join(tmpdir(), `jarvis-e2e-job-sources-${port}`), JARVIS_JOBS_MIN_POLL_S: '1', JARVIS_OPEN_CMD: join(import.meta.dirname, 'e2e', 'fake-open.sh'), JARVIS_OPEN_LOG: join(tmpdir(), `jarvis-e2e-open-${port}.log`) },
     reuseExistingServer: false,
   };
 };
