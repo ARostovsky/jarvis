@@ -17,7 +17,7 @@ This file is the one place for everything about the Telegram bridge that you nee
 Talk to Jarvis from your phone. The bridge is a separate process (`npm run telegram`) that connects a private Telegram group to your local Jarvis:
 
 - Every workspace gets its own **topic** in a private forum supergroup (a group with Topics enabled).
-- Jarvis's replies (the text of the arbiter) and a short line when an agent finishes go to the topic of their workspace.
+- Jarvis's replies (the text of the arbiter) go to the topic of their workspace.
 - What you write in a topic goes to that workspace's Jarvis, as if you typed it in the web UI.
 - A 👀 on your message means: the bridge delivered it to Jarvis. It does not mean that the arbiter read or answered it.
 - Permission prompts (ALLOW / DENY) stay in the web UI, and so do alerts and the cost lines.
@@ -68,7 +68,7 @@ All settings are environment variables. The bridge reads `telegram.env` from the
 
 **Topics.** A topic is made for each workspace the bridge sees, named like the workspace (at most 128 characters). The bridge checks the list of workspaces every 10 s, so a new workspace gets its topic within that time. The topic ids are kept in the state file, so a restart reuses the topics and never makes a second one. A renamed workspace keeps its topic name. If you delete a topic in Telegram, the bridge notices at the next send, forgets it and makes a new one at the next check. A workspace that is deleted or archived in Jarvis (missing from the list for 3 checks in a row) loses its entry in the state; its Telegram topic stays.
 
-**What goes to Telegram.** The text of the arbiter, and the first line (at most 200 characters) of the message that says an agent finished. Texts of one workspace that come within 1.5 s are merged into one message. Text is sent as plain text, split on line breaks when it is longer than 4096 characters. What you typed yourself, in Telegram or in the web UI, is never repeated in the topic.
+**What goes to Telegram.** Only the text of the arbiter. Agent-finished notices and other service lines are not sent. Texts of one workspace that come within 1.5 s are merged into one message. Text is sent as plain text, split on line breaks when it is longer than 4096 characters. What you typed yourself, in Telegram or in the web UI, is never repeated in the topic.
 
 **What comes from Telegram.** A text message in a topic goes to the Jarvis of that workspace. After Jarvis accepted it, the bridge puts 👀 on the message. If Jarvis did not accept it, the topic gets "Jarvis did not take the message." and there is no 👀. Messages that are not text (photos, voice, files), edited messages and messages in an unknown topic are ignored. In the General topic only `/help` is answered.
 
@@ -114,6 +114,6 @@ Whoever can write to the bot can make Jarvis run commands. The allowlist is the 
 - **`TELEGRAM_CHAT_ID is the id of a group that was upgraded to a supergroup`.** You took the id before turning Topics on. Run `npm run telegram -- --pair` again, write in the group and set the new `TELEGRAM_CHAT_ID`.
 - **`TELEGRAM_ALLOWED_USER is not set` / `TELEGRAM_CHAT_ID is not set`.** Run `npm run telegram -- --pair` and set both ids.
 - **`--pair` waits forever.** The bot does not see plain text: make it an admin of the group, or turn privacy mode off with `/setprivacy` in @BotFather and add the bot again (see Setup).
-- **Nothing arrives in Telegram.** Check that Jarvis runs and `JARVIS_URL` points at it (the log says `events <workspace>: ...` when it cannot connect). Only the arbiter's text and the agent-finished lines are sent, and only what is newer than the last one sent (a new workspace: its last `TELEGRAM_BACKFILL` messages; `TELEGRAM_BACKFILL=0` sends no history).
+- **Nothing arrives in Telegram.** Check that Jarvis runs and `JARVIS_URL` points at it (the log says `events <workspace>: ...` when it cannot connect). Only the arbiter's text is sent (no agent-finished notices), and only what is newer than the last one sent (a new workspace: its last `TELEGRAM_BACKFILL` messages; `TELEGRAM_BACKFILL=0` sends no history).
 - **My message gets no reaction and no answer.** It was not accepted: check that it is text, written in a topic (not General) by `TELEGRAM_ALLOWED_USER` in `TELEGRAM_CHAT_ID`, and not forwarded or sent as an anonymous admin. Make the bot an admin of the group.
 - **A topic is missing.** The bridge makes it within 10 s and needs the **Manage Topics** right; the log says `topic for <workspace>: ...` when it fails. A workspace that was archived or deleted loses its topic entry; when it comes back, it gets a new topic.

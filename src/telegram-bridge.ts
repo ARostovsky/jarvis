@@ -227,7 +227,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     if (q.length) { lanes[lane].set(ws, q); pump(); }
   }
 
-  // Merge a burst of arbiter text and finished-lines of one workspace into one message.
+  // Merge a burst of arbiter text of one workspace into one message.
   const bursts = new Map<string, { lines: string[]; timer: NodeJS.Timeout }>();
   function push(ws: string, line: string) {
     const b = bursts.get(ws) ?? { lines: [] as string[], timer: undefined as any };
@@ -242,10 +242,9 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     if (b) { clearTimeout(b.timer); if (state.topics[ws]) send(state.topics[ws], b.lines.join('\n\n'), ws); }
   }
   // `result.text` repeats the last arbiter `text` of the turn, so only `text` events are forwarded. `ask` prompts stay in the web UI.
-  // Relevant: arbiter text and agent-finished lines. What the user typed (in the web UI or here) is not shown in the topic.
-  const finished = (e: any) => e.from !== 'user' && /^\[agent \S+ finished/.test(e.text);
-  const relevant = (e: any) => (e.type === 'text' && e.agentId === 'arbiter' && typeof e.text === 'string') || (e.type === 'routed' && e.to === 'arbiter' && typeof e.text === 'string' && finished(e));
-  const lineOf = (e: any): string => e.type === 'text' ? e.text : e.text.split('\n')[0].slice(0, 200);
+  // Relevant: the arbiter's own text. Agent-finished notices and other service lines (also `routed` events) are not sent, nor arbiter text that is only such a `[agent ...` header. What the user typed is not shown in the topic.
+  const relevant = (e: any) => e.type === 'text' && e.agentId === 'arbiter' && typeof e.text === 'string' && !/^\s*\[agent \S+ [^\]\n]*\]\s*$/.test(e.text);
+  const lineOf = (e: any): string => e.text;
   // The cursor never moves back: an event older than it (a clock that went back) is not forwarded.
   const cursor = (ws: string, at: number) => { const c = state.cursors[ws]; if (c && at < c.at) return; if (c && c.at === at) c.skip++; else state.cursors[ws] = { at, skip: 1 }; };
 
