@@ -5,6 +5,7 @@ import { openSync, readFileSync, writeFileSync, rmSync, mkdirSync, realpathSync 
 import { join, dirname } from 'node:path';
 import { homedir } from 'node:os';
 import { setTimeout as sleep } from 'node:timers/promises';
+import { statusLines } from '../src/env-flag.ts';
 import '../src/local-env.ts'; // ~/.config/jarvis/env first: PORT and XDG_DATA_HOME below may come from it
 
 const PORT = Number(process.env.PORT ?? 7777);
@@ -18,6 +19,7 @@ const up = () => fetch(`${URL}/workspaces`).then((r) => r.ok, () => false);
 const pid = () => { try { return Number(readFileSync(PID, 'utf8')); } catch { return 0; } };
 
 async function start() {
+  let started = false;
   if (!(await up())) {
     mkdirSync(DATA, { recursive: true });
     const out = openSync(LOG, 'a');
@@ -27,8 +29,10 @@ async function start() {
     writeFileSync(PID, String(child.pid));
     for (let i = 0; i < 50 && !(await up()); i++) await sleep(200);
     if (!(await up())) return console.error(`server did not start, see ${LOG}`), process.exit(1);
+    started = true;
   }
   console.log(`jarvis: ${URL}`);
+  if (started) for (const l of statusLines()) console.log(l); // only for a server this run started: a running one keeps its own settings
   spawn(process.platform === 'darwin' ? 'open' : 'xdg-open', [URL], { detached: true, stdio: 'ignore' }).unref();
 }
 
