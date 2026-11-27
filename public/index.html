@@ -257,6 +257,14 @@
   .pn.collapsed .pn-body { visibility: hidden; overflow: hidden; transition: visibility 0s .16s; } /* a folded body must not stay in the tab order */
   .pn-note { padding: 4px 12px; font-size: 13px; color: var(--amber); overflow-wrap: anywhere; }
   .pn-note button { border: 1px solid var(--line) !important; margin-left: 8px; padding: 0 8px; font-size: 11px; letter-spacing: .1em !important; }
+  .jt-bar { display: flex; gap: 2px; padding: 4px 12px 0; border-bottom: 1px solid var(--line); overflow-x: auto; position: sticky; top: 0; z-index: 2; background: #061420; }
+  .jt { flex: none; display: flex; gap: 8px; align-items: baseline; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 3px 12px 3px 10px; color: var(--cyan-dim); font: 600 13px Rajdhani, sans-serif; letter-spacing: .08em; }
+  .jt:hover { color: var(--text); border-bottom-color: var(--cyan-dim); }
+  .jt.on { color: var(--text); border-bottom-color: var(--cyan); background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .14)); }
+  .jt:focus-visible { outline: 1px solid var(--cyan); outline-offset: -2px; }
+  .jt .jt-f { color: var(--red); } .jt .jt-r { color: var(--cyan); } .jt .jt-f, .jt .jt-r { font: 400 11px 'JetBrains Mono', monospace; letter-spacing: 0; }
+  .jt.chg { color: var(--amber); border-bottom-color: var(--amber); box-shadow: 0 0 10px rgba(255, 181, 71, .35); } /* a state changed in this provider since its tab was open: lit until opened */
+  .jt.chg .jt-n::after { content: ' ●'; font-size: 8px; vertical-align: 2px; }
   .pn-list { list-style: none; margin: 0; padding: 4px 12px 6px; }
   .jr, .ci { --e: var(--gray); position: relative; padding: 3px 4px 3px 23px; margin-bottom: 6px; line-height: 1.35; font: 400 14px/1.35 Rajdhani, sans-serif; }
   .jr::before, .ci::before { content: ''; position: absolute; left: 0; top: 2px; bottom: 2px; width: 3px; background: var(--e); }
@@ -1828,6 +1836,7 @@ const pnBtn = (label, fn, aria = label) => { const b = h('button', 'pn-btn', lab
 const JOB_END = new Set(['done', 'failed', 'stopped']), JOB_STATES = new Set(['queued', 'running', 'waiting', 'done', 'failed', 'stopped', 'unknown']);
 const jobRows = (data) => (Array.isArray(data?.rows) ? data.rows : []);
 const jobKey = (r) => `${r.provider}:${r.id}`;
+const provLabel = (n) => provList.find((p) => p.name === n)?.label || n; // manifests have no label field today: the id
 // Providers that cannot be trusted right now: a failed poll, or files changed since approval. Rows of those are dimmed and sort as "needs attention".
 function jobStale(data, status) {
   const det = Array.isArray(status?.detail) ? status.detail : [], bad = new Map(det.filter((d) => d?.ok === false).map((d) => [d.provider, d]));
@@ -1912,7 +1921,7 @@ const PANEL_KINDS = {
       ].filter(Boolean);
     },
     render(el, data, status, act, ctx) {
-      const rows = jobRows(data), st = jobStale(data, status), multi = new Set(rows.map((r) => r.provider)).size > 1;
+      const rows = jobRows(data), st = jobStale(data, status);
       const notes = [];
       for (const [name, d] of st.bad) {
         const needs = [].concat(provList.find((p) => p.name === name)?.needs ?? []).filter(Boolean);
@@ -1923,12 +1932,44 @@ const PANEL_KINDS = {
       for (const name of st.changed) { const n = h('div', 'pn-note', `${name} files changed.`); n.append(pnBtn('Approve again', () => openProviders())); notes.push(n); }
       if (!status && !replaying && rows.length) notes.push(h('div', 'pn-note', 'Not checked since restart'));
       const keys = () => ordered.map(jobKey), ordered = jobOrder(rows, st, ctx.ui.order);
+      // One sub-tab per provider when there are several. Rows are only filtered: the order, the drop keys and CLEAR DONE stay panel-wide.
+      const provs = [...new Set(rows.map((r) => r.provider))].sort(), tabbed = provs.length > 1, sel = provs.includes(ctx.ui.tab) ? ctx.ui.tab : provs[0];
+      let shown = ordered, host = el;
+      const last = (n) => Math.max(0, ...rows.filter((r) => r.provider === n).map((r) => Date.parse(r.changedAt) || 0)); // newest server-stamped state change of that provider (no local clock: it would beat `seen` on every reload)
+      const seen = Object.fromEntries(provs.filter((n) => ctx.ui.seen?.[n] !== undefined).map((n) => [n, ctx.ui.seen[n]])); // providers that are gone drop out
+      for (const n of provs) if (seen[n] === undefined || n === sel) seen[n] = last(n); // first sight and the open tab count as seen, also in the single-provider view
+      const patch = {};
+      if (provs.length && JSON.stringify(seen) !== JSON.stringify(ctx.ui.seen ?? {})) patch.seen = seen;
+      if (tabbed && sel !== ctx.ui.tab) patch.tab = sel; // the saved tab is gone: keep what is shown
+      if (Object.keys(patch).length) ctx.setUi(patch);
+      if (tabbed) {
+        const pick = (n) => { ctx.setUi({ tab: n, seen: { ...seen, [n]: last(n) } }); ctx.rerender(); };
+        const bar = h('div', 'jt-bar'); bar.setAttribute('role', 'tablist'); bar.setAttribute('aria-label', 'Job providers');
+        for (const n of provs) {
+          const mine = rows.filter((r) => r.provider === n), nf = mine.filter((r) => r.state === 'failed').length, nr = mine.filter((r) => r.state === 'running' || r.state === 'queued').length;
+          const hot = n !== sel && last(n) > (ctx.ui.seen?.[n] ?? Infinity);
+          const b = h('button', `jt${n === sel ? ' on' : ''}${hot ? ' chg' : ''}`, h('span', 'jt-n', provLabel(n)), nf > 0 && h('span', 'jt-f', `✕${nf}`), nr > 0 && h('span', 'jt-r', `▶${nr}`));
+          b.type = 'button'; b.dataset.fk = `t:${n}`; b.dataset.tab = n; b.id = `jt-${provs.indexOf(n)}`; b.setAttribute('aria-controls', 'jt-panel');
+          b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(n === sel)); b.tabIndex = n === sel ? 0 : -1;
+          b.setAttribute('aria-label', `${provLabel(n)}${nf ? `, ${nf} failed` : ''}${nr ? `, ${nr} running` : ''}${hot ? ', changed' : ''}`);
+          b.onclick = () => pick(n);
+          b.onkeydown = (ev) => {
+            const i = provs.indexOf(n), j = { ArrowRight: (i + 1) % provs.length, ArrowLeft: (i + provs.length - 1) % provs.length, Home: 0, End: provs.length - 1 }[ev.key];
+            if (j === undefined) return;
+            ev.preventDefault(); pick(provs[j]); el.querySelector(`[data-tab="${CSS.escape(provs[j])}"]`)?.focus(); // the redraw moved focus off the tab that was pressed: put it on the new one
+          };
+          bar.append(b);
+        }
+        el.append(bar); // moved below the notes at the end
+        shown = ordered.filter((r) => r.provider === sel);
+        host = h('div', 'jt-panel'); host.id = 'jt-panel'; host.setAttribute('role', 'tabpanel'); host.setAttribute('aria-labelledby', `jt-${provs.indexOf(sel)}`);
+      }
       const ul = h('ul', 'pn-list');
       const clear = () => ul.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
-      for (const r of ordered) {
+      for (const r of shown) {
         const key = jobKey(r), manual = !!ctx.ui.order?.length, sn = (jobChangeTime(r), rowSeen.get(key));
         if (sn.turned) { sn.turned = false; if (manual && r.state === 'failed' && sn.fresh) hotRows.add(`${key}@${sn.t}`); } // only a live turn to failed, not an old failure seen after a reload
-        const li = jobRow(r, { key, multi, act, stale: st.bad.has(r.provider) || st.changed.has(r.provider) || st.marked.has(r.provider) || st.all, hot: manual && r.state === 'failed' && hotRows.has(`${key}@${sn.t}`) });
+        const li = jobRow(r, { key, multi: false, act, stale: st.bad.has(r.provider) || st.changed.has(r.provider) || st.marked.has(r.provider) || st.all, hot: manual && r.state === 'failed' && hotRows.has(`${key}@${sn.t}`) });
         if (!rowSeen.get(key)?.shown) { rowSeen.get(key).shown = true; if (!replaying && rowSeen.get(key).fresh) li.classList.add('new'); }
         li.ondragstart = (ev) => { if (ev.target !== li) return; pdrag = { key, panelId: ctx.panelId }; ev.dataTransfer.setData('text/plain', key); ev.dataTransfer.effectAllowed = 'move'; };
         li.ondragover = (ev) => {
@@ -1949,7 +1990,8 @@ const PANEL_KINDS = {
         li.ondragend = () => { pdrag = null; clear(); ctx.rerender(); };
         ul.append(li);
       }
-      el.append(...notes, ul);
+      host.append(ul);
+      el.append(...notes, ...(tabbed ? [el.querySelector('.jt-bar'), host] : [ul]));
     },
   },
   checklist: {
