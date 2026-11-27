@@ -184,16 +184,17 @@ test('a workspace that appears later gets a topic; after an SSE reconnect the re
   await s.end();
 });
 
-test('bursts merge, agent-finished lines are short, long text is split and sent in order', async () => {
+test('bursts merge, agent-finished notices are dropped, long text is split and sent in order', async () => {
   const s = await setup([{ id: 'w1', name: 'One' }]);
   const b = await startBridge(s.cfg);
   await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
   s.j.text('w1', 'first');
   s.j.text('w1', 'second');
   s.j.emit('w1', { type: 'routed', from: 'a1', to: 'arbiter', text: '[agent a1 finished, status idle]\nlong report body' });
+  s.j.text('w1', '[agent a1 finished, status idle]');
   s.j.emit('w1', { type: 'routed', from: 'a1', to: 'arbiter', text: '[agent a1 cost $5.00, over $4]\nnot forwarded' });
   await until(() => s.t.msgs(101).length === 1);
-  assert.equal(s.t.msgs(101)[0], 'first\n\nsecond\n\n[agent a1 finished, status idle]');
+  assert.equal(s.t.msgs(101)[0], 'first\n\nsecond');
   s.j.text('w1', Array.from({ length: 100 }, (_, i) => `line ${i} ${'z'.repeat(90)}`).join('\n'));
   await until(() => s.t.msgs(101).length === 4);
   const parts = s.t.msgs(101).slice(1);
