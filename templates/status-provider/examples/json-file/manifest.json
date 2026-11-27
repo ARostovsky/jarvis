@@ -1,0 +1,15 @@
+{
+  "schema": 1,
+  "name": "json-file",
+  "kind": "jobs",
+  "description": "Example: job status read from a JSON file, cost refreshed slowly",
+  "command": ["python3", "json_file.py"],
+  "args": ["{ids}"],
+  "pollS": 30,
+  "timeoutS": 20,
+  "slow_fields": { "cost": "15m" },
+  "idPattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$",
+  "env": { "pass": [], "set": {} },
+  "needs": [],
+  "notify": "any"
+}

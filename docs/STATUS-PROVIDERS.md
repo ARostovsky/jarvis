@@ -2,7 +2,7 @@
 
 A status provider is a small program that reads the state of long jobs (CI runs, training, deploys, pipeline runs) and prints it as JSON. Jarvis runs it on an interval and shows the result in a panel above the arbiter chat. No person and no model polls the job.
 
-This page is the contract (schema v1). A ready skeleton and an agent skill that builds providers are in [`templates/status-provider/`](../templates/status-provider/).
+This page is the contract (schema v1). `templates/status-provider/SKILL.md` repeats the contract for builder agents: change both together. A ready skeleton and an agent skill that builds providers are in [`templates/status-provider/`](../templates/status-provider/).
 
 ## Contents
 
@@ -187,6 +187,8 @@ node bin/jarvis.mjs provider-check <folder> <id> [<id> ...]
 ```
 
 It validates the manifest, runs the program with the server's argv, env base, cwd and timeout, validates the output (also a slow run with `--fields` when the manifest has `slow_fields`) and prints the normalized rows, warnings and the folder hash.
+
+Runnable examples: [`templates/status-provider/examples/`](../templates/status-provider/examples/README.md).
 
 Skeleton: [`templates/status-provider/status_provider_example.py`](../templates/status-provider/status_provider_example.py) with [`manifest.example.json`](../templates/status-provider/manifest.example.json).
 

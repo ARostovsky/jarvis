@@ -1,0 +1,28 @@
+{
+  "schema": 1,
+  "name": "github-prs",
+  "kind": "jobs",
+  "description": "GitHub pull requests of one repo: open/merged/closed, draft, review state, CI rollup, conflicts, reviewers, unresolved threads, head branch, link",
+  "command": [
+    "python3",
+    "github_prs.py"
+  ],
+  "args": [
+    "{ids}"
+  ],
+  "cwd": null,
+  "pollS": 300,
+  "timeoutS": 60,
+  "idPattern": "^[0-9]{1,5}$",
+  "maxIds": 50,
+  "env": {
+    "pass": [],
+    "set": {
+      "GITHUB_REPO": "example-org/example-repo"
+    }
+  },
+  "needs": [
+    "gh CLI logged in (gh auth status) and network to github.com"
+  ],
+  "notify": "any"
+}

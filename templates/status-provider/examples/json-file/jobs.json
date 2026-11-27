@@ -1,0 +1,5 @@
+{
+  "job-1": {"status": "active", "step": "train", "done": 3, "total": 7, "started": "2026-01-01T08:00:00Z", "ended": null, "cost": 1.5},
+  "job-2": {"status": "ok", "step": "report", "done": 7, "total": 7, "started": "2026-01-01T06:00:00Z", "ended": "2026-01-01T07:10:00Z", "cost": 4.2},
+  "job-3": {"status": "error", "step": "evaluate", "started": "2026-01-01T05:00:00Z", "ended": "2026-01-01T05:20:00Z", "cost": 0.3}
+}
