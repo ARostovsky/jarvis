@@ -2008,6 +2008,7 @@ export function archiveWorkspace(id: string, commit = false) {
   renameSync(w.dir, join(ARCHIVE, id));
   workspaces.delete(id);
   saveRegistry();
+  w.bus.emit('event', { type: 'archived', at: Date.now() }); // live streams only, never logged (the folder has moved): the Telegram bridge removes the topic at once
   return { kept, notes: moveNotesToArchive(w.meta) };
 }
 

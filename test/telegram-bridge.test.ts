@@ -34,12 +34,14 @@ function fakeTelegram(opts: { forum?: boolean } = {}) {
   const updates: any[] = [];
   const failNext: { code: number; retry?: number; description?: string; migrate?: number; method?: string; delayMs?: number; drop?: boolean }[] = [];
   let thread = 100, paths: string[] = [];
+  const slow: Record<string, number> = {}; // method -> ms to wait before answering
   const server = createServer(async (req, res) => {
     paths.push(req.url!);
     const method = req.url!.split('/').pop()!;
     const params = await body(req);
     calls.push({ method, params, at: Date.now() });
     const reply = (o: object) => res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(o));
+    if (slow[method]) await new Promise((r) => setTimeout(r, slow[method]));
     if (failNext.length && (failNext[0].method ?? 'sendMessage') === method) {
       const f = failNext.shift()!;
       if (f.drop) return void req.socket.destroy(); // a network error: no HTTP answer
@@ -57,13 +59,13 @@ function fakeTelegram(opts: { forum?: boolean } = {}) {
   });
   const msgs = (th?: number) => calls.filter((c) => c.method === 'sendMessage' && (th === undefined || c.params.message_thread_id === th)).map((c) => c.params.text as string);
   const msg = (text: string, o: any = {}) => ({ update_id: updates.length + 1, message: { message_id: updates.length + 1, text, chat: { id: CHAT }, from: { id: USER }, ...o } });
-  return { server, calls, updates, failNext, msgs, msg, paths: () => paths };
+  return { server, calls, updates, failNext, slow, msgs, msg, paths: () => paths };
 }
 
-function fakeJarvis(wss: { id: string; name: string }[]) {
+function fakeJarvis(wss: { id: string; name: string }[], archived: { id: string }[] = []) {
   const says: { body: any; origin?: string; type?: string }[] = [];
   const streams = new Map<string, ServerResponse[]>();
-  let connects = 0;
+  let connects = 0, lists = 0;
   let gate: Promise<void> = Promise.resolve();
   const flags = { failSay: false };
   let clock = 1;
@@ -71,7 +73,7 @@ function fakeJarvis(wss: { id: string; name: string }[]) {
   const hist = (ws: string) => history.get(ws) ?? (history.set(ws, [{ type: 'text', agentId: 'arbiter', text: `OLD ${ws}`, at: clock++ }]), history.get(ws)!);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, 'http://x');
-    if (url.pathname === '/workspaces') return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ workspaces: wss }));
+    if (url.pathname === '/workspaces') return lists++, void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ workspaces: wss, archived }));
     if (url.pathname === '/events') {
       connects++;
       const ws = url.searchParams.get('ws')!;
@@ -85,16 +87,17 @@ function fakeJarvis(wss: { id: string; name: string }[]) {
     if (url.pathname === '/say') { says.push({ body: await body(req), origin: req.headers.origin, type: req.headers['content-type'] }); await gate; return void res.writeHead(flags.failSay ? 500 : 204).end(); }
     res.writeHead(404).end();
   });
-  const emit = (ws: string, e: object, at = clock++) => { const ev = { ...e, at }; hist(ws).push(ev); streams.get(ws)?.forEach((r) => r.write(`data: ${JSON.stringify(ev)}\n\n`)); };
+  // `archived` goes to live streams only, like the real server
+  const emit = (ws: string, e: object, at = clock++) => { const ev = { ...e, at }; if ((e as any).type !== 'archived') hist(ws).push(ev); streams.get(ws)?.forEach((r) => r.write(`data: ${JSON.stringify(ev)}\n\n`)); };
   const text = (ws: string, t: string, agentId = 'arbiter', at?: number) => emit(ws, { type: 'text', agentId, text: t }, at);
   const drop = (ws: string) => { streams.get(ws)?.forEach((r) => r.destroy()); streams.delete(ws); };
   const hold = () => { let open!: () => void; gate = new Promise<void>((r) => { open = r; }); return open; };
   const ping = (ws: string) => streams.get(ws)?.forEach((r) => r.write(': ping\n\n'));
-  return { server, says, emit, text, drop, hold, ping, history, connects: () => connects, set failSay(v: boolean) { flags.failSay = v; } };
+  return { server, says, emit, text, drop, hold, ping, history, lists: () => lists, connects: () => connects, set failSay(v: boolean) { flags.failSay = v; } };
 }
 
-async function setup(wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }], o: { forum?: boolean; state?: string } = {}) {
-  const t = fakeTelegram({ forum: o.forum }), j = fakeJarvis(wss);
+async function setup(wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }], o: { forum?: boolean; state?: string; archived?: { id: string }[] } = {}) {
+  const t = fakeTelegram({ forum: o.forum }), j = fakeJarvis(wss, o.archived);
   const [tp, jp] = [await listen(t.server), await listen(j.server)];
   const stateFile = o.state ?? join(mkdtempSync(join(tmp, 's-')), 'state.json');
   const cfg: Cfg = { token: TOKEN, user: USER, chat: CHAT, jarvis: `http://127.0.0.1:${jp}`, api: `http://127.0.0.1:${tp}`, stateFile, debounceMs: 50, syncMs: 100, gapMs: 0, backfill: 0 };
@@ -902,5 +905,139 @@ test('a state file with fields the bridge does not know loads, and they are not 
   const st = stateOf(s.cfg);
   assert.ok(st.offset >= 5 && st.topics.w1 === 101 && !('said' in st) && !('future' in st));
   await b.stop();
+  await s.end();
+});
+
+const calls = (t: ReturnType<typeof fakeTelegram>, m: string) => t.calls.filter((c) => c.method === m);
+const fail = (t: ReturnType<typeof fakeTelegram>, method: string, description = 'Bad Request: x') => t.failNext.push({ code: 400, method, description });
+
+test('an archived event removes the topic at once, long before the next sync', async () => {
+  const wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }];
+  const archived: { id: string }[] = [];
+  const s = await setup(wss, { archived });
+  const b = await startBridge({ ...s.cfg, syncMs: 600_000 });
+  await until(() => s.j.connects() === 2 && !!topicOf(s.t, 'Two'));
+  wss.shift(); archived.push({ id: 'w1' });
+  s.j.emit('w1', { type: 'archived' });
+  await until(() => calls(s.t, 'deleteForumTopic').length === 1, 5000);
+  assert.deepEqual(calls(s.t, 'deleteForumTopic')[0].params, { chat_id: CHAT, message_thread_id: 101 });
+  await until(() => !stateOf(s.cfg).pending.w1 && stateOf(s.cfg).topics.w1 === undefined);
+  assert.equal(stateOf(s.cfg).topics.w2, 102, 'the other topic stays');
+  await b.stop();
+  await s.end();
+});
+
+test('without an event the sync still removes the topic; delete falls back to close; a workspace without a topic makes no call', async () => {
+  const wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }];
+  const archived: { id: string }[] = [{ id: 'never-had-a-topic' }];
+  const s = await setup(wss, { archived });
+  const b = await startBridge(s.cfg);
+  await until(() => !!topicOf(s.t, 'Two'));
+  assert.equal(calls(s.t, 'deleteForumTopic').length, 0);
+  fail(s.t, 'deleteForumTopic', 'Bad Request: not enough rights');
+  wss.shift(); archived.push({ id: 'w1' });
+  await until(() => calls(s.t, 'closeForumTopic').length === 1);
+  assert.equal(calls(s.t, 'closeForumTopic')[0].params.message_thread_id, 101);
+  await until(() => !stateOf(s.cfg).pending.w1);
+  assert.equal(calls(s.t, 'deleteForumTopic').length, 1, 'only w1');
+  await b.stop();
+  await s.end();
+});
+
+test('a topic that cannot be removed stays pending in the state file, is retried after a restart and with backoff, and a gone topic ends it', async () => {
+  const wss = [{ id: 'w1', name: 'One' }];
+  const archived: { id: string }[] = [];
+  const s = await setup(wss, { archived });
+  const b = await startBridge(s.cfg);
+  await until(() => !!topicOf(s.t, 'One'));
+  fail(s.t, 'deleteForumTopic'); fail(s.t, 'closeForumTopic');
+  wss.shift(); archived.push({ id: 'w1' });
+  await until(() => stateOf(s.cfg).pending.w1?.tries === 1);
+  assert.equal(stateOf(s.cfg).pending.w1.thread, 101);
+  assert.equal(stateOf(s.cfg).topics.w1, undefined);
+  await b.stop();
+  const b2 = await startBridge({ ...s.cfg, syncMs: 50 });
+  await until(() => !stateOf(s.cfg).pending.w1);
+  assert.equal(calls(s.t, 'deleteForumTopic').length, 2);
+  assert.equal(calls(s.t, 'closeForumTopic').length, 1);
+  await b2.stop();
+  // Telegram reports the topic gone: nothing more to do
+  const s2 = await setup([{ id: 'w1', name: 'One' }], { archived: [{ id: 'w1' }], state: s.cfg.stateFile.replace('state.json', 'x.json') });
+  writeFileSync(s2.cfg.stateFile, JSON.stringify({ chat: CHAT, offset: 0, topics: {}, cursors: {}, pending: { w1: { thread: 7, tries: 0, next: 0 } } }));
+  fail(s2.t, 'deleteForumTopic', 'Bad Request: message thread not found');
+  const b3 = await startBridge(s2.cfg);
+  await until(() => !stateOf(s2.cfg).pending.w1);
+  assert.equal(calls(s2.t, 'closeForumTopic').length, 0);
+  await b3.stop();
+  await s2.end();
+  await s.end();
+});
+
+test('kicks during a running sync merge into one more run', async () => {
+  const wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }];
+  const archived: { id: string }[] = [];
+  const s = await setup(wss, { archived });
+  const b = await startBridge({ ...s.cfg, syncMs: 600_000 });
+  await until(() => s.j.connects() === 2 && !!topicOf(s.t, 'Two') && s.j.lists() === 1);
+  s.t.slow.deleteForumTopic = 500;
+  wss.shift(); archived.push({ id: 'w1' });
+  s.j.emit('w1', { type: 'archived' });
+  await until(() => calls(s.t, 'deleteForumTopic').length === 1);
+  for (let i = 0; i < 3; i++) s.j.emit('w2', { type: 'archived' }); // w1's reader is gone with its topic; w2's stream is the sync is still waiting for Telegram
+  await until(() => s.j.lists() === 3);
+  await new Promise((r) => setTimeout(r, 400));
+  assert.equal(s.j.lists(), 3, 'three kicks, one more run');
+  await b.stop();
+  await s.end();
+});
+
+test('429 and a network error on delete are retried as a delete, never closed; a rights error closes', async () => {
+  const wss = [{ id: 'w1', name: 'One' }];
+  const archived: { id: string }[] = [];
+  const s = await setup(wss, { archived });
+  const b = await startBridge({ ...s.cfg, syncMs: 50 });
+  await until(() => !!topicOf(s.t, 'One'));
+  s.t.failNext.push({ code: 429, retry: 1, method: 'deleteForumTopic' }, { code: 0, drop: true, method: 'deleteForumTopic' });
+  wss.shift(); archived.push({ id: 'w1' });
+  await until(() => !stateOf(s.cfg).pending.w1 && stateOf(s.cfg).topics.w1 === undefined, 10_000);
+  assert.equal(calls(s.t, 'deleteForumTopic').length, 3);
+  assert.equal(calls(s.t, 'closeForumTopic').length, 0);
+  await b.stop();
+  await s.end();
+});
+
+test('an archived event for a workspace that is live again keeps its topic; a pending entry without a thread is dropped at load', async () => {
+  const wss = [{ id: 'w1', name: 'One' }];
+  const s = await setup(wss, { archived: [] });
+  writeFileSync(s.cfg.stateFile, JSON.stringify({ chat: CHAT, offset: 0, topics: {}, cursors: {}, pending: { bad: { tries: 1 }, worse: 5 } }));
+  const b = await startBridge({ ...s.cfg, syncMs: 600_000 });
+  await until(() => !!topicOf(s.t, 'One') && s.j.lists() === 1);
+  s.j.emit('w1', { type: 'archived' }); // archived, then restored before the sync ran: it is in the live list
+  await until(() => s.j.lists() === 2);
+  assert.equal(calls(s.t, 'deleteForumTopic').length, 0);
+  assert.equal(stateOf(s.cfg).topics.w1, 101);
+  assert.deepEqual(stateOf(s.cfg).pending, {});
+  await b.stop();
+  await s.end();
+});
+
+test('stopping the bridge during a delete logs nothing and does not close the topic', async () => {
+  const wss = [{ id: 'w1', name: 'One' }];
+  const archived: { id: string }[] = [];
+  const s = await setup(wss, { archived });
+  const b = await startBridge({ ...s.cfg, syncMs: 600_000 });
+  await until(() => !!topicOf(s.t, 'One'));
+  s.t.slow.deleteForumTopic = 2000;
+  const errs: string[] = [], orig = console.error;
+  console.error = (...a: unknown[]) => { errs.push(a.join(' ')); };
+  try {
+    wss.shift(); archived.push({ id: 'w1' });
+    s.j.emit('w1', { type: 'archived' });
+    await until(() => calls(s.t, 'deleteForumTopic').length === 1);
+    await b.stop();
+  } finally { console.error = orig; }
+  assert.equal(calls(s.t, 'closeForumTopic').length, 0);
+  assert.ok(!errs.some((e) => /topic of|delete topic/.test(e)), errs.join('\n'));
+  assert.ok(stateOf(s.cfg).pending.w1, 'still pending for the next start');
   await s.end();
 });

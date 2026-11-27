@@ -19,8 +19,11 @@ test('loadWorkspaces with an empty registry creates none', () => {
 });
 
 test('archiving the last workspace leaves zero workspaces', () => {
-  const { id } = addWorkspace('only').meta;
+  const w = addWorkspace('only');
+  const { id } = w.meta, seen: string[] = [];
+  w.bus.on('event', (e: { type: string }) => seen.push(e.type));
   archiveWorkspace(id);
+  assert.ok(seen.includes('archived'), 'live streams hear the archive (the Telegram bridge reacts to it)');
   assert.equal(workspaces.size, 0);
   assert.deepEqual(listArchived().map((a) => a.id), [id]);
 });
