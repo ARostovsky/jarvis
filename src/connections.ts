@@ -137,19 +137,32 @@ async function readCapped(r: Response): Promise<string> {
   return t;
 }
 
-// One 1-token request to <baseUrl>/v1/messages with the haiku alias. Returns only ok, status and the model the gateway answered with, or a short error.
-export async function testConnection(id: string): Promise<{ ok: boolean; status?: number; model?: string; error?: string }> {
-  const c = readStore().connections.find((x) => x.id === id);
-  if (!c) throw new Error(`no connection ${id}`);
+export type ModelTest = { alias: string; model: string; ok: boolean; status?: number; answered?: string; error?: string };
+
+// One 1-token request to <baseUrl>/v1/messages for one model: ok, status and the model the gateway answered with, or a short error.
+async function testModel(c: Connection, alias: string, model: string): Promise<ModelTest> {
   try {
     const r = await fetch(`${c.baseUrl}/v1/messages`, {
       method: 'POST', redirect: 'error', signal: AbortSignal.timeout(15000),
       headers: { 'content-type': 'application/json', 'anthropic-version': '2023-06-01', ...(c.apiKey ? { authorization: `Bearer ${c.apiKey}` } : {}) },
-      body: JSON.stringify({ model: c.modelHaiku || 'claude-haiku-4-5', max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }),
+      body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: 'user', content: 'ok' }] }),
     });
-    if (r.ok) { let j: any = {}; try { j = JSON.parse(await readCapped(r)); } catch {} return { ok: true, status: r.status, ...(typeof j.model === 'string' ? { model: redact(j.model, c) } : {}) }; }
+    if (r.ok) { let j: any = {}; try { j = JSON.parse(await readCapped(r)); } catch {} return { alias, model, ok: true, status: r.status, ...(typeof j.model === 'string' ? { answered: redact(j.model, c) } : {}) }; }
     const t = (await readCapped(r)).slice(0, 4096);
     let msg = t; try { const j = JSON.parse(t); msg = j?.error?.message ?? j?.message ?? t; } catch {}
-    return { ok: false, status: r.status, error: redact(String(msg).replace(/\s+/g, ' ').trim(), c) };
-  } catch (e) { return { ok: false, error: redact((e as Error).message, c) }; }
+    return { alias, model, ok: false, status: r.status, error: redact(String(msg).replace(/\s+/g, ' ').trim(), c) };
+  } catch (e) { return { alias, model, ok: false, error: redact((e as Error).message, c) }; }
+}
+
+// Tests every configured alias model (haiku, sonnet, opus); with none set, the default haiku name alone. ok = all passed.
+// Runs on the values given (the unsaved form) and writes nothing; an empty key with an id reuses the stored key for this call only.
+export async function testConnection(i: ConnectionInput & { id?: string }): Promise<{ ok: boolean; results: ModelTest[] }> {
+  const stored = i.id ? readStore().connections.find((x) => x.id === i.id) : undefined;
+  if (i.id && !stored) throw new Error(`no connection ${i.id}`);
+  const apiKey = str(i.apiKey) || stored?.apiKey || '';
+  if (!apiKey) throw new Error('API key is empty');
+  const c = { ...fields(i), id: i.id ?? '', baseUrl: normalizeBaseUrl(i.baseUrl), apiKey } as Connection;
+  const set = ([['haiku', c.modelHaiku], ['sonnet', c.modelSonnet], ['opus', c.modelOpus]] as const).filter(([, m]) => m) as [string, string][];
+  const results = await Promise.all((set.length ? set : [['haiku', 'claude-haiku-4-5'] as [string, string]]).map(([a, m]) => testModel(c, a, m)));
+  return { ok: results.every((r) => r.ok), results };
 }

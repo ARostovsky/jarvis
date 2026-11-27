@@ -55,7 +55,7 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/connections/update': (b) => changingConnections(() => updateConnection(String(b.id), b)),
   '/connections/delete': (b) => removeConnection(String(b.id)),
   '/connections/default': (b) => changingConnections(() => setDefaultConnection(b.id ? String(b.id) : null)),
-  '/connections/test': (b) => testConnection(String(b.id)),
+  '/connections/test': (b) => testConnection(b),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/archive/preview': (b) => archivePreview(String(b.ws)),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),

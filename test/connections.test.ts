@@ -92,7 +92,7 @@ test('env: the gateway variables go to env and settings.env over the user settin
   } finally { rmSync(d, { recursive: true, force: true }); }
 });
 
-test('test request: 1 token to /v1/messages with the haiku alias and a bearer key; the result and errors never hold the key', async () => {
+test('test request: 1 token to /v1/messages for every configured alias model and a bearer key; the result and errors never hold the key', async () => {
   const d = home();
   const seen: any[] = [];
   let mode: 'ok' | 'leak' = 'ok';
@@ -106,15 +106,25 @@ test('test request: 1 token to /v1/messages with the haiku alias and a bearer ke
   await new Promise((r) => srv.once('listening', r));
   try {
     const c = createConnection({ ...input, baseUrl: `http://127.0.0.1:${(srv.address() as any).port}/v1` });
-    const ok = await testConnection(c.id);
-    assert.deepEqual(ok, { ok: true, status: 200, model: 'haiku-real' });
-    assert.deepEqual([seen[0].url, seen[0].auth, seen[0].body.model, seen[0].body.max_tokens], ['/v1/messages', `Bearer ${KEY}`, 'h', 1]);
+    const ok = await testConnection({ id: c.id, baseUrl: c.baseUrl, modelHaiku: c.modelHaiku, modelSonnet: c.modelSonnet, modelOpus: c.modelOpus });
+    assert.deepEqual(ok, { ok: true, results: ['h', 's', 'o'].map((model, i) => ({ alias: ['haiku', 'sonnet', 'opus'][i], model, ok: true, status: 200, answered: 'haiku-real' })) });
+    assert.deepEqual(seen.map((x) => x.body.model).sort(), ['h', 'o', 's']);
+    assert.deepEqual([seen[0].url, seen[0].auth, seen[0].body.max_tokens], ['/v1/messages', `Bearer ${KEY}`, 1]);
+    // unsaved form values: the stored key is reused for an empty key field, nothing is written
+    const before = readFileSync(connectionsFile(), 'utf8');
+    seen.length = 0;
+    const form = await testConnection({ id: c.id, baseUrl: c.baseUrl, apiKey: '', modelHaiku: 'only-this' });
+    assert.deepEqual(form.results.map((r) => r.model), ['only-this']);
+    assert.equal(seen[0].auth, `Bearer ${KEY}`);
+    await assert.rejects(testConnection({ baseUrl: c.baseUrl, apiKey: '' }), /API key is empty/);
+    assert.equal(readFileSync(connectionsFile(), 'utf8'), before);
+    assert.equal(listConnections().connections.length, 1);
     mode = 'leak';
-    const bad = await testConnection(c.id);
-    assert.equal(bad.ok, false); assert.equal(bad.status, 401);
-    assert.ok(!JSON.stringify(bad).includes(KEY) && bad.error!.includes('***'));
+    const bad = await testConnection({ id: c.id, baseUrl: c.baseUrl, modelHaiku: c.modelHaiku, modelSonnet: c.modelSonnet, modelOpus: c.modelOpus });
+    assert.equal(bad.ok, false); assert.equal(bad.results.length, 3); assert.ok(bad.results.every((r) => r.status === 401));
+    assert.ok(!JSON.stringify(bad).includes(KEY) && bad.results[0].error!.includes('***'));
     srv.close();
-    const down = await testConnection(c.id);
+    const down = await testConnection({ id: c.id, baseUrl: c.baseUrl, modelHaiku: c.modelHaiku, modelSonnet: c.modelSonnet, modelOpus: c.modelOpus });
     assert.equal(down.ok, false); assert.ok(!JSON.stringify(down).includes(KEY));
     assert.ok(!readFileSync(connectionsFile(), 'utf8').includes('undefined'));
   } finally { srv.close(); rmSync(d, { recursive: true, force: true }); }
@@ -166,8 +176,8 @@ test('the test request reads at most a few KB of an error body', async () => {
   await new Promise<void>((r) => srv.listen(0, '127.0.0.1', r));
   try {
     const c = createConnection({ ...input, baseUrl: `http://127.0.0.1:${(srv.address() as any).port}` });
-    const r = await testConnection(c.id);
+    const r = await testConnection({ id: c.id, baseUrl: c.baseUrl, modelHaiku: c.modelHaiku, modelSonnet: c.modelSonnet, modelOpus: c.modelOpus });
     assert.equal(r.ok, false);
-    assert.ok(r.error!.length <= 300);
+    assert.ok(r.results.every((x) => x.error!.length <= 300));
   } finally { srv.closeAllConnections(); srv.close(); rmSync(d, { recursive: true, force: true }); }
 });

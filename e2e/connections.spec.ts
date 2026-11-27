@@ -46,21 +46,36 @@ test('Connections dialog: add, test against a gateway, keep the key on edit, set
     await expect(page.locator('#connList')).toContainText('Anthropic login');
     await page.locator('#connAdd').click();
     await expect(page.locator('#cfKey')).toHaveJSProperty('required', true);
+    // a new form carries the suggested model ids as real values; focusing one selects all of it
+    await expect(page.locator('#cfHaiku')).toHaveValue('claude-haiku-4-5');
+    await expect(page.locator('#cfSonnet')).toHaveValue('claude-sonnet-4-5');
+    await expect(page.locator('#cfOpus')).toHaveValue('claude-opus-4-1');
+    await page.locator('#cfSonnet').focus();
+    expect(await page.evaluate(() => { const i = document.getElementById('cfSonnet') as HTMLInputElement; return i.value.slice(i.selectionStart!, i.selectionEnd!); })).toBe('claude-sonnet-4-5');
     await page.fill('#cfName', name);
     await page.fill('#cfUrl', gw.url);
     await page.fill('#cfKey', KEY);
     await page.fill('#cfHaiku', 'haiku-on-gw');
     await page.fill('#cfSonnet', 'sonnet-on-gw');
+    await page.fill('#cfOpus', '');
+    const before = await list(page);
     await page.locator('#cfTest').click();
-    await expect(page.locator('#connResult')).toContainText('Works: HTTP 200');
-    expect(gw.hits[0]).toEqual({ url: '/v1/messages', auth: `Bearer ${KEY}`, model: 'haiku-on-gw' });
+    await expect(page.locator('#connResult')).toContainText('All models work');
+    await expect(page.locator('#connResult')).toContainText('OK haiku → haiku-on-gw');
+    await expect(page.locator('#connResult')).toContainText('OK sonnet → sonnet-on-gw');
+    await expect(page.locator('#connResult')).not.toContainText(/saved/i);
+    expect(await list(page)).toEqual(before); // Test persists nothing
+    await page.locator('#cfSave').click();
+    await expect(page.locator('#connResult')).toHaveText('Saved');
+    expect(gw.hits.map((h) => h.model).sort()).toEqual(['haiku-on-gw', 'sonnet-on-gw']);
+    expect(gw.hits.every((h) => h.url === '/v1/messages' && h.auth === `Bearer ${KEY}`)).toBe(true);
 
     // after the save the page holds no key: not in the input, not in the markup, not in the placeholder text of the list
     await expect(page.locator('#cfKey')).toHaveValue('');
     await expect(page.locator('#cfKey')).toHaveAttribute('placeholder', 'stored, leave empty to keep');
     expect(await page.locator('#connForm').innerHTML()).not.toContain(KEY); // markup only: input values are not part of innerHTML, the toHaveValue('') above checks the field
-    await expect(page.locator('#connList')).toContainText('key stored …wxyz');
-    await expect(page.locator('#connList')).toContainText('haiku → haiku-on-gw · sonnet → sonnet-on-gw');
+    await expect(page.locator('#connList')).toContainText(gw.url.replace(/\/v1\/$/, ''));
+    await expect(page.locator('#connList')).not.toContainText(/key stored|haiku →/); // the row is name and URL only; the details are in the edit form
 
     const api = await list(page);
     id = api.connections.find((c: any) => c.name === name).id;
@@ -70,16 +85,22 @@ test('Connections dialog: add, test against a gateway, keep the key on edit, set
     expect(statSync(file).mode & 0o777).toBe(0o600);
     expect(readFileSync(file, 'utf8')).toContain(KEY);
 
-    // edit with an empty key keeps the stored key: the test still passes
+    // editing keeps the stored values (no defaults filled in); Test with an empty key reuses the stored key for the call only and saves nothing
+    await expect(page.locator('#cfOpus')).toHaveValue('');
+    const stored = await list(page);
+    gw.hits.length = 0;
     await page.fill('#cfOpus', 'opus-on-gw');
+    await page.fill('#cfHaiku', 'changed-haiku');
     await page.locator('#cfTest').click();
-    await expect.poll(() => gw.hits.length).toBe(2);
-    await expect(page.locator('#connResult')).toContainText('Works: HTTP 200');
+    await expect(page.locator('#connResult')).toContainText('OK opus → opus-on-gw');
+    expect(gw.hits.map((h) => h.model).sort()).toEqual(['changed-haiku', 'opus-on-gw', 'sonnet-on-gw']);
+    expect(await list(page)).toEqual(stored);
+    await page.fill('#cfHaiku', 'haiku-on-gw');
 
     // a wrong key shows the gateway status and no secret
     await page.fill('#cfKey', 'wrong-key-value-123456');
     await page.locator('#cfTest').click();
-    await expect(page.locator('#connResult')).toContainText('Failed (HTTP 401)');
+    await expect(page.locator('#connResult')).toContainText('FAIL haiku → haiku-on-gw: HTTP 401');
     expect(await page.locator('#connResult').textContent()).not.toContain(KEY);
     await page.fill('#cfKey', KEY);
     await page.locator('#cfSave').click();
