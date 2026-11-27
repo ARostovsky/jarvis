@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
 import { startGuard } from './tmpguard.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, projectNotes, normPath, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listJobSources, listJobSourceFiles, getJobSourceDetails, getJobSourceScreenshot, approveJobSource, rejectJobSource, setWorkspaceJobSources, normPath, listArchived, recentFolders, projectNotes, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -46,7 +46,7 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/reorder': (b) => reorderWorkspaces(Array.isArray(b.ids) ? b.ids.map(String) : []),
   '/workspaces/notes': (b) => setWorkspaceNotes(String(b.ws), b.notes ? String(b.notes) : undefined),
-  '/workspaces/providers': (b) => setWorkspaceProviders(String(b.ws), b.providers),
+  '/workspaces/job-sources': (b) => setWorkspaceJobSources(String(b.ws), b.jobSources),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/archive/preview': (b) => archivePreview(String(b.ws)),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
@@ -63,8 +63,8 @@ const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
   '/stopall': (b) => ws(b.ws).stopAll(),
   '/config': (b) => ws(b.ws).configure(String(b.id), { model: b.model ? String(b.model) : undefined, effort: b.effort || undefined }),
   '/delete': (b) => ws(b.ws).deleteAgent(String(b.id), b.dirty === 'commit' || b.dirty === 'discard' ? b.dirty : undefined),
-  '/providers/approve': (b) => approveProvider(String(b.name), String(b.hash)),
-  '/providers/reject': (b) => rejectProvider(String(b.name), String(b.hash), b.reason ? String(b.reason) : undefined),
+  '/job-sources/approve': (b) => approveJobSource(String(b.name), String(b.hash)),
+  '/job-sources/reject': (b) => rejectJobSource(String(b.name), String(b.hash), b.reason ? String(b.reason) : undefined),
   '/panels/action': ({ ws: id, panelId, action, ...args }) => ws(id).panels.runAction(String(panelId), String(action), args),
   '/board': (b) => void ws(b.ws).postNote('user', Array.isArray(b.to) ? b.to.map(String) : ['all'], String(b.text)),
 };
@@ -86,15 +86,15 @@ createServer(async (req, res) => {
     if (!w) return void res.writeHead(404).end();
     w.refreshOpenItems(); // re-read the file: the watcher may lag
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(w.panels.panels()));
-  } else if (req.method === 'GET' && (url.pathname === '/providers' || url.pathname === '/providers/files' || url.pathname === '/providers/details')) {
+  } else if (req.method === 'GET' && (url.pathname === '/job-sources' || url.pathname === '/job-sources/files' || url.pathname === '/job-sources/details')) {
     try {
-      const out = url.pathname === '/providers' ? listProviders() : url.pathname === '/providers/details' ? getProviderDetails(url.searchParams.get('name') ?? '') : listProviderFiles(url.searchParams.get('name') ?? '', url.searchParams.get('hash') ?? '');
+      const out = url.pathname === '/job-sources' ? listJobSources() : url.pathname === '/job-sources/details' ? getJobSourceDetails(url.searchParams.get('name') ?? '') : listJobSourceFiles(url.searchParams.get('name') ?? '', url.searchParams.get('hash') ?? '');
       res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(out));
     } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
-  } else if (req.method === 'GET' && url.pathname === '/providers/screenshot') {
+  } else if (req.method === 'GET' && url.pathname === '/job-sources/screenshot') {
     if (!ownPage(req)) return void res.writeHead(404).end();
     try {
-      const { type, data } = getProviderScreenshot(url.searchParams.get('name') ?? '');
+      const { type, data } = getJobSourceScreenshot(url.searchParams.get('name') ?? '');
       res.writeHead(200, { 'content-type': type, 'content-length': data.length, 'x-content-type-options': 'nosniff', 'content-security-policy': "default-src 'none'; sandbox", 'cache-control': 'no-cache' }).end(data);
     } catch (e) { res.writeHead(statusOf(e)).end((e as Error).message); }
   } else if (req.method === 'GET' && url.pathname === '/local-file') {

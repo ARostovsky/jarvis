@@ -13,13 +13,13 @@ import { slugOf, idSuffix, journalKey, uniqueSuffix } from './slug.ts';
 import { arbiterNotesPrompt, creatorNotesLine, ensureWorkspaceNotes, migrationNotice, saveTurnText, restoreArchivedNotes, archiveNotes, countOpenItems, migrateArchivedNotes, workspaceDir, writeIndex } from './notes-layout.ts';
 import { createPanels, type Panel } from './panels.ts';
 import { createJobs, TERMINAL } from './jobs.ts';
-import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry } from './providers.ts';
+import { checkLocations, createRegistry, NAME_RE, type Locations, type Registry } from './job-sources.ts';
 import { createOpenItems, OPEN_ITEMS_PANEL_ID, openItemsFile, type OpenItemsSource } from './openitems.ts';
 import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
 import { voiceVocab } from './voice-vocab.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
 import { claudeTmpDir, removeAgentTmp } from './tmpguard.ts';
-import { HASH_RE, providerDetails, providerFiles, providerList, providerScreenshot } from './provider-admin.ts';
+import { HASH_RE, jobSourceDetails, jobSourceFiles, jobSourceList, jobSourceScreenshot } from './job-source-admin.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
 const query: typeof sdkQuery = process.env.JARVIS_FAKE_SDK ? (await import(resolve(process.env.JARVIS_FAKE_SDK))).query : sdkQuery;
@@ -45,7 +45,7 @@ export type Agent = {
 };
 
 // One tab in the UI: its own arbiter, agents, board and event log.
-export type WorkspaceMeta = { id: string; name: string; project?: string; notes?: string; providers?: string[] }; // providers: status providers enabled here, unset = all approved
+export type WorkspaceMeta = { id: string; name: string; project?: string; notes?: string; jobSources?: string[] }; // jobSources: job sources enabled here, unset = all approved
 // The user's reply to AskUserQuestion, merged into its input.
 export type AskReply = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> };
 
@@ -651,8 +651,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
   // Panels seam (src/panels.ts): `panelsLast` is filled by restore() from the log.
   const panelsLast = new Map<string, Panel>();
   const panels = createPanels(emit, panelsLast);
-  const proposals = new Map<string, any>(); // provider_proposed events not decided yet, key name:hash; rebuilt by restore()
-  const jobsNotes: string[] = []; // [jobs] and [providers] messages for a stopped arbiter, put in front of its next message (in memory only)
+  const proposals = new Map<string, any>(); // job_source_proposed events not decided yet, key name:hash; rebuilt by restore()
+  const jobsNotes: string[] = []; // [jobs] and [job sources] messages for a stopped arbiter, put in front of its next message (in memory only)
 
   const agents = new Map<string, Agent>();
   let removedUsd = 0; // spend of deleted agents, rebuilt from the log (removed, removed_cost) so it survives restarts
@@ -740,8 +740,8 @@ export function createWorkspace(meta: WorkspaceMeta) {
       }
       else if (e.type === 'tool' && e.agentId === ARBITER && e.name === 'mcp__jarvis__create_workspace') created++;
       else if (e.type === 'panel' || e.type === 'panel_removed') panels.restore(e);
-      else if (e.type === 'provider_proposed') proposals.set(`${e.name}:${e.hash}`, e);
-      else if (e.type === 'provider_decided') proposals.delete(`${e.name}:${e.hash}`);
+      else if (e.type === 'job_source_proposed' || e.type === 'provider_proposed') proposals.set(`${e.name}:${e.hash}`, e);
+      else if (e.type === 'job_source_decided' || e.type === 'provider_decided') proposals.delete(`${e.name}:${e.hash}`);
       else if (!a) continue;
       else if (e.type === 'compacted' && e.trigger === 'reset') (resetUnseeded = true, lastReset = { unhandled: e.unhandled ?? [], handled: e.handled ?? [] });
       else if (e.type === 'status') a.status = e.status;
@@ -1149,7 +1149,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     return true;
   }
 
-  // A message from Jarvis itself to the arbiter ([jobs], [providers]): an idle arbiter is woken, a busy one gets it queued in its inbox,
+  // A message from Jarvis itself to the arbiter ([jobs], [job sources]): an idle arbiter is woken, a busy one gets it queued in its inbox,
   // a stopped or failed one is not woken and gets it in front of its next message (the 10 newest are kept).
   function systemNote(text: string) {
     if (closed) return;
@@ -1160,17 +1160,17 @@ export function createWorkspace(meta: WorkspaceMeta) {
     if (jobsNotes.length > 10) jobsNotes.splice(0, jobsNotes.length - 10);
   }
 
-  // propose_provider: copy the folder into staging (refused in a notes folder or against the location rules) and show the user an approval card. Runs nothing.
-  function proposeProvider(name: string, from: string, report: string, note?: string) {
+  // propose_job_source: copy the folder into staging (refused in a notes folder or against the location rules) and show the user an approval card. Runs nothing.
+  function proposeJobSource(name: string, from: string, report: string, note?: string) {
     if (!isAbsolute(from)) throw new Error('dir must be an absolute path');
     const reg = registry();
     const l = reg.stage(from, (d) => {
       if (d.manifest.name !== name) throw new Error(`name "${name}" differs from the manifest name "${d.manifest.name}"`);
-      d.warnings.push(...checkLocations(join(reg.dir, name), d.manifest, providerLocations()));
+      d.warnings.push(...checkLocations(join(reg.dir, name), d.manifest, jobSourceLocations()));
     });
     const ev = { name, hash: l.sha256, manifest: l.manifest, files: l.files, report: report.slice(0, 8000), ...(note && { note: note.slice(0, 500) }), warnings: l.warnings, from: meta.id };
-    proposals.set(`${name}:${l.sha256}`, { type: 'provider_proposed', ...ev });
-    emit('provider_proposed', ev);
+    proposals.set(`${name}:${l.sha256}`, { type: 'job_source_proposed', ...ev });
+    emit('job_source_proposed', ev);
     return `proposed ${name} (${l.sha256.slice(0, 12)}); an approval card is waiting for the user, you are told when they decide`;
   }
 
@@ -1374,7 +1374,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const same = [...workspaces.values()].find((w) => w.meta.name.toLowerCase() === name.toLowerCase());
     if (same) throw new Error(`a workspace named "${same.meta.name}" exists (${same.meta.id}): pick another name`);
     const { model, effort } = agent(ARBITER);
-    const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes, meta.providers);
+    const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes, meta.jobSources);
     next.sendToAgent(ARBITER, `[task from workspace "${meta.name}" (${meta.id})]\nThis comes from the Jarvis of another workspace, not from the user.${meta.notes ? `\n${creatorNotesLine(workspaceDir(meta as { id: string; notes: string }))}` : ''}\n\n${task}`, `workspace:${meta.id}`);
     created++;
     return next.meta;
@@ -1394,16 +1394,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
 
   // Jobs tools: arbiter only (see jarvisTools). Errors are thrown with a one-line reason the arbiter reads.
   const jobsTools = () => [
-    tool('list_providers', 'List the status providers you may use for watch_jobs: name, description, idPattern, needs, poll interval, max ids.', {}, async () => {
-      const ok_ = providerList(registry()).filter((p) => p.status === 'approved' && (!meta.providers || meta.providers.includes(p.name)));
-      return ok(ok_.length ? ok_.map(({ name, description, idPattern, needs, pollS, status }) => ({ name, description, idPattern, needs, pollS, status })) : 'no approved provider is enabled for this workspace');
+    tool('list_job_sources', 'List the job sources you may use for watch_jobs: name, description, idPattern, needs, poll interval, max ids.', {}, async () => {
+      const ok_ = jobSourceList(registry()).filter((p) => p.status === 'approved' && (!meta.jobSources || meta.jobSources.includes(p.name)));
+      return ok(ok_.length ? ok_.map(({ name, description, idPattern, needs, pollS, status }) => ({ name, description, idPattern, needs, pollS, status })) : 'no approved job source is enabled for this workspace');
     }),
-    tool('watch_jobs', 'Put jobs on the jobs panel and have Jarvis poll them with an approved provider, with no model turn per poll. You get one batched "[jobs]" message when a job changes state. Call it right after a job starts. Refused for an unapproved, disabled or changed provider and for ids its idPattern does not accept.', {
-      provider: z.string().describe('provider name from list_providers'),
-      ids: z.array(z.string()).describe('job ids, as the provider expects them'),
+    tool('watch_jobs', 'Put jobs on the jobs panel and have Jarvis poll them with an approved source, with no model turn per poll. You get one batched "[jobs]" message when a job changes state. Call it right after a job starts. Refused for an unapproved, disabled or changed job source and for ids its idPattern does not accept.', {
+      source: z.string().describe('job source name from list_job_sources'),
+      ids: z.array(z.string()).describe('job ids, as the job source expects them'),
       labels: z.record(z.string(), z.string()).optional().describe('short label per id'),
-    }, async ({ provider, ids, labels }) => {
-      const r = await jobs.watch(provider, ids, labels);
+    }, async ({ source, ids, labels }) => {
+      const r = await jobs.watch(source, ids, labels);
       return ok({ added: r.added, rows: r.rows.map((x) => ({ id: x.id, state: x.state, ...(x.stale && { stale: x.stale }) })) });
     }),
     tool('clear_jobs', 'Drop rows from the jobs panel: the given ids, and with keepCurrent every finished row (done, failed, stopped), keeping the queued, running and waiting ones.', {
@@ -1413,13 +1413,13 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (!ids?.length && !keepCurrent) throw new Error('give ids, or keepCurrent true');
       return ok(jobs.clear({ ids, keepCurrent }));
     }),
-    tool('jobs_status', 'Current rows of the jobs panel and the freshness of each provider, from Jarvis memory. Runs no provider and makes no external call.', {}, async () => ok(jobs.jobs())),
-    ...(meta.notes ? [tool('propose_provider', 'Offer a finished status provider folder for the user to approve (an approval card appears in the UI). Jarvis copies the folder, runs nothing, and tells you when the user decided. The folder must not be in a notes folder.', {
-      name: z.string().describe('provider name, equal to the manifest name'),
-      dir: z.string().describe('absolute path of the provider folder'),
-      report: z.string().describe('the builder agent report with the provider-check output'),
+    tool('jobs_status', 'Current rows of the jobs panel and the freshness of each source, from Jarvis memory. Runs no job source and makes no external call.', {}, async () => ok(jobs.jobs())),
+    ...(meta.notes ? [tool('propose_job_source', 'Offer a finished job source folder for the user to approve (an approval card appears in the UI). Jarvis copies the folder, runs nothing, and tells you when the user decided. The folder must not be in a notes folder.', {
+      name: z.string().describe('job source name, equal to the manifest name'),
+      dir: z.string().describe('absolute path of the job source folder'),
+      report: z.string().describe('the builder agent report with the job-source-check output'),
       note: z.string().optional(),
-    }, async ({ name, dir: from, report, note }) => ok(proposeProvider(name, from, report, note)))] : []),
+    }, async ({ name, dir: from, report, note }) => ok(proposeJobSource(name, from, report, note)))] : []),
   ];
 
   // The arbiter manages every agent; a lead agent only manages its own sub-agents; everyone gets the board.
@@ -1674,7 +1674,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
   restore();
   // Jobs source: the watch list comes back from the panel's last rows; it polls at startup only when a job is unfinished.
   const jobs = createJobs({
-    panels, registry: registry(), allowed: () => meta.providers,
+    panels, registry: registry(), allowed: () => meta.jobSources,
     onChanges: (changes) => systemNote(jobsMessage(changes)),
     onNotice: (n) => systemNote(`[jobs] ${n.text}`),
   });
@@ -1746,7 +1746,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     // For the temp-volume guard (src/tmpguard.ts): a chat warning from the system, and the cwds of the agents that run.
     notice: (text: string) => emit('text', { agentId: ARBITER, text }),
     liveCwds: () => [...agents.values()].filter((x) => x.status !== 'stopped').map((x) => x.cwd),
-    emitProviderDecided: (d: { name: string; hash: string; approved: boolean; reason?: string }) => (proposals.delete(`${d.name}:${d.hash}`), emit('provider_decided', d)),
+    emitJobSourceDecided: (d: { name: string; hash: string; approved: boolean; reason?: string }) => (proposals.delete(`${d.name}:${d.hash}`), emit('job_source_decided', d)),
     wake,
     notesMessage,
     tellArbiter: (text: string) => sendToAgent(ARBITER, text, 'user'),
@@ -1833,7 +1833,7 @@ export function projectNotes() {
   return notesByProject([...[...workspaces.values()].map((w) => ({ meta: w.meta, at: at(w.dir) })), ...listArchived().map((m) => ({ meta: m, at: at(join(ARCHIVE, m.id)) }))]);
 }
 
-export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, providers?: string[]): Workspace {
+export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, jobSources?: string[]): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   if (notes && project && normPath(notes) === normPath(project)) throw new Error('notes folder must not be the project folder');
   if (notes) prepareNotes(resolve(notes));
@@ -1843,7 +1843,7 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   if (notes) try { for (const f of readdirSync(join(resolve(notes), 'journal'))) { const m = /-([a-z0-9]{4})\.md$/.exec(f); if (m) taken.add(m[1]); } } catch {}
   if (notes) try { for (const f of readdirSync(join(resolve(notes), 'workspaces'))) { const m = /-([a-z0-9]{4})$/.exec(f); if (m) taken.add(m[1]); } } catch {}
   const suffix = uniqueSuffix(taken);
-  const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}), ...(providers?.length ? { providers } : {}) };
+  const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}), ...(jobSources?.length ? { jobSources } : {}) };
   if (meta.notes) { // its own folder from the first prompt; the files are claimed so the first commit takes them
     for (const f of ensureWorkspaceNotes(meta).created) notesWritten(meta.notes, meta.id, f);
   }
@@ -1885,12 +1885,12 @@ export function setWorkspaceNotes(id: string, notes?: string) {
   saveRegistry();
 }
 
-// ---- status providers: one registry for the whole server, approval glue ----
+// ---- job sources: one registry for the whole server, approval glue ----
 let registryOf: Registry | undefined;
-const registry = () => (registryOf ??= createRegistry({ data: DATA, locations: providerLocations }));
+const registry = () => (registryOf ??= createRegistry({ data: DATA, locations: jobSourceLocations }));
 let archivedFolders: { at: number; notes: string[]; projects: string[] } | undefined;
-// Where a provider must not live or run: the notes and project folders of every live and archived workspace (archived ones are re-read at most once a minute).
-function providerLocations(): Locations {
+// Where a job source must not live or run: the notes and project folders of every live and archived workspace (archived ones are re-read at most once a minute).
+function jobSourceLocations(): Locations {
   if (!archivedFolders || Date.now() - archivedFolders.at > 60_000) {
     const m = listArchived();
     archivedFolders = { at: Date.now(), notes: m.flatMap((x) => (x.notes ? [x.notes] : [])), projects: m.flatMap((x) => (x.project ? [x.project] : [])) };
@@ -1900,46 +1900,46 @@ function providerLocations(): Locations {
 }
 const stale = (e: unknown) => (/^stale/.test((e as Error).message) ? Object.assign(e as Error, { status: 409 }) : e);
 
-// GET /providers: every folder in the providers dir with its approval state, plus proposals whose staged copy still exists.
-export function listProviders() {
+// GET /job-sources: every folder in the job sources dir with its approval state, plus proposals whose staged copy still exists.
+export function listJobSources() {
   const reg = registry();
   const seen = new Map<string, any>();
   for (const w of workspaces.values()) for (const p of w.proposals()) if (existsSync(reg.stagingDir(p.name, p.hash))) seen.set(`${p.name}:${p.hash}`, { ...p, ws: w.meta.id });
-  return { providers: providerList(reg), proposals: [...seen.values()].map(({ type, at, ...p }) => p) };
+  return { jobSources: jobSourceList(reg), proposals: [...seen.values()].map(({ type, at, ...p }) => p) };
 }
-export const listProviderFiles = (name: string, hash: string) => providerFiles(registry(), name, hash);
-export const getProviderDetails = (name: string) => providerDetails(registry(), name);
-export const getProviderScreenshot = (name: string) => providerScreenshot(registry(), name);
+export const listJobSourceFiles = (name: string, hash: string) => jobSourceFiles(registry(), name, hash);
+export const getJobSourceDetails = (name: string) => jobSourceDetails(registry(), name);
+export const getJobSourceScreenshot = (name: string) => jobSourceScreenshot(registry(), name);
 
 // Tells the workspaces that hold the proposal (the card hides there too). Only the user's click gets here (POST with the Origin check); no tool approves.
 function decided(name: string, hash: string, approved: boolean, text: string, reason?: string) {
   for (const w of workspaces.values()) {
     if (!w.proposals().some((p) => p.name === name && p.hash === hash)) continue;
-    w.emitProviderDecided({ name, hash, approved, ...(reason && { reason }) });
+    w.emitJobSourceDecided({ name, hash, approved, ...(reason && { reason }) });
     w.systemNote(text);
   }
 }
 // One click: installs the staged copy (or approves a hand-placed folder at that hash). 409 when the files changed since the card was shown.
-export function approveProvider(name: string, hash: string) {
+export function approveJobSource(name: string, hash: string) {
   if (!NAME_RE.test(name) || !HASH_RE.test(hash)) throw new Error('bad name or hash');
   let rec;
   try { rec = registry().approve(name, hash); } catch (e) { throw stale(e); }
-  decided(name, hash, true, `[providers] The user approved provider ${name}. It is ready: call list_providers, then watch_jobs for the jobs in flight, and record it in the notes.`);
+  decided(name, hash, true, `[job sources] The user approved job source ${name}. It is ready: call list_job_sources, then watch_jobs for the jobs in flight, and record it in the notes.`);
   return { name, hash, approvedAt: rec.approvedAt };
 }
-export function rejectProvider(name: string, hash: string, reason?: string) {
+export function rejectJobSource(name: string, hash: string, reason?: string) {
   if (!NAME_RE.test(name) || !HASH_RE.test(hash)) throw new Error('bad name or hash');
   const why = reason?.trim().slice(0, 500);
   registry().reject(name, hash);
-  decided(name, hash, false, `[providers] The user rejected provider ${name}${why ? `, reason (the user's words): ${why.replace(/\s+/g, ' ')}` : ''}. Do not propose it again unchanged.`, why);
+  decided(name, hash, false, `[job sources] The user rejected job source ${name}${why ? `, reason (the user's words): ${why.replace(/\s+/g, ' ')}` : ''}. Do not propose it again unchanged.`, why);
 }
-// Empty or no list = all approved providers.
-export function setWorkspaceProviders(id: string, list?: unknown) {
+// Empty or no list = all approved job sources.
+export function setWorkspaceJobSources(id: string, list?: unknown) {
   const w = workspaces.get(id);
   if (!w) throw new Error(`no workspace ${id}`);
   const names = Array.isArray(list) ? [...new Set(list.map(String))] : [];
-  if (names.some((n) => !NAME_RE.test(n))) throw new Error('bad provider name');
-  if (names.length) w.meta.providers = names; else delete w.meta.providers;
+  if (names.some((n) => !NAME_RE.test(n))) throw new Error('bad job source name');
+  if (names.length) w.meta.jobSources = names; else delete w.meta.jobSources;
   saveRegistry();
 }
 
@@ -2025,7 +2025,7 @@ export function deleteArchived(id: string, confirmName: string) {
 export function restoreWorkspace(id: string) {
   const from = join(ARCHIVE, id);
   if (!existsSync(join(from, 'meta.json')) || workspaces.has(id)) throw new Error(`cannot restore ${id}`);
-  const { archivedAt, ...meta } = readJson(join(from, 'meta.json'));
+  const { archivedAt, ...meta } = legacyMeta(readJson(join(from, 'meta.json')));
   const to = join(DATA, 'workspaces', id);
   mkdirSync(join(DATA, 'workspaces'), { recursive: true });
   renameSync(from, to);
@@ -2048,10 +2048,13 @@ export function restoreWorkspace(id: string) {
   return meta as WorkspaceMeta;
 }
 
+// Older workspaces stored the job source choice as `providers` (the old name of job sources).
+const legacyMeta = (m: any): any => { const { providers, ...rest } = m; return providers && !rest.jobSources ? { ...rest, jobSources: providers } : rest; };
+
 export function loadWorkspaces() {
   mkdirSync(DATA, { recursive: true });
   const metas: WorkspaceMeta[] = existsSync(REGISTRY) ? readJson(REGISTRY) : [];
-  for (const m of metas) workspaces.set(m.id, createWorkspace(m));
+  for (const m of metas) workspaces.set(m.id, createWorkspace(legacyMeta(m)));
   // Workspaces archived before archiving moved the notes folder.
   for (const m of migrateArchivedNotes(listArchived(), (id) => workspaces.has(id))) afterNotesMove(m);
 }

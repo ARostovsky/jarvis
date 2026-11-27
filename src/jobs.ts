@@ -1,9 +1,9 @@
-// The `jobs` panel source: runs approved status providers, validates their output (an untrusted boundary), keeps the watch list in the panel's rows.
-// No LLM, no agent, no import of agents.ts: the panel API is injected. Providers are read-only processes started with argv, never a shell.
+// The `jobs` panel source: runs approved job sources, validates their output (an untrusted boundary), keeps the watch list in the panel's rows.
+// No LLM, no agent, no import of agents.ts: the panel API is injected. Job sources are read-only processes started with argv, never a shell.
 import { spawn } from 'node:child_process';
 import { existsSync, lstatSync, statSync } from 'node:fs';
 import { isAbsolute, join, resolve } from 'node:path';
-import { idOk, limits, loadProvider, type Locations, type Manifest, type Registry } from './providers.ts';
+import { idOk, limits, loadJobSource, type Locations, type Manifest, type Registry } from './job-sources.ts';
 
 // Panel API (contract 1), declared structurally so this module does not depend on src/panels.ts.
 export type Panel = { panelId: string; kind: string; title: string; data: unknown; badge?: { text: string; level: 'active' | 'ok' | 'warn' | 'error' } };
@@ -18,23 +18,23 @@ export const STATES = ['queued', 'running', 'waiting', 'done', 'failed', 'stoppe
 export type State = (typeof STATES)[number];
 export const TERMINAL = new Set<string>(['done', 'failed', 'stopped']);
 export type Row = {
-  id: string; provider: string; label?: string; state: State; detail?: string; step?: string;
+  id: string; source: string; label?: string; state: State; detail?: string; step?: string;
   progress?: { done: number; total?: number }; startedAt?: string; finishedAt?: string; link?: string;
   costUsd?: number; error?: string; stale?: string; pending?: boolean; changedAt?: string;
   asOf?: Record<string, string>; // ISO fetch time of each slow field
-  watchLabel?: string; // the label given to watch_jobs; it wins over the provider's and survives a restart with the row
+  watchLabel?: string; // the label given to watch_jobs; it wins over the job source's and survives a restart with the row
 };
-export type Change = { id: string; provider: string; label?: string; from: State; to: State; detail?: string; step?: string; error?: string; link?: string };
-export type ProviderStatus = { provider: string; at: number; ok: boolean; error?: string; errorKind?: string };
+export type Change = { id: string; source: string; label?: string; from: State; to: State; detail?: string; step?: string; error?: string; link?: string };
+export type JobSourceStatus = { source: string; at: number; ok: boolean; error?: string; errorKind?: string };
 
 const MAX_ROWS = 200, MAX_OUT = 2 * 1024 * 1024;
 const BASE_ENV = ['PATH', 'HOME', 'USER', 'LANG', 'TZ', 'XDG_CONFIG_HOME', 'XDG_CACHE_HOME', 'SSL_CERT_FILE', 'HTTPS_PROXY', 'NO_PROXY'];
 const ROW_FIELDS = ['label', 'detail', 'step', 'progress', 'startedAt', 'finishedAt', 'link', 'costUsd', 'error'] as const;
 const isObj = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v);
 
-// ---- argv and env (the same code runs the server's polls and `jarvis provider-check`) ----
+// ---- argv and env (the same code runs the server's polls and `jarvis job-source-check`) ----
 
-// Base set + manifest `pass` + `set` (with {id} filled) + JARVIS_STATUS_SCHEMA. No other server env reaches the provider.
+// Base set + manifest `pass` + `set` (with {id} filled) + JARVIS_STATUS_SCHEMA. No other server env reaches the job source.
 export function buildEnv(m: Manifest, id?: string, src: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(src)) if (v !== undefined && (BASE_ENV.includes(k) || k.startsWith('LC_'))) env[k] = v;
@@ -44,11 +44,11 @@ export function buildEnv(m: Manifest, id?: string, src: NodeJS.ProcessEnv = proc
   return env;
 }
 
-// The argv of one call: relative entries that are files in the provider folder become absolute; {ids} expands to one entry per id;
+// The argv of one call: relative entries that are files in the job source folder become absolute; {ids} expands to one entry per id;
 // a slow run appends `--fields <keys>`.
 export function buildArgv(folder: string, m: Manifest, ids: string[], fields?: string[]): string[] {
   const file = (e: string) => !isAbsolute(e) && !e.startsWith('-') && existsSync(join(folder, e)) && lstatSync(join(folder, e)).isFile() ? join(folder, e) : e;
-  // file() sees the template entry only, so an id can never turn into a path of the provider folder.
+  // file() sees the template entry only, so an id can never turn into a path of the job source folder.
   const argv = [...m.command.map(file), ...m.args.flatMap((a) => (a === '{ids}' ? ids : [file(a).replaceAll('{id}', ids[0] ?? '')]))];
   return fields?.length ? [...argv, '--fields', fields.join(',')] : argv;
 }
@@ -59,7 +59,7 @@ export const callsFor = (m: Manifest, ids: string[]): string[][] => (m.mode === 
 // ---- one process ----
 let running = 0;
 const waiters: (() => void)[] = [];
-// At most 4 provider processes at once, across all workspaces.
+// At most 4 job source processes at once, across all workspaces.
 async function slot<T>(f: () => Promise<T>): Promise<T> {
   while (running >= 4) await new Promise<void>((r) => waiters.push(r));
   running++;
@@ -112,8 +112,8 @@ export function parseOutput(stdout: string, asked: string[], mode: 'fast' | 'slo
   try { j = JSON.parse(stdout); } catch { return { ok: false, error: 'output is not a JSON object' }; }
   if (!isObj(j)) return { ok: false, error: 'output is not a JSON object' };
   if (typeof j.schema !== 'number' || !Number.isInteger(j.schema) || j.schema < 1) return { ok: false, error: 'output has no schema number' };
-  if (j.schema > 1) return { ok: false, error: `provider speaks schema ${j.schema}, Jarvis knows 1` };
-  if (typeof j.error === 'string' && j.error) return { ok: false, error: clean(j.error, 300) ?? 'provider error', errorKind: ['auth', 'network', 'other'].includes(j.errorKind as string) ? (j.errorKind as string) : undefined };
+  if (j.schema > 1) return { ok: false, error: `job source speaks schema ${j.schema}, Jarvis knows 1` };
+  if (typeof j.error === 'string' && j.error) return { ok: false, error: clean(j.error, 300) ?? 'job source error', errorKind: ['auth', 'network', 'other'].includes(j.errorKind as string) ? (j.errorKind as string) : undefined };
   if (!Array.isArray(j.rows)) return { ok: false, error: 'output has no rows list' };
   const warnings: string[] = [], rows = new Map<string, any>(), ask = new Set(asked);
   const slow = new Set(m.slow.map((s) => s.field));
@@ -149,9 +149,9 @@ export function parseOutput(stdout: string, asked: string[], mode: 'fast' | 'slo
   return { ok: true, checked: iso(j.checked) ?? new Date().toISOString(), rows, warnings };
 }
 
-// One validated run of a provider for `ids`: all calls ({id} mode: one per id), in the fast or slow mode.
+// One validated run of a job source for `ids`: all calls ({id} mode: one per id), in the fast or slow mode.
 export type RunResult = { ok: boolean; rows: Map<string, any>; failed: Map<string, { error: string; errorKind?: string }>; warnings: string[] };
-export async function runProvider(folder: string, m: Manifest, ids: string[], mode: 'fast' | 'slow'): Promise<RunResult> {
+export async function runJobSource(folder: string, m: Manifest, ids: string[], mode: 'fast' | 'slow'): Promise<RunResult> {
   const fields = mode === 'slow' ? m.slow.map((s) => s.key) : undefined;
   const rowFields = mode === 'slow' ? m.slow.map((s) => s.field) : [];
   const cwd = m.cwd === null ? folder : resolve(folder, m.cwd);
@@ -170,21 +170,21 @@ export async function runProvider(folder: string, m: Manifest, ids: string[], mo
 // Delay after `failures` failed polls in a row: 1x, 2x, 4x of pollS, at most 5 minutes (or pollS when that is longer).
 export const backoffMs = (pollS: number, failures: number) => Math.min(pollS * 1000 * [1, 2, 4][Math.min(failures, 2)], Math.max(300_000, pollS * 1000));
 
-type Entry = { provider: string; label?: string };
-type PState = { nextFast: number; failures: number; nextSlow: number[]; slowFailures: number; busy: boolean; repoll?: boolean; down?: number; downNoticed?: boolean; changedNoticed?: boolean; last?: ProviderStatus; slowLast?: ProviderStatus };
+type Entry = { source: string; label?: string };
+type PState = { nextFast: number; failures: number; nextSlow: number[]; slowFailures: number; busy: boolean; repoll?: boolean; down?: number; downNoticed?: boolean; changedNoticed?: boolean; last?: JobSourceStatus; slowLast?: JobSourceStatus };
 
 export type JobsOpts = {
   panels: PanelsApi; registry: Registry;
-  allowed?: () => string[] | undefined;                      // providers enabled for this workspace; undefined = all approved
-  onChanges?: (changes: Change[]) => void;                   // one call per poll round, already filtered by each provider's `notify`
-  onNotice?: (n: { kind: 'changed' | 'unreachable'; provider: string; text: string }) => void;
+  allowed?: () => string[] | undefined;                      // job sources enabled for this workspace; undefined = all approved
+  onChanges?: (changes: Change[]) => void;                   // one call per poll round, already filtered by each job source's `notify`
+  onNotice?: (n: { kind: 'changed' | 'unreachable'; source: string; text: string }) => void;
   now?: () => number; timers?: boolean; unreachableMs?: number;
 };
 
 export function createJobs(o: JobsOpts) {
   const now = o.now ?? Date.now;
   const on = () => process.env.JARVIS_JOBS !== '0';
-  const rows = new Map<string, Row>();        // key provider\0id
+  const rows = new Map<string, Row>();        // key job source\0id
   const st = new Map<string, PState>();
   const key = (p: string, id: string) => `${p}\0${id}`;
   let timer: ReturnType<typeof setTimeout> | undefined, started = false, lastJson = '';
@@ -195,7 +195,7 @@ export function createJobs(o: JobsOpts) {
     rows.clear();
     const p = o.panels.panels().find((x) => x.panelId === 'jobs');
     const list = isObj(p?.data) && Array.isArray(p.data.rows) ? p.data.rows : [];
-    for (const r of list.slice(0, MAX_ROWS)) if (isObj(r) && typeof r.id === 'string' && typeof r.provider === 'string' && (STATES as readonly string[]).includes(r.state as string)) rows.set(key(r.provider, r.id), r as unknown as Row);
+    for (const r0 of list.slice(0, MAX_ROWS)) { const r = isObj(r0) && r0.source === undefined && typeof r0.provider === 'string' ? { ...r0, source: r0.provider } : r0; if (isObj(r) && typeof r.id === 'string' && typeof r.source === 'string' && (STATES as readonly string[]).includes(r.state as string)) rows.set(key(r.source, r.id), r as unknown as Row); }
     lastJson = JSON.stringify([...rows.values()]);
   }
 
@@ -218,25 +218,25 @@ export function createJobs(o: JobsOpts) {
     o.panels.setPanel({ panelId: 'jobs', kind: 'jobs', title: 'Jobs', data: { rows: list }, badge: badge() });
   }
   function status() {
-    const detail = [...st.entries()].filter(([p]) => [...rows.values()].some((r) => r.provider === p)).map(([, s]) => s.last).filter(Boolean) as ProviderStatus[];
+    const detail = [...st.entries()].filter(([p]) => [...rows.values()].some((r) => r.source === p)).map(([, s]) => s.last).filter(Boolean) as JobSourceStatus[];
     const bad = detail.find((d) => !d.ok);
     o.panels.setPanelStatus({ panelId: 'jobs', at: now(), ok: !bad, error: bad?.error, detail });
   }
 
-  const idsOf = (p: string) => [...rows.values()].filter((r) => r.provider === p).map((r) => r.id);
+  const idsOf = (p: string) => [...rows.values()].filter((r) => r.source === p).map((r) => r.id);
   // Finished rows are not polled again.
-  const pollIds = (p: string) => [...rows.values()].filter((r) => r.provider === p && !TERMINAL.has(r.state)).map((r) => r.id);
-  const providers = () => [...new Set([...rows.values()].map((r) => r.provider))];
-  // Providers with a row to poll: a provider with only finished rows needs no run, no hash, no timer.
-  const pollable = () => providers().filter((p) => pollIds(p).length);
+  const pollIds = (p: string) => [...rows.values()].filter((r) => r.source === p && !TERMINAL.has(r.state)).map((r) => r.id);
+  const sources = () => [...new Set([...rows.values()].map((r) => r.source))];
+  // Job sources with a row to poll: a job source with only finished rows needs no run, no hash, no timer.
+  const pollable = () => sources().filter((p) => pollIds(p).length);
   const allowedNow = (p: string) => { const a = o.allowed?.(); return !a || a.includes(p); };
 
-  // Marks every row of a provider that cannot run (disabled, changed, not approved).
+  // Marks every row of a job source that cannot run (disabled, changed, not approved).
   function markStale(p: string, why: string | undefined) {
-    for (const r of rows.values()) if (r.provider === p) { if (why) r.stale = why; else delete r.stale; }
+    for (const r of rows.values()) if (r.source === p) { if (why) r.stale = why; else delete r.stale; }
   }
 
-  // One round for a provider: fast run, then the slow run when due. Appends state changes to `changes`.
+  // One round for a source: fast run, then the slow run when due. Appends state changes to `changes`.
   async function pollOne(p: string, changes: Change[]) {
     await pollOnce(p, changes);
     // A watch() during the poll asked for a poll that sees its new rows.
@@ -249,26 +249,26 @@ export function createJobs(o: JobsOpts) {
     try {
       let loaded;
       try {
-        if (!allowedNow(p)) throw new Error('provider is disabled for this workspace');
+        if (!allowedNow(p)) throw new Error('job source is disabled for this workspace');
         loaded = o.registry.use(p);
         if (s.changedNoticed) s.changedNoticed = false;
         markStale(p, undefined);
       } catch (e) {
         const msg = (e as Error).message;
         markStale(p, msg);
-        s.last = { provider: p, at: now(), ok: false, error: msg };
+        s.last = { source: p, at: now(), ok: false, error: msg };
         s.nextFast = now() + backoffMs(60, s.failures++);
-        if (/files changed/.test(msg) && !s.changedNoticed) { s.changedNoticed = true; o.onNotice?.({ kind: 'changed', provider: p, text: `provider ${p}: files changed since approval; its jobs are stale until the user approves again` }); }
+        if (/files changed/.test(msg) && !s.changedNoticed) { s.changedNoticed = true; o.onNotice?.({ kind: 'changed', source: p, text: `job source ${p}: files changed since approval; its jobs are stale until the user approves again` }); }
         return;
       }
       const m = loaded.manifest, ids = pollIds(p);
       if (!ids.length) { s.nextFast = now() + m.pollS * 1000; return; }
-      const fast = await runProvider(loaded.folder, m, ids, 'fast');
+      const fast = await runJobSource(loaded.folder, m, ids, 'fast');
       const t = now(), at = new Date(t).toISOString();
       for (const id of ids) {
         const r = rows.get(key(p, id)), got = fast.rows.get(id);
         if (!r || !got) continue;
-        const next: Row = { id, provider: p, state: got.state };
+        const next: Row = { id, source: p, state: got.state };
         for (const f of ROW_FIELDS) if (got[f] !== undefined) (next as any)[f] = got[f];
         // The watch label wins over the source's label.
         if (r.watchLabel) next.label = next.watchLabel = r.watchLabel;
@@ -278,7 +278,7 @@ export function createJobs(o: JobsOpts) {
         if (r.state !== next.state) {
           next.changedAt = at;
           if (!r.pending) { // the first state of a new watch is no change
-            const c: Change = { id, provider: p, label: next.label, from: r.state, to: next.state, detail: next.detail, step: next.step, error: next.error, link: next.link };
+            const c: Change = { id, source: p, label: next.label, from: r.state, to: next.state, detail: next.detail, step: next.step, error: next.error, link: next.link };
             const n = m.notify;
             if (n === 'any' || (n === 'terminal' && TERMINAL.has(next.state)) || (n === 'failed' && next.state === 'failed')) changes.push(c);
           }
@@ -289,19 +289,19 @@ export function createJobs(o: JobsOpts) {
       else {
         s.failures++; s.nextFast = t + backoffMs(m.pollS, s.failures - 1);
         s.down ??= t;
-        if (!s.downNoticed && t - s.down >= (o.unreachableMs ?? 30 * 60_000) && [...rows.values()].some((r) => r.provider === p && !TERMINAL.has(r.state))) {
-          s.downNoticed = true; o.onNotice?.({ kind: 'unreachable', provider: p, text: `provider ${p} has been unreachable for ${Math.round((t - s.down) / 60000)} min while its jobs run` });
+        if (!s.downNoticed && t - s.down >= (o.unreachableMs ?? 30 * 60_000) && [...rows.values()].some((r) => r.source === p && !TERMINAL.has(r.state))) {
+          s.downNoticed = true; o.onNotice?.({ kind: 'unreachable', source: p, text: `job source ${p} has been unreachable for ${Math.round((t - s.down) / 60000)} min while its jobs run` });
         }
       }
       const first = [...fast.failed.values()][0];
-      s.last = { provider: p, at: t, ok: fast.ok, error: first?.error, errorKind: first?.errorKind };
+      s.last = { source: p, at: t, ok: fast.ok, error: first?.error, errorKind: first?.errorKind };
 
       if (fast.ok || fast.rows.size) await slowRun(p, loaded, ids);
     } finally { s.busy = false; }
   }
 
   // `ids` were taken before the fast run, so rows that just finished still get their slow values.
-  async function slowRun(p: string, loaded: ReturnType<typeof loadProvider>, ids: string[]) {
+  async function slowRun(p: string, loaded: ReturnType<typeof loadJobSource>, ids: string[]) {
     const m = loaded.manifest, s = state(p);
     if (!m.slow.length) return;
     const t = now();
@@ -310,7 +310,7 @@ export function createJobs(o: JobsOpts) {
     if (!ids.length) return;
     // Fields due now share one run, with the keys of the fields that are due.
     const sub: Manifest = { ...m, slow: dueFields };
-    const res = await runProvider(loaded.folder, sub, ids, 'slow');
+    const res = await runJobSource(loaded.folder, sub, ids, 'slow');
     const at = new Date(now()).toISOString();
     for (const [id, got] of res.rows) {
       const r = rows.get(key(p, id));
@@ -318,10 +318,10 @@ export function createJobs(o: JobsOpts) {
       for (const f of dueFields) if (got[f.field] !== undefined) { (r as any)[f.field] = got[f.field]; (r.asOf ??= {})[f.field] = at; }
     }
     m.slow.forEach((f, i) => { if (dueFields.includes(f)) s.nextSlow[i] = now() + (res.ok ? f.everyS * 1000 : Math.min(f.everyS * 1000, backoffMs(m.pollS, ++s.slowFailures))); });
-    if (res.ok) { s.slowFailures = 0; if (s.last?.error?.startsWith('slow run: ')) s.last = { provider: p, at: now(), ok: true }; }
+    if (res.ok) { s.slowFailures = 0; if (s.last?.error?.startsWith('slow run: ')) s.last = { source: p, at: now(), ok: true }; }
     else {
       const f = [...res.failed.values()][0];
-      s.last = { provider: p, at: now(), ok: false, error: `slow run: ${f?.error ?? 'failed'}`, errorKind: f?.errorKind };
+      s.last = { source: p, at: now(), ok: false, error: `slow run: ${f?.error ?? 'failed'}`, errorKind: f?.errorKind };
     }
   }
 
@@ -330,14 +330,14 @@ export function createJobs(o: JobsOpts) {
     const changes: Change[] = [];
     await Promise.all(ps.map((p) => pollOne(p, changes).catch((e) => {
       const s = state(p), error = (e as Error).message;
-      s.last = { provider: p, at: now(), ok: false, error };
+      s.last = { source: p, at: now(), ok: false, error };
       s.nextFast = now() + backoffMs(60, s.failures++);
     })));
     publish(); status();
     if (changes.length) o.onChanges?.(changes);
   }
 
-  // Runs every provider whose next poll is due at `t`. Called by the timer; tests call it with a fake clock.
+  // Runs every job source whose next poll is due at `t`. Called by the timer; tests call it with a fake clock.
   const tick = async (t = now()) => { if (!on()) return; await round(pollable().filter((p) => (state(p).nextFast <= t))); };
   function arm() {
     if (!started || o.timers === false || timer || !on()) return;
@@ -348,12 +348,12 @@ export function createJobs(o: JobsOpts) {
     timer.unref();
   }
 
-  function addRows(provider: string, ids: string[], given: Record<string, string> = {}) {
+  function addRows(source: string, ids: string[], given: Record<string, string> = {}) {
     for (const id of ids) {
       const l = clean(given[id], 200);
-      const old = rows.get(key(provider, id));
+      const old = rows.get(key(source, id));
       if (old) { if (l) old.label = old.watchLabel = l; continue; }
-      rows.set(key(provider, id), { id, provider, state: 'unknown', pending: true, ...(l ? { label: l, watchLabel: l } : {}) });
+      rows.set(key(source, id), { id, source, state: 'unknown', pending: true, ...(l ? { label: l, watchLabel: l } : {}) });
     }
   }
 
@@ -362,8 +362,8 @@ export function createJobs(o: JobsOpts) {
     o.panels.onPanelAction('jobs', async (action: string, args: any) => {
       if (action === 'unwatch') {
         const ids = Array.isArray(args?.ids) ? args.ids : [args?.id];
-        const provider = typeof args?.provider === 'string' ? args.provider : undefined;
-        return { removed: ids.reduce((n: number, id: unknown) => n + unwatch(String(id ?? ''), provider).removed, 0) };
+        const source = typeof args?.source === 'string' ? args.source : undefined;
+        return { removed: ids.reduce((n: number, id: unknown) => n + unwatch(String(id ?? ''), source).removed, 0) };
       }
       if (action === 'clear') return clear({ keepCurrent: args?.keepCurrent !== false, ids: Array.isArray(args?.ids) ? args.ids : undefined });
       if (action === 'refresh') return refresh();
@@ -371,9 +371,9 @@ export function createJobs(o: JobsOpts) {
     });
   }
 
-  function unwatch(id: string, provider?: string) {
-    const gone = [...rows.values()].filter((r) => r.id === id && (!provider || r.provider === provider));
-    for (const r of gone) rows.delete(key(r.provider, r.id));
+  function unwatch(id: string, source?: string) {
+    const gone = [...rows.values()].filter((r) => r.id === id && (!source || r.source === source));
+    for (const r of gone) rows.delete(key(r.source, r.id));
     publish(); status();
     return { removed: gone.length };
   }
@@ -385,47 +385,47 @@ export function createJobs(o: JobsOpts) {
     publish(); status();
     return { removed: n };
   }
-  // Adds ids to the watch list and polls now. Throws a one-line Error when the provider or an id is refused.
-  async function watch(provider: string, ids: string[], labels?: Record<string, string>) {
+  // Adds ids to the watch list and polls now. Throws a one-line Error when the job source or an id is refused.
+  async function watch(source: string, ids: string[], labels?: Record<string, string>) {
     if (!on()) throw new Error('jobs are turned off (JARVIS_JOBS=0)');
-    if (!allowedNow(provider)) throw new Error(`provider ${provider} is not enabled for this workspace`);
-    const loaded = o.registry.use(provider); // refuses unapproved, changed and invalid providers
+    if (!allowedNow(source)) throw new Error(`job source ${source} is not enabled for this workspace`);
+    const loaded = o.registry.use(source); // refuses unapproved, changed and invalid job sources
     const m = loaded.manifest;
     if (!Array.isArray(ids) || !ids.length) throw new Error('no ids given');
     const bad = ids.filter((i) => !idOk(m, i));
-    if (bad.length) throw new Error(`id not accepted by provider ${provider}: ${JSON.stringify(String(bad[0]).slice(0, 60))}`);
-    const fresh = [...new Set(ids)].filter((i) => !rows.has(key(provider, i)));
-    if (idsOf(provider).length + fresh.length > m.maxIds) throw new Error(`provider ${provider} allows at most ${m.maxIds} ids per workspace`);
-    addRows(provider, [...new Set(ids)], labels);
-    const s = state(provider); s.nextSlow = []; s.nextFast = 0; if (s.busy) s.repoll = true;
+    if (bad.length) throw new Error(`id not accepted by job source ${source}: ${JSON.stringify(String(bad[0]).slice(0, 60))}`);
+    const fresh = [...new Set(ids)].filter((i) => !rows.has(key(source, i)));
+    if (idsOf(source).length + fresh.length > m.maxIds) throw new Error(`job source ${source} allows at most ${m.maxIds} ids per workspace`);
+    addRows(source, [...new Set(ids)], labels);
+    const s = state(source); s.nextSlow = []; s.nextFast = 0; if (s.busy) s.repoll = true;
     publish();
     started = true;
-    await round([provider]);
+    await round([source]);
     arm();
-    return { added: fresh.length, rows: [...rows.values()].filter((r) => r.provider === provider && ids.includes(r.id)) };
+    return { added: fresh.length, rows: [...rows.values()].filter((r) => r.source === source && ids.includes(r.id)) };
   }
-  const refresh = async () => { await round(providers()); return { rows: rows.size }; };
+  const refresh = async () => { await round(sources()); return { rows: rows.size }; };
 
   return {
     watch, clear, unwatch, refresh, tick, load,
     start() { started = true; if (on()) { for (const p of pollable()) state(p).nextFast = 0; void round(pollable()).catch(() => {}).finally(arm); } },
     stop() { started = false; if (timer) clearTimeout(timer); timer = undefined; },
     // jobs_status: from server memory, runs nothing.
-    jobs: () => ({ rows: [...rows.values()], status: [...st.values()].map((s) => s.last).filter(Boolean) as ProviderStatus[] }),
+    jobs: () => ({ rows: [...rows.values()], status: [...st.values()].map((s) => s.last).filter(Boolean) as JobSourceStatus[] }),
   };
 }
 export type Jobs = ReturnType<typeof createJobs>;
 
-// ---- jarvis provider-check ----
+// ---- jarvis job-source-check ----
 export type CheckReport = { ok: boolean; text: string };
 // Validates a folder and runs it exactly as the server would (argv, env, cwd, timeout), fast and (with slow_fields) slow. No approval, no location rules.
-export async function providerCheck(folder: string, ids: string[], loc?: Locations): Promise<CheckReport> {
+export async function jobSourceCheck(folder: string, ids: string[], loc?: Locations): Promise<CheckReport> {
   const out: string[] = [];
   let ok = true;
   let l;
-  try { l = loadProvider(folder, { loc }); } catch (e) { return { ok: false, text: `FAIL ${(e as Error).message}` }; }
+  try { l = loadJobSource(folder, { loc }); } catch (e) { return { ok: false, text: `FAIL ${(e as Error).message}` }; }
   const m = l.manifest;
-  out.push(`provider ${m.name} (${m.description})`, `folder ${l.folder}`, `hash ${l.sha256}`, `files ${l.files.map((f) => `${f.path} ${f.size}B`).join(', ')}`);
+  out.push(`job source ${m.name} (${m.description})`, `folder ${l.folder}`, `hash ${l.sha256}`, `files ${l.files.map((f) => `${f.path} ${f.size}B`).join(', ')}`);
   const warnings = [...l.warnings];
   const badIds = ids.filter((i) => !idOk(m, i));
   if (!ids.length) { ok = false; out.push('FAIL give at least one id'); }
@@ -434,7 +434,7 @@ export async function providerCheck(folder: string, ids: string[], loc?: Locatio
   if (ok) {
     const merged = new Map<string, any>();
     for (const mode of m.slow.length ? (['fast', 'slow'] as const) : (['fast'] as const)) {
-      const res = await runProvider(l.folder, m, ids, mode);
+      const res = await runJobSource(l.folder, m, ids, mode);
       out.push(`${mode} run: ${res.ok ? 'ok' : 'FAILED'}${mode === 'slow' ? ` (--fields ${m.slow.map((s) => s.key).join(',')})` : ''}`);
       if (!res.ok) { ok = false; for (const [id, f] of res.failed) out.push(`  ${id}: ${f.error}${f.errorKind ? ` [${f.errorKind}]` : ''}`); if (m.needs.length) out.push(`  needs: ${m.needs.join('; ')}`); }
       for (const [id, r] of res.rows) merged.set(id, { ...merged.get(id), ...r });

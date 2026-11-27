@@ -63,5 +63,5 @@ test('runAction reaches the handler; unknown panel gives 400, handler errors pas
 });
 
 test('the seam knows no panel kinds', () => {
-  assert.doesNotMatch(readFileSync(new URL('../src/panels.ts', import.meta.url), 'utf8'), /job|provider|open.?item/i);
+  assert.doesNotMatch(readFileSync(new URL('../src/panels.ts', import.meta.url), 'utf8'), /job|job source|open.?item/i);
 });

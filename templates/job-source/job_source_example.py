@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Skeleton of a Jarvis status provider (schema v1).
+"""Skeleton of a Jarvis job source (schema v1).
 
-Usage: status_provider_example.py [--fields cost] <id> [<id> ...]
+Usage: job_source_example.py [--fields cost] <id> [<id> ...]
 
 Prints exactly one JSON object. Replace `read_job()` with the real read of
 your job source. Read-only and deterministic: no LLM, no `claude`, no login.

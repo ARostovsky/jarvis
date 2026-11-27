@@ -3,14 +3,14 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, realpathSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createJobs, backoffMs, buildArgv, buildEnv, runProcess, parseOutput, providerCheck, type Change, type Panel, type PanelStatus, type Row } from '../src/jobs.ts';
-import { createRegistry, validateManifest, hashFolder } from '../src/providers.ts';
+import { createJobs, backoffMs, buildArgv, buildEnv, runProcess, parseOutput, jobSourceCheck, type Change, type Panel, type PanelStatus, type Row } from '../src/jobs.ts';
+import { createRegistry, validateManifest, hashFolder } from '../src/job-sources.ts';
 
 process.env.JARVIS_JOBS_MIN_POLL_S = '0.1';
 before(() => { process.env.ANTHROPIC_API_KEY = 'sk-secret'; process.env.OTHER_SECRET = 'x'; process.env.PASSME = 'yes'; });
 after(() => { delete process.env.ANTHROPIC_API_KEY; delete process.env.OTHER_SECRET; delete process.env.PASSME; });
 
-// A provider whose answers come from a control file outside its folder (so the hash stays put) and that logs every call.
+// A job source whose answers come from a control file outside its folder (so the hash stays put) and that logs every call.
 const SCRIPT = `
 import { readFileSync, appendFileSync } from 'node:fs';
 const ctl = JSON.parse(readFileSync(process.env.CTL, 'utf8'));
@@ -34,11 +34,11 @@ function fixture(manifest: object = {}, o: { allowed?: string[]; now?: () => num
   const ctlFile = join(r, 'ctl.json'), logFile = join(r, 'log.jsonl');
   const ctl = (c: Ctl) => writeFileSync(ctlFile, JSON.stringify(c));
   ctl({});
-  const dir = join(r, 'prov', 'fake');
+  const dir = join(r, 'jobsrc', 'fake');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ schema: 1, name: 'fake', description: 'fake', command: [process.execPath, 'fake.mjs'], pollS: 0.1, timeoutS: 5, env: { pass: ['PASSME'], set: { CTL: ctlFile, LOG: logFile } }, ...manifest }));
   writeFileSync(join(dir, 'fake.mjs'), SCRIPT);
-  const registry = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => ({ data: join(r, 'data'), notes: [join(r, 'notes')], projects: [] }) });
+  const registry = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => ({ data: join(r, 'data'), notes: [join(r, 'notes')], projects: [] }) });
   const approve = () => registry.approve('fake', hashFolder(dir).sha256);
   approve();
   const panelCalls: Panel[] = [], removed: string[] = [], statuses: PanelStatus[] = [];
@@ -64,12 +64,12 @@ test('backoff is 1x, 2x, 4x of pollS, at most 5 minutes', () => {
   assert.equal(backoffMs(900, 2), 900_000);
 });
 
-test('a bad poll fails: bad JSON, non-zero exit with the last stderr line, schema 2, provider error', async () => {
+test('a bad poll fails: bad JSON, non-zero exit with the last stderr line, schema 2, job source error', async () => {
   const f = fixture(), j = f.make();
   f.ctl({ rows: { a: { state: 'running' } } });
   await j.watch('fake', ['a']);
   assert.equal(f.rows()[0].state, 'running');
-  for (const [mode, re] of [['badjson', /not a JSON object/], ['exit', /^boom last line$/], ['schema2', /provider speaks schema 2, Jarvis knows 1/], ['toperror', /login expired/]] as const) {
+  for (const [mode, re] of [['badjson', /not a JSON object/], ['exit', /^boom last line$/], ['schema2', /job source speaks schema 2, Jarvis knows 1/], ['toperror', /login expired/]] as const) {
     f.ctl({ mode });
     await j.refresh();
     const s = f.statuses.at(-1)!;
@@ -203,7 +203,7 @@ test('the watch list is rebuilt from the panel last data.rows', async () => {
   assert.equal(f.changes.length, 0);
 });
 
-test('a changed provider is stopped by the hash check before the run; one notice', async () => {
+test('a changed job source is stopped by the hash check before the run; one notice', async () => {
   const f = fixture(), j = f.make();
   f.ctl({ rows: { a: { state: 'running' } } });
   await j.watch('fake', ['a']);
@@ -226,7 +226,7 @@ test('watch refuses unapproved, disabled and invalid ids; clear and unwatch', as
   await assert.rejects(() => j.watch('fake', ['a']), /not enabled for this workspace/);
   const g = fixture({ maxIds: 2, idPattern: '^[a-z]+$' }), k = g.make();
   g.ctl({ rows: { a: { state: 'done' }, b: { state: 'running' }, c: { state: 'waiting' } } });
-  await assert.rejects(() => k.watch('nope', ['a']), /unknown provider/);
+  await assert.rejects(() => k.watch('nope', ['a']), /unknown job source/);
   await assert.rejects(() => k.watch('fake', ['-a']), /id not accepted/);
   await assert.rejects(() => k.watch('fake', ['A1']), /id not accepted/);
   await assert.rejects(() => k.watch('fake', ['a', 'b', 'c']), /at most 2/);
@@ -290,7 +290,7 @@ test('slow fields: own cadence with --fields, fast run never asks, merged by id 
   assert.equal(f.rows()[0].asOf!.costUsd, new Date(t).toISOString());
 });
 
-test('a provider without the field gives no value and no asOf', async () => {
+test('a job source without the field gives no value and no asOf', async () => {
   const f = fixture({ slow_fields: { cost: '1s' } }), j = f.make();
   f.ctl({ rows: { a: { state: 'running' } }, slow: { a: {} } });
   await j.watch('fake', ['a']);
@@ -316,10 +316,10 @@ test('unreachable for 30 minutes while jobs run sends one notice', async () => {
   assert.deepEqual(f.notices, ['unreachable']);
 });
 
-test('provider-check validates, runs fast and slow, and reports rows, warnings and the hash', async () => {
+test('job-source-check validates, runs fast and slow, and reports rows, warnings and the hash', async () => {
   const f = fixture({ slow_fields: { cost: '1s' } });
   f.ctl({ rows: { a: { state: 'running', junk: 1 } }, slow: { a: { costUsd: 2 } }, extra: [{ id: 'stray', state: 'done' }] });
-  const rep = await providerCheck(f.dir, ['a']);
+  const rep = await jobSourceCheck(f.dir, ['a']);
   assert.ok(rep.ok, rep.text);
   assert.match(rep.text, new RegExp(hashFolder(f.dir).sha256));
   assert.match(rep.text, /"costUsd":2/);
@@ -327,15 +327,15 @@ test('provider-check validates, runs fast and slow, and reports rows, warnings a
   assert.match(rep.text, /not asked for/);
   assert.match(rep.text, /slow run: ok \(--fields cost\)/);
   f.ctl({ mode: 'exit' });
-  const bad = await providerCheck(f.dir, ['a']);
+  const bad = await jobSourceCheck(f.dir, ['a']);
   assert.equal(bad.ok, false);
   assert.match(bad.text, /boom last line/);
-  assert.equal((await providerCheck(f.dir, ['-x'])).ok, false);
-  assert.equal((await providerCheck(join(f.r, 'nothing'), ['a'])).ok, false);
+  assert.equal((await jobSourceCheck(f.dir, ['-x'])).ok, false);
+  assert.equal((await jobSourceCheck(join(f.r, 'nothing'), ['a'])).ok, false);
 });
 
 test('no LLM or agent: the module imports no SDK, agents or claude', () => {
-  const src = readFileSync(new URL('../src/jobs.ts', import.meta.url), 'utf8') + readFileSync(new URL('../src/providers.ts', import.meta.url), 'utf8');
+  const src = readFileSync(new URL('../src/jobs.ts', import.meta.url), 'utf8') + readFileSync(new URL('../src/job-sources.ts', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /agent-sdk|from '\.\/agents|spawn\('claude/);
 });
 
@@ -351,7 +351,7 @@ test('a cwd that is not a folder fails the poll instead of crashing', async () =
   void j;
 });
 
-test('a provider that throws in a poll gives a failed status, not an unhandled rejection', async () => {
+test('a job source that throws in a poll gives a failed status, not an unhandled rejection', async () => {
   const f = fixture(), j = f.make();
   f.ctl({ rows: { a: { state: 'running' } } });
   await j.watch('fake', ['a']);
@@ -364,7 +364,7 @@ test('a provider that throws in a poll gives a failed status, not an unhandled r
   f.registry.use = use;
 });
 
-test('an id that names a file of the provider folder stays an id in argv', () => {
+test('an id that names a file of the job source folder stays an id in argv', () => {
   const r = realpathSync(mkdtempSync(join(tmpdir(), 'jarvis-argv-')));
   writeFileSync(join(r, 'x.py'), '');
   const m = validateManifest({ schema: 1, name: 'p', description: 'd', command: ['node', 'x.py'], args: ['x.py', '{ids}'] }).manifest;
@@ -378,13 +378,13 @@ test('watch labels survive a restart and are dropped by unwatch and clear', asyn
   f.ctl({ rows: { a: { state: 'running' }, b: { state: 'done' } } });
   await j.watch('fake', ['a', 'b'], { a: 'Alpha', b: 'Beta' });
   const j2 = f.make(); // restart
-  f.ctl({ rows: { a: { state: 'running', label: 'from provider' }, b: { state: 'running', label: 'from provider' } } });
+  f.ctl({ rows: { a: { state: 'running', label: 'from job source' }, b: { state: 'running', label: 'from job source' } } });
   await j2.tick(Date.now() + 1);
   assert.equal(f.rows().find((r) => r.id === 'a')!.label, 'Alpha');
   j2.unwatch('a', 'fake');
   j2.clear({ ids: ['b'] });
   await j2.watch('fake', ['a', 'b']);
-  assert.deepEqual(f.rows().map((r) => r.label), ['from provider', 'from provider']);
+  assert.deepEqual(f.rows().map((r) => r.label), ['from job source', 'from job source']);
 });
 
 test('watch during a poll triggers one more poll right after it', async () => {
@@ -425,5 +425,5 @@ test('a job that finishes in the fast run still gets its slow values, and a fini
   const n = f.calls().length;
   t += 5000;
   await j.tick(t);
-  assert.equal(f.calls().length, n, 'a provider with only finished rows is not run');
+  assert.equal(f.calls().length, n, 'a job source with only finished rows is not run');
 });

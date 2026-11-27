@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// jarvis [start|stop|restart|status|logs|provider-check]: runs the server in the background and opens the UI.
+// jarvis [start|stop|restart|status|logs|job-source-check]: runs the server in the background and opens the UI.
 import { spawn, execFileSync } from 'node:child_process';
 import { openSync, readFileSync, writeFileSync, rmSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -46,12 +46,12 @@ else if (cmd === 'stop') await stop();
 else if (cmd === 'restart') { await stop(); await start(); }
 else if (cmd === 'status') console.log((await up()) ? `running: ${URL} (pid ${pid() || '?'})` : 'stopped');
 else if (cmd === 'logs') execFileSync('tail', ['-n', '50', '-f', LOG], { stdio: 'inherit' });
-else if (cmd === 'provider-check') {
-  // Validates a status-provider folder and runs it as the server would; needs no server. Exit 1 on any failure.
+else if (cmd === 'job-source-check') {
+  // Validates a job-source folder and runs it as the server would; needs no server. Exit 1 on any failure.
   const [folder, ...ids] = process.argv.slice(3);
-  if (!folder) { console.error('usage: jarvis provider-check <folder> <id> [<id> ...]'); process.exit(2); }
-  const { providerCheck } = await import(join(ROOT, 'src', 'jobs.ts'));
-  const { ok, text } = await providerCheck(folder, ids);
+  if (!folder) { console.error('usage: jarvis job-source-check <folder> <id> [<id> ...]'); process.exit(2); }
+  const { jobSourceCheck } = await import(join(ROOT, 'src', 'jobs.ts'));
+  const { ok, text } = await jobSourceCheck(folder, ids);
   console.log(text);
   process.exit(ok ? 0 : 1);
-} else console.log('usage: jarvis [start|stop|restart|status|logs|provider-check <folder> <id>...]');
+} else console.log('usage: jarvis [start|stop|restart|status|logs|job-source-check <folder> <id>...]');

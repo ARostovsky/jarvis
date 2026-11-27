@@ -4,7 +4,7 @@
   "description": "One AI arbiter that spawns, steers and watches a team of Claude Code agents, with a live web map.",
   "scripts": {
     "check": "tsc",
-    "test": "r=$(mktemp -d \"${TMPDIR:-/tmp}/jarvis-tmp-test-XXXXXX\"); mkdir $r/providers; trap 'rm -rf $r' EXIT INT TERM; TMPDIR=$r JARVIS_TMPGUARD=0 JARVIS_ENV_FILE=/dev/null JARVIS_PROVIDERS_DIR=$r/providers JARVIS_STATUS_URL=http://127.0.0.1:1/ node --test test/*.test.ts",
+    "test": "r=$(mktemp -d \"${TMPDIR:-/tmp}/jarvis-tmp-test-XXXXXX\"); mkdir $r/job-sources; trap 'rm -rf $r' EXIT INT TERM; TMPDIR=$r JARVIS_TMPGUARD=0 JARVIS_ENV_FILE=/dev/null JARVIS_JOB_SOURCES_DIR=$r/job-sources JARVIS_STATUS_URL=http://127.0.0.1:1/ node --test test/*.test.ts",
     "start": "node src/server.ts",
     "e2e": "playwright test"
   },

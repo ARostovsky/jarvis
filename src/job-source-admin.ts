@@ -1,13 +1,13 @@
-// Read side of provider approval: the provider list for the UI and the file texts of an approval card. No SDK, no workspaces.
+// Read side of job source approval: the job source list for the UI and the file texts of an approval card. No SDK, no workspaces.
 import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { checkScreenshot, hashFolder, MAX_BYTES, NAME_RE, type Registry } from './providers.ts';
+import { checkScreenshot, hashFolder, MAX_BYTES, NAME_RE, type Registry } from './job-sources.ts';
 
 export const HASH_RE = /^[0-9a-f]{64}$/;
 const fail = (status: number, message: string) => Object.assign(new Error(message), { status });
 const STATUS = { approved: 'approved', unapproved: 'not-approved', changed: 'changed', invalid: 'invalid' } as const;
 
-export function providerList(reg: Registry) {
+export function jobSourceList(reg: Registry) {
   const ap = reg.approvals();
   return reg.list().map((i) => ({
     name: i.name, kind: i.manifest?.kind ?? 'jobs', description: i.manifest?.description, status: STATUS[i.state], hash: i.sha256,
@@ -17,9 +17,9 @@ export function providerList(reg: Registry) {
 
 // Texts for the card: the staged copy of that hash, or the installed folder when it has exactly that hash. 409 when neither matches.
 // At most 400 lines and 64 KB per file; `truncated` says so. A file with a NUL byte is not shown.
-export function providerFiles(reg: Registry, name: string, hash: string) {
+export function jobSourceFiles(reg: Registry, name: string, hash: string) {
   if (!NAME_RE.test(name) || !HASH_RE.test(hash)) throw fail(400, 'bad name or hash');
-  const dirs = [reg.stagingDir(name, hash), join(reg.dir, name)];
+  const dirs = [reg.stagingDir(name, hash), reg.folderOf(name)];
   for (const d of dirs) {
     if (!existsSync(d)) continue;
     let h;
@@ -35,11 +35,11 @@ export function providerFiles(reg: Registry, name: string, hash: string) {
   throw fail(409, 'stale: no copy matches that hash any more');
 }
 
-// Read-only details of one provider the registry already knows: manifest text with env values masked, the file names, approval state and both hashes.
+// Read-only details of one job source the registry already knows: manifest text with env values masked, the file names, approval state and both hashes.
 // The name is looked up in the registry (never joined into a path from the request); only manifest.json is read, at most 64 KB.
-export function providerDetails(reg: Registry, name: string) {
+export function jobSourceDetails(reg: Registry, name: string) {
   const i = reg.list().find((p) => p.name === name);
-  if (!NAME_RE.test(name) || !i) throw fail(404, 'unknown provider');
+  if (!NAME_RE.test(name) || !i) throw fail(404, 'unknown job source');
   const ap = reg.approvals()[name];
   let manifestText: string | undefined, manifestError: string | undefined, files: string[] = [], screenshot: { path: string; type: string; size: number } | undefined;
   try {
@@ -64,10 +64,10 @@ export function providerDetails(reg: Registry, name: string) {
   };
 }
 
-// The one validated screenshot file of a provider the registry knows, or a 404. Only displayed, never run. Same registry-only lookup as the details.
-export function providerScreenshot(reg: Registry, name: string): { type: string; data: Buffer } {
+// The one validated screenshot file of a job source the registry knows, or a 404. Only displayed, never run. Same registry-only lookup as the details.
+export function jobSourceScreenshot(reg: Registry, name: string): { type: string; data: Buffer } {
   const i = NAME_RE.test(name) ? reg.list().find((p) => p.name === name) : undefined;
-  if (!i) throw fail(404, 'unknown provider');
+  if (!i) throw fail(404, 'unknown job source');
   let c;
   try { c = checkScreenshot(i.folder, JSON.parse(readFileSync(join(i.folder, 'manifest.json'), 'utf8'))); } catch { c = null; }
   if (!c || !('abs' in c)) throw fail(404, 'no screenshot');

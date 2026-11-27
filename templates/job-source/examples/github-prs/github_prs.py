@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jarvis status provider (schema v1): GitHub pull requests of one repo. Read-only.
+"""Jarvis job source (schema v1): GitHub pull requests of one repo. Read-only.
 
 Usage: github_prs.py <pr number> [<pr number> ...]
 Env: GITHUB_REPO owner/name (required). Uses the existing `gh` login; never logs in.

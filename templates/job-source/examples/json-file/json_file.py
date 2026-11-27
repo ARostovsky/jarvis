@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Jarvis status provider (schema v1): jobs from a JSON file. Read-only, stdlib only.
+"""Jarvis job source (schema v1): jobs from a JSON file. Read-only, stdlib only.
 
 Usage: json_file.py [--fields cost] <id> [<id> ...]
 Env: JOBS_FILE path of the file (default: jobs.json next to this script; `~` is expanded).

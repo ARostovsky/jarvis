@@ -1,4 +1,4 @@
-// Open items source: reads <notes>/workspaces/<id>/open-items.md into the `open-items` checklist panel. Read-only: the arbiter edits the file, the panel only shows it. No SDK, no jobs or providers; the panels API is injected so tests need no server.
+// Open items source: reads <notes>/workspaces/<id>/open-items.md into the `open-items` checklist panel. Read-only: the arbiter edits the file, the panel only shows it. No SDK, no jobs or job sources; the panels API is injected so tests need no server.
 import { createHash } from 'node:crypto';
 import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync, watch, type FSWatcher } from 'node:fs';
 import { basename, dirname, join } from 'node:path';

@@ -1,5 +1,5 @@
-// Status providers: manifest validation, folder hashing and file rules, location rules, registry with staging and hash-pinned approval.
-// Pure Node, no SDK and no import of agents.ts. The server runs only approved, unchanged provider code (invariant 11).
+// Job sources: manifest validation, folder hashing and file rules, location rules, registry with staging and hash-pinned approval.
+// Pure Node, no SDK and no import of agents.ts. The server runs only approved, unchanged job source code (invariant 11).
 import { createHash, randomBytes } from 'node:crypto';
 import { cpSync, existsSync, lstatSync, mkdirSync, openSync, readSync, closeSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -25,14 +25,22 @@ export type Manifest = {
   needs: string[]; notify: (typeof NOTIFY)[number];
   screenshot?: string;
 };
-// Where providers must not live or run: notes folders, project folders, and Jarvis's own data.
+// Where job sources must not live or run: notes folders, project folders, and Jarvis's own data.
 export type Locations = { data: string; notes: string[]; projects: string[] };
 export type FileInfo = { path: string; size: number; sha256: string };
 export type Loaded = { folder: string; manifest: Manifest; sha256: string; files: FileInfo[]; warnings: string[] };
 export type Approval = { sha256: string; approvedAt: string; files: FileInfo[] };
-export type ProviderInfo = { name: string; state: 'approved' | 'unapproved' | 'changed' | 'invalid'; folder: string; manifest?: Manifest; sha256?: string; error?: string; warnings?: string[] };
+export type JobSourceInfo = { name: string; state: 'approved' | 'unapproved' | 'changed' | 'invalid'; folder: string; manifest?: Manifest; sha256?: string; error?: string; warnings?: string[] };
 
-export const providersDir = () => process.env.JARVIS_PROVIDERS_DIR || join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'jarvis', 'status-providers');
+// The folder where job sources are installed. JARVIS_PROVIDERS_DIR is the name of the variable before the rename.
+export const jobSourcesDir = () => process.env.JARVIS_JOB_SOURCES_DIR || process.env.JARVIS_PROVIDERS_DIR || join(configBase(), 'job-sources');
+const configBase = () => join(process.env.XDG_CONFIG_HOME || join(homedir(), '.config'), 'jarvis');
+// The folder was called status-providers before the rename. It is read next to job-sources/ (job-sources/ wins on a name clash) and never written or moved. Not used when an env variable names the folder.
+export const legacyJobSourcesDir = () => {
+  if (process.env.JARVIS_JOB_SOURCES_DIR || process.env.JARVIS_PROVIDERS_DIR) return undefined;
+  const legacy = join(configBase(), 'status-providers');
+  return existsSync(legacy) ? legacy : undefined;
+};
 // The tests lower the minimum poll and slow interval with JARVIS_JOBS_MIN_POLL_S.
 export function limits() {
   const t = Number(process.env.JARVIS_JOBS_MIN_POLL_S);
@@ -82,8 +90,8 @@ export function validateManifest(raw: unknown, folderName?: string): { manifest:
   if (withIds.length + withId.length !== 1) throw new Error('manifest: args must hold exactly one of {id} or {ids}, once');
   if (withIds.length && withIds[0] !== '{ids}') throw new Error('manifest: {ids} must be a whole args entry');
   if (command.some((c) => c.includes('{id'))) throw new Error('manifest: command must not hold {id} or {ids}');
-  if (/^claude/.test(basename(command[0]))) throw new Error('manifest: the command may not be a claude binary (providers are deterministic, no LLM)');
-  if (command.some((c) => basename(c) === 'claude')) throw new Error('manifest: the command may not run claude (providers are deterministic, no LLM)');
+  if (/^claude/.test(basename(command[0]))) throw new Error('manifest: the command may not be a claude binary (job sources are deterministic, no LLM)');
+  if (command.some((c) => basename(c) === 'claude')) throw new Error('manifest: the command may not run claude (job sources are deterministic, no LLM)');
   let cwd: string | null = null;
   if (raw.cwd !== undefined && raw.cwd !== null) {
     if (typeof raw.cwd !== 'string' || !raw.cwd || raw.cwd.includes('\0')) throw new Error('manifest: cwd must be a path string or null');
@@ -131,7 +139,7 @@ export function validateManifest(raw: unknown, folderName?: string): { manifest:
   const known = new Set(['schema', 'name', 'kind', 'description', 'command', 'args', 'cwd', 'pollS', 'timeoutS', 'slow_fields', 'idPattern', 'maxIds', 'env', 'needs', 'notify', 'screenshot']);
   for (const k of Object.keys(raw)) if (!known.has(k)) warnings.push(`manifest: unknown field "${k}" ignored`);
   const manifest: Manifest = { schema: 1, name, kind: 'jobs', description: description.trim(), command, args, mode: withIds.length ? 'ids' : 'id', cwd, pollS, timeoutS, slow, idPattern, maxIds, env: { pass, set }, needs, notify: notify as Manifest['notify'] };
-  // An invalid screenshot never invalidates the provider: it is dropped with a warning.
+  // An invalid screenshot never invalidates the job source: it is dropped with a warning.
   if (raw.screenshot !== undefined) {
     const s = screenshotRel(raw.screenshot);
     if ('rel' in s) manifest.screenshot = s.rel; else warnings.push(`manifest: screenshot ignored (${s.warn})`);
@@ -139,7 +147,7 @@ export function validateManifest(raw: unknown, folderName?: string): { manifest:
   return { manifest, warnings };
 }
 
-// The screenshot is only displayed, never run: png, webp or jpg, at most 1 MB, a plain file inside the provider folder.
+// The screenshot is only displayed, never run: png, webp or jpg, at most 1 MB, a plain file inside the job source folder.
 export const SHOT_TYPES: Record<string, string> = { png: 'image/png', webp: 'image/webp', jpg: 'image/jpeg', jpeg: 'image/jpeg' };
 const MAGIC: Record<string, (b: Buffer) => boolean> = {
   'image/png': (b) => b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])),
@@ -151,7 +159,7 @@ export function screenshotRel(v: unknown): { rel: string } | { warn: string } {
   if (typeof v !== 'string' || !v || v.length > 200 || v.includes('\0') || v.includes('\\')) return { warn: 'must be a relative path string' };
   if (isAbsolute(v) || /^[A-Za-z]:/.test(v)) return { warn: 'must not be an absolute path' };
   const segs = v.split('/');
-  if (segs.some((x) => !x || x === '.' || x === '..')) return { warn: 'must stay inside the provider folder (no "..", "." or empty parts)' };
+  if (segs.some((x) => !x || x === '.' || x === '..')) return { warn: 'must stay inside the job source folder (no "..", "." or empty parts)' };
   if (!SHOT_TYPES[segs[segs.length - 1].split('.').pop()!.toLowerCase()] || !segs[segs.length - 1].includes('.')) return { warn: 'must be a .png, .webp or .jpg file' };
   return { rel: segs.join('/') };
 }
@@ -214,21 +222,21 @@ export function hashFolder(dir: string): { sha256: string; files: FileInfo[] } {
   const walk = (abs: string, rel: string) => {
     for (const e of readdirSync(abs).sort()) {
       const p = join(abs, e), r = rel ? `${rel}/${e}` : e, st = lstatSync(p);
-      if (st.isSymbolicLink()) throw new Error(`provider folder: ${r} is a symlink (not allowed)`);
+      if (st.isSymbolicLink()) throw new Error(`job source folder: ${r} is a symlink (not allowed)`);
       if (st.isDirectory()) {
-        if (BANNED_DIRS.has(e)) throw new Error(`provider folder: ${r} is not allowed (dependencies come from a tool cache, e.g. uv run --with)`);
+        if (BANNED_DIRS.has(e)) throw new Error(`job source folder: ${r} is not allowed (dependencies come from a tool cache, e.g. uv run --with)`);
         walk(p, r);
       } else if (st.isFile()) {
         // The screenshot file stays in the hash (approved code may read it), but an oversize one only needs hashing, not the 1 MB folder limit.
         if (r === skip) { files.push({ path: r, size: st.size, sha256: shaFile(p) }); continue; }
-        if (files.length >= MAX_FILES) throw new Error(`provider folder: more than ${MAX_FILES} files`);
+        if (files.length >= MAX_FILES) throw new Error(`job source folder: more than ${MAX_FILES} files`);
         total += st.size;
-        if (total > MAX_BYTES) throw new Error('provider folder: more than 1 MB');
+        if (total > MAX_BYTES) throw new Error('job source folder: more than 1 MB');
         if (r === 'manifest.json' && mtext !== undefined) { const t = manifestForHash(mtext); files.push({ path: r, size: Buffer.byteLength(t), sha256: sha(t) }); } else files.push({ path: r, size: st.size, sha256: sha(readFileSync(p)) });
-      } else throw new Error(`provider folder: ${r} is not a plain file`);
+      } else throw new Error(`job source folder: ${r} is not a plain file`);
     }
   };
-  if (lstatSync(dir).isSymbolicLink()) throw new Error('provider folder: the folder itself is a symlink (not allowed)');
+  if (lstatSync(dir).isSymbolicLink()) throw new Error('job source folder: the folder itself is a symlink (not allowed)');
   walk(dir, '');
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   return { sha256: sha(files.map((f) => `${f.path}\0${f.size}\0${f.sha256}`).join('\n')), files };
@@ -245,7 +253,7 @@ function real(p: string): string {
 export const inside = (child: string, parent: string) => child === parent || child.startsWith(parent.endsWith(sep) ? parent : parent + sep);
 const insideAny = (child: string, parents: string[]) => parents.some((p) => inside(child, real(p)));
 
-// Entries of command and args that name a file in the provider folder (relative, existing), resolved to absolute paths.
+// Entries of command and args that name a file in the job source folder (relative, existing), resolved to absolute paths.
 export function folderFiles(folder: string, m: Pick<Manifest, 'command' | 'args'>): string[] {
   return [...m.command, ...m.args].filter((e) => !isAbsolute(e) && !e.startsWith('-') && existsSync(join(folder, e)) && lstatSync(join(folder, e)).isFile()).map((e) => join(folder, e));
 }
@@ -256,12 +264,12 @@ export function checkLocations(folder: string, m: Manifest, loc: Locations): str
   const data = real(loc.data), warnings: string[] = [];
   const barred = [...loc.notes, ...loc.projects, join(data, 'worktrees'), join(data, 'workspaces')];
   const f = real(folder);
-  if (insideAny(f, barred)) throw new Error(`provider folder ${f} is inside a notes folder, a project folder or a Jarvis worktree (agents may edit it)`);
+  if (insideAny(f, barred)) throw new Error(`job source folder ${f} is inside a notes folder, a project folder or a Jarvis worktree (agents may edit it)`);
   for (const [what, list] of [['command', m.command], ['args', m.args]] as const) for (let e of list) {
     if (what === 'args' && e.startsWith('-')) { e = e.slice(e.indexOf('=') + 1); if (e.startsWith('-') || !isAbsolute(e)) continue; } // --opt=/abs/path: check the path
     if (!isAbsolute(e)) {
       const p = real(join(f, e));
-      if (e.includes('/') && !inside(p, f)) throw new Error(`${what} entry "${e}" leaves the provider folder`);
+      if (e.includes('/') && !inside(p, f)) throw new Error(`${what} entry "${e}" leaves the job source folder`);
     } else if (insideAny(real(e), barred)) throw new Error(`${what} entry ${e} is inside a notes folder, a project folder or a Jarvis worktree`);
   }
   for (const [k, v] of Object.entries(m.env.set)) {
@@ -277,7 +285,7 @@ export function checkLocations(folder: string, m: Manifest, loc: Locations): str
 }
 
 // Reads and validates a folder: manifest, hash and file rules, and (when `loc` is given) the location rules.
-export function loadProvider(folder: string, opts: { loc?: Locations; name?: string } = {}): Loaded {
+export function loadJobSource(folder: string, opts: { loc?: Locations; name?: string } = {}): Loaded {
   let raw: unknown;
   try { raw = JSON.parse(readFileSync(join(folder, 'manifest.json'), 'utf8')); } catch (e) { throw new Error(`manifest.json: ${(e as Error).message}`); }
   const { manifest, warnings } = validateManifest(raw, opts.name);
@@ -297,14 +305,21 @@ const writeJson = (file: string, v: unknown) => {
 };
 
 export type RegistryOpts = {
-  data: string; dir?: string; locations: () => Locations;
+  data: string; dir?: string; legacyDir?: string; locations: () => Locations;
   // Test hook: called between the steps of an install; throw to simulate a crash.
   onStep?: (step: 'copied' | 'backed-up' | 'moved-old' | 'swapped' | 'recorded') => void;
 };
 
 export function createRegistry(o: RegistryOpts) {
-  const dir = o.dir ?? providersDir();
-  const file = join(o.data, 'providers.json'), staging = join(o.data, 'provider-staging'), old = join(o.data, 'provider-old');
+  const dir = o.dir ?? jobSourcesDir();
+  const legacyDir = o.legacyDir ?? (o.dir ? undefined : legacyJobSourcesDir());
+  // Where a source of that name is: the main folder first, then the legacy one.
+  const folderOf = (name: string) => (!existsSync(join(dir, name)) && legacyDir && existsSync(join(legacyDir, name)) ? join(legacyDir, name) : join(dir, name));
+  const file = join(o.data, 'job-sources.json'), staging = join(o.data, 'job-source-staging'), old = join(o.data, 'job-source-old');
+  // Jarvis's own state files had other names before the rename: move them once.
+  for (const [from, to] of [['providers.json', file], ['provider-staging', staging], ['provider-old', old]]) {
+    try { if (existsSync(join(o.data, from)) && !existsSync(to)) renameSync(join(o.data, from), to); } catch {}
+  }
   const step = o.onStep ?? (() => {});
   const approvals = (): Record<string, Approval> => {
     let text: string;
@@ -328,38 +343,41 @@ export function createRegistry(o: RegistryOpts) {
   }
   recover();
 
-  function info(name: string): ProviderInfo {
-    const folder = join(dir, name);
+  function info(name: string): JobSourceInfo {
+    const folder = folderOf(name);
     try {
-      const l = loadProvider(folder, { loc: o.locations(), name });
+      const l = loadJobSource(folder, { loc: o.locations(), name });
       const ap = approvals()[name];
       return { name, folder: l.folder, manifest: l.manifest, sha256: l.sha256, warnings: l.warnings, state: !ap ? 'unapproved' : ap.sha256 === l.sha256 ? 'approved' : 'changed' };
     } catch (e) {
       return { name, folder, state: 'invalid', error: (e as Error).message };
     }
   }
-  const list = (): ProviderInfo[] => {
-    let names: string[] = [];
-    try { names = readdirSync(dir).filter((n) => NAME_RE.test(n) && lstatSync(join(dir, n)).isDirectory()); } catch {}
-    return names.sort().map(info);
+  const list = (): JobSourceInfo[] => {
+    const names = new Set<string>();
+    for (const d of [dir, legacyDir]) {
+      if (!d) continue;
+      try { for (const n of readdirSync(d)) if (NAME_RE.test(n) && lstatSync(join(d, n)).isDirectory()) names.add(n); } catch {}
+    }
+    return [...names].sort().map(info);
   };
 
   // The folder to run: only when approved and byte-identical to what was approved; otherwise throws with the reason.
   function use(name: string): Loaded {
-    if (!NAME_RE.test(name) || !existsSync(join(dir, name))) throw new Error(`unknown provider "${name}"`);
+    if (!NAME_RE.test(name) || !existsSync(folderOf(name))) throw new Error(`unknown job source "${name}"`);
     const i = info(name);
-    if (i.state === 'invalid') throw new Error(`provider ${name} is invalid: ${i.error}`);
-    if (i.state === 'unapproved') throw new Error(`provider ${name} is not approved`);
-    if (i.state === 'changed') throw new Error('provider files changed, approve again');
-    return loadProvider(i.folder, { loc: o.locations(), name });
+    if (i.state === 'invalid') throw new Error(`job source ${name} is invalid: ${i.error}`);
+    if (i.state === 'unapproved') throw new Error(`job source ${name} is not approved`);
+    if (i.state === 'changed') throw new Error('job source files changed, approve again');
+    return loadJobSource(i.folder, { loc: o.locations(), name });
   }
 
   // Copies a draft into staging (the user approves exactly this copy; `check` may throw to refuse it first). Refuses a draft in a notes folder. Runs nothing.
   function stage(src: string, check?: (l: Loaded) => void): Loaded & { stagingDir: string } {
     const s = real(src);
     if (!existsSync(s) || !lstatSync(s).isDirectory()) throw new Error(`${src} is not a folder`);
-    if (insideAny(s, o.locations().notes)) throw new Error('the provider draft is inside a notes folder; build it elsewhere (agents may edit notes)');
-    const l = loadProvider(s);
+    if (insideAny(s, o.locations().notes)) throw new Error('the job source draft is inside a notes folder; build it elsewhere (agents may edit notes)');
+    const l = loadJobSource(s);
     check?.(l); // before staging is touched: a refused draft must not replace or delete a staged copy
     const stagingDir = join(staging, `${l.manifest.name}-${l.sha256.slice(0, 16)}`);
     mkdirSync(staging, { recursive: true });
@@ -370,21 +388,21 @@ export function createRegistry(o: RegistryOpts) {
   }
   const reject = (name: string, hash: string) => rmSync(join(staging, `${name}-${hash.slice(0, 16)}`), { recursive: true, force: true });
 
-  // Installs the staged copy (or records a hand-placed folder) after re-hashing it; a stale hash fails. The old version goes to provider-old/.
+  // Installs the staged copy (or records a hand-placed folder) after re-hashing it; a stale hash fails. The old version goes to job-source-old/.
   function approve(name: string, hash: string): Approval {
-    if (!NAME_RE.test(name)) throw new Error(`unknown provider "${name}"`);
-    const target = join(dir, name), staged = join(staging, `${name}-${hash.slice(0, 16)}`);
+    if (!NAME_RE.test(name)) throw new Error(`unknown job source "${name}"`);
+    const target = join(dir, name), cur = folderOf(name), staged = join(staging, `${name}-${hash.slice(0, 16)}`);
     let src: string;
     if (existsSync(staged)) {
       const h = hashFolder(staged);
       if (h.sha256 !== hash) throw new Error('stale: the staged copy no longer matches the hash that was shown');
       src = staged;
-    } else if (existsSync(target) && hashFolder(target).sha256 === hash) src = target;
-    else throw new Error('stale: nothing matches the hash that was shown; propose or place the provider again');
-    const l = loadProvider(src, { name });
+    } else if (existsSync(cur) && hashFolder(cur).sha256 === hash) src = cur;
+    else throw new Error('stale: nothing matches the hash that was shown; propose or place the job source again');
+    const l = loadJobSource(src, { name });
     mkdirSync(dir, { recursive: true });
     checkLocations(target, l.manifest, o.locations());
-    if (src !== target) {
+    if (src === staged) {
       const tmp = join(dir, `.new-${name}-${randomBytes(4).toString('hex')}`), prev = join(dir, `.prev-${name}`);
       cpSync(src, tmp, { recursive: true });
       step('copied');
@@ -413,6 +431,6 @@ export function createRegistry(o: RegistryOpts) {
   }
 
   const stagingDir = (name: string, hash: string) => join(staging, `${name}-${hash.slice(0, 16)}`);
-  return { dir, list, info, use, stage, reject, approve, approvals, recover, stagingDir };
+  return { dir, folderOf, list, info, use, stage, reject, approve, approvals, recover, stagingDir };
 }
 export type Registry = ReturnType<typeof createRegistry>;

@@ -2,7 +2,7 @@ import { test as base, expect, type Page } from '@playwright/test';
 import { appendFileSync, cpSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { DATA_HOME, ORIGIN, PROVIDERS_DIR } from '../playwright.config.ts';
+import { DATA_HOME, ORIGIN, JOB_SOURCES_DIR } from '../playwright.config.ts';
 
 export { expect, ORIGIN, type Page };
 export const DATA = join(DATA_HOME, 'jarvis');
@@ -61,19 +61,19 @@ export async function addFakeAgent(page: Page, ws: string, agentId: string) {
   expect((await post(page, '/workspaces/restore', { id: ws })).ok()).toBe(true);
 }
 
-// A copy of e2e/fake-provider under a unique name, placed in the providers folder. `manifest` overrides fields of manifest.json (e.g. slow_fields, notify).
-// Not approved yet: `approve()` does what the Approve button does. `set(id, row)` is the state of a job: the provider prints the row in <jobs dir>/<id>.json.
-export function fakeProvider(manifest: object = {}, into = PROVIDERS_DIR) {
+// A copy of e2e/fake-job-source under a unique name, placed in the job sources folder. `manifest` overrides fields of manifest.json (e.g. slow_fields, notify).
+// Not approved yet: `approve()` does what the Approve button does. `set(id, row)` is the state of a job: the job source prints the row in <jobs dir>/<id>.json.
+export function fakeJobSource(manifest: object = {}, into = JOB_SOURCES_DIR) {
   const name = uniq('fp'), dir = join(into, name), jobs = tmp('jobs');
-  cpSync(join(import.meta.dirname, 'fake-provider'), dir, { recursive: true });
+  cpSync(join(import.meta.dirname, 'fake-job-source'), dir, { recursive: true });
   const base = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8'));
   writeFileSync(join(dir, 'manifest.json'), JSON.stringify({ ...base, name, env: { set: { FAKE_JOBS_DIR: jobs } }, ...manifest }));
   const set = (id: string, row: object) => writeFileSync(join(jobs, `${id}.json`), JSON.stringify(row));
-  const info = async (page: Page) => (await (await page.request.get('/providers')).json()).providers.find((p: any) => p.name === name);
+  const info = async (page: Page) => (await (await page.request.get('/job-sources')).json()).jobSources.find((p: any) => p.name === name);
   const approve = async (page: Page) => {
     const p = await info(page);
     expect(p?.status, p?.error).toBe('not-approved');
-    expect((await post(page, '/providers/approve', { name, hash: p.hash })).ok()).toBe(true);
+    expect((await post(page, '/job-sources/approve', { name, hash: p.hash })).ok()).toBe(true);
   };
   return { name, dir, jobs, set, info, approve };
 }
@@ -90,18 +90,18 @@ export async function callTool(page: Page, ws: string, name: string, input: obje
   return events(ws).filter((e) => e.type === 'result').at(-1).text as string;
 }
 
-// Selectors of the jobs panel and its rows (a row's key is `<provider>:<id>`).
+// Selectors of the jobs panel and its rows (a row's key is `<job source>:<id>`).
 export const jobsBlock = (page: Page) => page.locator('#panels section.pn[data-panel="jobs"]');
-export const jobRow = (page: Page, provider: string, id: string) => jobsBlock(page).locator(`li.jr[data-key="${provider}:${id}"]`);
-export const watchJobs = (page: Page, ws: string, provider: string, ids: string[], labels: object = {}) => callTool(page, ws, 'watch_jobs', { provider, ids, labels });
+export const jobRow = (page: Page, source: string, id: string) => jobsBlock(page).locator(`li.jr[data-key="${source}:${id}"]`);
+export const watchJobs = (page: Page, ws: string, source: string, ids: string[], labels: object = {}) => callTool(page, ws, 'watch_jobs', { source, ids, labels });
 
 // Workspaces with watched jobs keep polling and their badges keep changing, which would shift the tabs of later specs on the same server: archive them after each test.
 const polling: string[] = [];
 export const archivePolling = async (page: Page) => { for (const ws of polling.splice(0)) await post(page, '/workspaces/archive', { ws }); };
 
-// A workspace with an approved fake provider, opened on the arbiter.
+// A workspace with an approved fake job source, opened on the arbiter.
 export async function jobsWorkspace(page: Page, manifest: object = {}, extra: object = {}) {
-  const p = fakeProvider(manifest);
+  const p = fakeJobSource(manifest);
   await p.approve(page);
   const name = uniq('jobs');
   const ws = await createWs(page, name, extra);

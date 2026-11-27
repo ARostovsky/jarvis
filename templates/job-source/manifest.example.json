@@ -3,7 +3,7 @@
   "name": "example",
   "kind": "jobs",
   "description": "Example jobs: state, step and progress, cost refreshed slowly",
-  "command": ["python3", "status_provider_example.py"],
+  "command": ["python3", "job_source_example.py"],
   "args": ["{ids}"],
   "cwd": null,
   "pollS": 60,

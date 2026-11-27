@@ -1,12 +1,12 @@
-import { test, expect, fakeProvider, jobsWorkspace, jobsBlock, jobRow, jobRows, watchJobs, archivePolling } from './helpers.ts';
+import { test, expect, fakeJobSource, jobsWorkspace, jobsBlock, jobRow, jobRows, watchJobs, archivePolling } from './helpers.ts';
 
 test.afterEach(({ page }) => archivePolling(page));
 
 const tab = (page: any, name: string) => jobsBlock(page).getByRole('tab', { name: new RegExp(`^${name}`) });
 
-test('two providers get one tab each, with their own rows, badges, highlight and a remembered tab', async ({ page }) => {
+test('two job sources get one tab each, with their own rows, badges, highlight and a remembered tab', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider();
+  const b = fakeJobSource();
   await b.approve(page);
   a.set('a1', { state: 'running' }); a.set('a2', { state: 'failed', error: 'boom' });
   b.set('b1', { state: 'running' }); b.set('b2', { state: 'running' });
@@ -45,7 +45,7 @@ test('two providers get one tab each, with their own rows, badges, highlight and
   await expect(tab(page, second)).toBeFocused();
   await expect(jobsBlock(page).getByRole('tabpanel')).toHaveAttribute('aria-labelledby', (await tab(page, second).getAttribute('id'))!);
 
-  // a change in the other provider lights its tab until it is opened
+  // a change in the other job source lights its tab until it is opened
   const changer = first === a.name ? a : b;
   changer.set(own(first)[0], { state: 'done' });
   await expect(tab(page, first)).toHaveClass(/chg/);
@@ -63,7 +63,7 @@ test('two providers get one tab each, with their own rows, badges, highlight and
 
 test('Clear done in one tab clears the finished rows of both tabs', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider();
+  const b = fakeJobSource();
   await b.approve(page);
   a.set('a1', { state: 'done' }); a.set('a2', { state: 'running' });
   b.set('b1', { state: 'failed' }); b.set('b2', { state: 'running' });
@@ -80,7 +80,7 @@ test('Clear done in one tab clears the finished rows of both tabs', async ({ pag
   await expect(jobsBlock(page).locator('li.jr')).toHaveCount(1);
 });
 
-test('one provider shows no tab bar', async ({ page }) => {
+test('one job source shows no tab bar', async ({ page }) => {
   const p = await jobsWorkspace(page);
   p.set('s1', { state: 'running' });
   await watchJobs(page, p.ws, p.name, ['s1']);
@@ -88,9 +88,9 @@ test('one provider shows no tab bar', async ({ page }) => {
   await expect(jobsBlock(page).getByRole('tablist')).toHaveCount(0);
 });
 
-test('tabs reorder by drag and Alt+Arrow, the order survives a reload, a click still selects, a new provider goes last', async ({ page }) => {
+test('tabs reorder by drag and Alt+Arrow, the order survives a reload, a click still selects, a new job source goes last', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider();
+  const b = fakeJobSource();
   await b.approve(page);
   a.set('a1', { state: 'running' }); b.set('b1', { state: 'running' });
   await watchJobs(page, a.ws, a.name, ['a1']);
@@ -133,8 +133,8 @@ test('tabs reorder by drag and Alt+Arrow, the order survives a reload, a click s
   await tab(page, second).click();
   await expect(tab(page, second)).toHaveAttribute('aria-selected', 'true');
 
-  // a new provider goes last
-  const c = fakeProvider();
+  // a new job source goes last
+  const c = fakeJobSource();
   await c.approve(page);
   c.set('c1', { state: 'running' });
   await watchJobs(page, a.ws, c.name, ['c1']);
@@ -145,18 +145,18 @@ test('tabs reorder by drag and Alt+Arrow, the order survives a reload, a click s
 
 test('right-click closes a tab, "+" brings it back, the last tab stays, the choice survives a reload, a hidden change dots the "+"', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider();
+  const b = fakeJobSource();
   await b.approve(page);
   a.set('a1', { state: 'running' }); b.set('b1', { state: 'running' });
   await watchJobs(page, a.ws, a.name, ['a1']);
   await watchJobs(page, a.ws, b.name, ['b1']);
   const [first, second] = [a.name, b.name].sort();
   const changer = first === a.name ? a : b;
-  const tabs = jobsBlock(page).getByRole('tab'), add = jobsBlock(page).getByRole('button', { name: /^Add provider tab/ }), menu = page.locator('#menu.open');
+  const tabs = jobsBlock(page).getByRole('tab'), add = jobsBlock(page).getByRole('button', { name: /^Add job source tab/ }), menu = page.locator('#menu.open');
   await expect(tabs).toHaveCount(2);
   await expect(add).toBeVisible();
 
-  // close the open (first) tab: the neighbour opens, the closed provider is still watched
+  // close the open (first) tab: the neighbour opens, the closed job source is still watched
   await tab(page, first).click({ button: 'right' });
   await expect(menu.getByRole('menuitem', { name: 'Close tab' })).toBeEnabled();
   await page.keyboard.press('Escape');
@@ -192,8 +192,8 @@ test('right-click closes a tab, "+" brings it back, the last tab stays, the choi
   await expect(tab(page, first)).toHaveAttribute('aria-selected', 'true');
   await expect(add).not.toHaveClass(/chg/);
 
-  // Delete closes the focused tab; an approved provider without jobs opens as an empty tab
-  const c = fakeProvider();
+  // Delete closes the focused tab; an approved job source without jobs opens as an empty tab
+  const c = fakeJobSource();
   await c.approve(page);
   await page.reload();
   await tab(page, first).focus();
@@ -209,22 +209,22 @@ test('right-click closes a tab, "+" brings it back, the last tab stays, the choi
   await expect(jobsBlock(page).locator('.jt-empty')).toContainText(c.name);
 });
 
-test('the "+" is inactive with a hint while no provider is left to add, and wakes up when one is closed or appears', async ({ page }) => {
+test('the "+" is inactive with a hint while no job source is left to add, and wakes up when one is closed or appears', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider(), c = fakeProvider();
+  const b = fakeJobSource(), c = fakeJobSource();
   await b.approve(page); await c.approve(page);
-  // the server is shared with parallel specs: show the page only the providers of this test
+  // the server is shared with parallel specs: show the page only the job sources of this test
   let only = [a.name, b.name];
-  await page.route(/\/providers$/, async (route) => {
+  await page.route(/\/job-sources$/, async (route) => {
     const res = await route.fetch(), j = await res.json();
-    await route.fulfill({ response: res, json: { ...j, providers: j.providers.filter((p: any) => only.includes(p.name)) } });
+    await route.fulfill({ response: res, json: { ...j, jobSources: j.jobSources.filter((p: any) => only.includes(p.name)) } });
   });
   a.set('a1', { state: 'running' }); b.set('b1', { state: 'running' });
   await watchJobs(page, a.ws, a.name, ['a1']);
   await watchJobs(page, a.ws, b.name, ['b1']);
   await page.reload();
   const tabs = jobsBlock(page).getByRole('tab'), add = jobsBlock(page).locator('.jt-add'), menu = page.locator('#menu.open');
-  const tip = 'No other providers to add. Ask the agent to create one (status provider).';
+  const tip = 'No other job sources to add. Ask the agent to create one.';
   await expect(tabs).toHaveCount(2);
   await expect(add).toHaveAttribute('aria-disabled', 'true');
   await add.hover();
@@ -241,14 +241,14 @@ test('the "+" is inactive with a hint while no provider is left to add, and wake
   expect(Math.abs((await mid(add)) - (await mid(tabs.first())))).toBeLessThanOrEqual(1);
   expect(Math.abs((await mid(add)) - (await mid(tabs.first().locator('.jt-n'))))).toBeLessThanOrEqual(3);
 
-  // a provider shows up: the "+" turns active with the normal tip
+  // a job source shows up: the "+" turns active with the normal tip
   only = [a.name, b.name, c.name];
-  await page.evaluate(() => (window as any).loadProviders());
+  await page.evaluate(() => (window as any).loadJobSources());
   await expect(add).not.toHaveAttribute('aria-disabled', 'true');
-  await expect(add).toHaveAttribute('title', 'Add provider tab');
-  // closing a tab gives the "+" something to add; opening it again turns it inactive after the provider is gone
+  await expect(add).toHaveAttribute('title', 'Add job source tab');
+  // closing a tab gives the "+" something to add; opening it again turns it inactive after the job source is gone
   only = [a.name, b.name];
-  await page.evaluate(() => (window as any).loadProviders());
+  await page.evaluate(() => (window as any).loadJobSources());
   await expect(add).toHaveAttribute('aria-disabled', 'true');
   await tabs.first().click({ button: 'right' });
   await menu.getByRole('menuitem', { name: 'Close tab' }).click();
@@ -262,7 +262,7 @@ test('the "+" is inactive with a hint while no provider is left to add, and wake
 
 test('many tabs overflow without a scrollbar: the wheel scrolls the strip, the "+" stays in view, Shift+F10 and the context-menu key open the close menu', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const ps = [a, ...Array.from({ length: 5 }, () => fakeProvider())];
+  const ps = [a, ...Array.from({ length: 5 }, () => fakeJobSource())];
   for (const p of ps.slice(1)) await p.approve(page);
   for (const [i, p] of ps.entries()) { p.set(`j${i}`, { state: 'running' }); await watchJobs(page, a.ws, p.name, [`j${i}`]); }
   await page.setViewportSize({ width: 560, height: 700 });
@@ -289,7 +289,7 @@ test('many tabs overflow without a scrollbar: the wheel scrolls the strip, the "
 
 test('closing a lit tab keeps the "+" dot, focus returns after a menu, the empty note sits in the tabpanel, stale or corrupt saved state is repaired', async ({ page }) => {
   const a = await jobsWorkspace(page);
-  const b = fakeProvider(), c = fakeProvider();
+  const b = fakeJobSource(), c = fakeJobSource();
   await b.approve(page); await c.approve(page);
   a.set('a1', { state: 'running' }); b.set('b1', { state: 'running' });
   await watchJobs(page, a.ws, a.name, ['a1']);
@@ -325,19 +325,19 @@ test('closing a lit tab keeps the "+" dot, focus returns after a menu, the empty
   await menu.getByRole('menuitem', { name: new RegExp(`^${second}`) }).click();
   await expect(tab(page, second)).toBeFocused();
 
-  // a provider without jobs: the note is inside the tabpanel
+  // a job source without jobs: the note is inside the tabpanel
   await add.click();
   await menu.getByRole('menuitem', { name: new RegExp(`^${c.name}`) }).click();
   await expect(jobsBlock(page).getByRole('tabpanel').locator('.jt-empty')).toContainText(c.name);
 
-  // saved state: a gone provider in `added` is dropped, wrong types do not break the panel
+  // saved state: a gone job source in `added` is dropped, wrong types do not break the panel
   await page.evaluate(([ws]) => {
     const k = `jarvis.panels.${ws}`, v = JSON.parse(localStorage.getItem(k) ?? '{}');
-    v.jobs = { ...v.jobs, added: ['no-such-provider', ...(v.jobs?.added ?? [])], tabOrder: 'x', closedTabs: { a: 1 } };
+    v.jobs = { ...v.jobs, added: ['no-such-job-source', ...(v.jobs?.added ?? [])], tabOrder: 'x', closedTabs: { a: 1 } };
     localStorage.setItem(k, JSON.stringify(v));
   }, [a.ws]);
   await page.reload();
   await expect(tabs.first()).toBeVisible();
   await expect.poll(() => page.evaluate(([ws]) => JSON.parse(localStorage.getItem(`jarvis.panels.${ws}`) ?? '{}').jobs, [a.ws])).toMatchObject({ added: expect.arrayContaining([c.name]), tabOrder: expect.any(Array), closedTabs: [] });
-  expect((await page.evaluate(([ws]) => localStorage.getItem(`jarvis.panels.${ws}`), [a.ws]))).not.toContain('no-such-provider');
+  expect((await page.evaluate(([ws]) => localStorage.getItem(`jarvis.panels.${ws}`), [a.ws]))).not.toContain('no-such-job-source');
 });

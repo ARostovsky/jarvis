@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect, createWs, open, tab, uniq, post, addFakeAgent, panelsOf, jobRows, jobsBlock, jobRow, watchJobs, jobsWorkspace, archivePolling, fakeProvider, tmp, type Page } from './helpers.ts';
+import { test, expect, createWs, open, tab, uniq, post, addFakeAgent, panelsOf, jobRows, jobsBlock, jobRow, watchJobs, jobsWorkspace, archivePolling, fakeJobSource, tmp, type Page } from './helpers.ts';
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 const order = (page: Page) => jobsBlock(page).locator('li.jr').evaluateAll((els) => els.map((e) => (e as HTMLElement).dataset.key!.split(':')[1]));
@@ -326,7 +326,7 @@ test('two-line rows with the cost on its own line at 440 px, one-line rows above
   await watchJobs(page, p.ws, p.name, ['w1'], { w1: 'Wide run' });
   const li = jobRow(page, p.name, 'w1');
   await expect(li.locator('.cost')).toBeVisible();
-  const top = async (sel: string) => (await li.locator(sel).first().boundingBox())!.y;
+  const top = async (sel: string) => { let y = NaN; await expect.poll(async () => (y = (await li.locator(sel).first().boundingBox())?.y ?? NaN), { message: `${sel} has a box` }).not.toBeNaN(); return y; }; // a poll re-renders the row: retry while it is detached
   expect((await page.locator('#panel').boundingBox())!.width).toBeCloseTo(440, 0);
   expect(await top('.cost')).toBeGreaterThan(await top('.id')); // narrow: cost wraps to its own line
   expect(await top('.lab')).toBeLessThan(await top('.id')); // label line above the detail line
