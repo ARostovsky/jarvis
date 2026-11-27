@@ -116,7 +116,7 @@ class TgError extends Error {
 }
 
 // cursors: the last event forwarded per workspace, as its `at` plus how many events with exactly that `at` are done (events carry no sequence number, and two can share a millisecond).
-type State = { chat: number; offset: number; topics: Record<string, number>; cursors: Record<string, { at: number; skip: number }> };
+type State = { chat: number; offset: number; topics: Record<string, number>; cursors: Record<string, { at: number; skip: number }>; pending: Record<string, { thread: number; tries: number; next: number }> };
 const ABSENT_SYNCS = 3;
 // `done` settles when polling ends: it rejects for an error that cannot be retried (bad token, another bot instance or a webhook).
 type Handle = { stop(): Promise<void>; done: Promise<void> };
@@ -158,8 +158,8 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
   }
 
   // Topic map and update offset survive a restart.
-  let state: State = { chat: cfg.chat, offset: 0, topics: {}, cursors: {} };
-  try { const s = JSON.parse(readFileSync(cfg.stateFile, 'utf8')); if (s.chat === cfg.chat) state = { chat: cfg.chat, offset: Number(s.offset) || 0, topics: s.topics ?? {}, cursors: s.cursors ?? {} }; } catch { /* first run */ }
+  let state: State = { chat: cfg.chat, offset: 0, topics: {}, cursors: {}, pending: {} };
+  try { const s = JSON.parse(readFileSync(cfg.stateFile, 'utf8')); if (s.chat === cfg.chat) state = { chat: cfg.chat, offset: Number(s.offset) || 0, topics: s.topics ?? {}, cursors: s.cursors ?? {}, pending: Object.fromEntries(Object.entries(s.pending ?? {}).filter(([, p]: [string, any]) => typeof p?.thread === 'number').map(([k, p]: [string, any]) => [k, { thread: p.thread, tries: Number(p.tries) || 0, next: Number(p.next) || 0 }])) }; } catch { /* first run */ }
   const save = () => {
     try { mkdirSync(dirname(cfg.stateFile), { recursive: true }); const tmp = `${cfg.stateFile}.tmp`; writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 }); chmodSync(tmp, 0o600); renameSync(tmp, cfg.stateFile); } catch (e) { log('state not saved:', (e as Error).message); }
   };
@@ -269,6 +269,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
             const data = block.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n');
             let e: any;
             try { e = JSON.parse(data); } catch { continue; }
+            if (e.type === 'archived') { kick(); continue; }
             if (e.type === 'ready') {
               live = true; delay = 1000;
               const keep = first ? replay.slice(Math.max(0, replay.length - cfg.backfill)) : replay;
@@ -314,9 +315,51 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
   }
 
   const absent = new Map<string, number>(); // consecutive syncs without the workspace
+  // Topics of archived workspaces wait in state.pending (kept in the state file) until Telegram deleted or closed them, or says they are gone. A failure backs off from syncMs doubling up to 10 min.
+  const GONE = /thread not found|topic_id_invalid|topic_not_modified|topic_closed/i; // topic already gone or closed: done
+  const removeLogged = new Set<number>(); // error codes already logged: a permanent failure retried every 10 min must not fill the log
+  async function removeTopics() {
+    for (const [ws, p] of Object.entries(state.pending)) {
+      if (quit.signal.aborted) return;
+      if (p.next > Date.now()) continue;
+      const args = { chat_id: cfg.chat, message_thread_id: p.thread };
+      try {
+        try { await tg('deleteForumTopic', args, 30_000, quit.signal); } catch (e) {
+          // Close only when Telegram refuses the delete for good (rights); a 429, a network error, a 5xx or a timeout is retried as a delete, else a glitch would leave the topic closed forever.
+          if (quit.signal.aborted || !(e instanceof TgError) || (e.code !== 400 && e.code !== 403) || GONE.test(e.message)) throw e;
+          await tg('closeForumTopic', args, 30_000, quit.signal);
+        }
+        delete state.pending[ws];
+      } catch (e) {
+        if (quit.signal.aborted) return;
+        if (e instanceof TgError && GONE.test(e.message)) delete state.pending[ws];
+        else {
+          p.tries++;
+          p.next = Date.now() + Math.max(Math.min(cfg.syncMs * 2 ** p.tries, 600_000), e instanceof TgError ? e.retryAfter * 1000 : 0);
+          const code = e instanceof TgError ? e.code : 0;
+          if (!removeLogged.has(code)) { removeLogged.add(code); log(`topic of ${ws} not removed, retrying quietly:`, (e as Error).message); }
+        }
+      }
+      save();
+    }
+  }
+  // The workspace is archived: its topic moves from the map to the pending list; a later restore makes a new topic.
+  function retire(ws: string) {
+    const thread = state.topics[ws];
+    forget(ws);
+    state.pending[ws] = { thread, tries: 0, next: 0 };
+    save();
+  }
+
   // Workspaces to topics; a new workspace gets a topic.
   async function sync() {
-    const list: { id: string; name: string }[] = (await jarvis('/workspaces'))?.workspaces ?? [];
+    const answer = await jarvis('/workspaces');
+    const list: { id: string; name: string }[] = answer?.workspaces ?? [];
+    for (const a of (answer?.archived ?? []) as { id: string }[]) {
+      if (quit.signal.aborted) return;
+      if (state.topics[a.id] && !list.some((w) => w.id === a.id)) retire(a.id);
+    }
+    await removeTopics();
     const ids = new Set(list.map((w) => w.id));
     for (const w of list) {
       if (quit.signal.aborted) return;
@@ -331,10 +374,14 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
       if (n >= ABSENT_SYNCS) { absent.delete(ws); forget(ws); } else absent.set(ws, n);
     }
   }
+  // `kick` (the server's `archived` event) ends the wait of the sync loop at once; kicks that come during a sync merge into one more run.
+  let kicked = false, wake = new AbortController();
+  const kick = () => { kicked = true; wake.abort(); };
   const syncLoop = (async () => {
     while (!quit.signal.aborted) {
+      kicked = false; wake = new AbortController();
       try { await sync(); } catch (e) { log('sync:', (e as Error).message); }
-      await sleep(cfg.syncMs, quit.signal);
+      if (!kicked) await sleep(cfg.syncMs, AbortSignal.any([quit.signal, wake.signal]));
     }
   })();
 
