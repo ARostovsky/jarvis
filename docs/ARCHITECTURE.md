@@ -1,6 +1,6 @@
 # Jarvis: technical documentation
 
-This file is for people (and their coding agents) who want to change Jarvis. The [README](../README.md) explains what Jarvis is and the [user guide](GUIDE.md) covers using it in detail. The job source contract is in [JOB-SOURCES.md](JOB-SOURCES.md) and voice input in [VOICE.md](VOICE.md). Here you find how it is built, where each thing lives, and how to extend it without breaking the guarantees it makes.
+This file is for people (and their coding agents) who want to change Jarvis. The [README](../README.md) explains what Jarvis is and the [usage guide](USAGE.md) covers using it in detail. The job source contract is in [JOB-SOURCES.md](JOB-SOURCES.md) and voice input in [VOICE.md](VOICE.md). Here you find how it is built, where each thing lives, and how to extend it without breaking the guarantees it makes.
 
 ## Contents
 
@@ -61,7 +61,7 @@ flowchart LR
 | `public/index.html` | The whole UI: HTML, CSS and plain JS in one file. No framework, no build. |
 | `bin/jarvis.mjs` | CLI launcher: `jarvis [start\|stop\|restart\|status\|logs]`. Runs the server detached and opens the browser. `jarvis job-source-check <folder> <id>...` validates a job source and runs it as the server would; it needs no server and exits 1 on any failure. |
 | `e2e/` | Playwright specs, `helpers.ts`, `fake-job-source/` (the deterministic job source of the jobs specs), `fake-sdk.ts` (the scripted stand-in for the SDK) and the voice stand-ins (see [VOICE.md](VOICE.md#files)) (see [Running and checking](#running-and-checking)). |
-| `docs/` | This file, `GUIDE.md` (the user guide), `JOB-SOURCES.md` (the job source contract), `VOICE.md` (voice input) and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
+| `docs/` | This file, `USAGE.md` (the usage guide), `JOB-SOURCES.md` (the job source contract), `VOICE.md` (voice input) and the README screenshots. `.github/workflows/wiki.yml` publishes `README.md` and `docs/` to the GitHub wiki (generated pages, edit them here). |
 | `tsconfig.json` | Type check only (`noEmit`). Node runs `.ts` directly. |
 
 Inside `src/agents.ts`, top to bottom:
@@ -535,7 +535,7 @@ The open-items panel is built by exactly these steps; read `src/openitems.ts` an
 2. **Source.** A module with no SDK import that takes the panels API as a parameter (`createOpenItems({panels, file})`). Call `panels.setPanel()` only when something changed; `panels.removePanel()` when there is nothing to show; `panels.setPanelStatus()` for freshness; Optional: `panels.onPanelAction(panelId, handler)` for the user's clicks (open items has no action, jobs does); a handler throws an `Error` with `status` 400 or 409 to reach the HTTP code. Keep the source of truth outside the event log if it exists elsewhere (the notes file), and rebuild from it at startup.
 3. **Wiring.** In `createWorkspace()` start and stop the source (`syncOpenItems()`), gate it behind an env switch, and put prompt text in a pure `*-wiring.ts` that is added to the arbiter prompt only when the switch is on. If it changes the arbiter's world, queue a note and deliver it in front of the next message in `deliver()`. If the kind has a click action, do not wake the arbiter for it.
 4. **UI.** One `PANEL_KINDS` entry in `public/index.html` (`rank` sets the order) plus CSS with existing tokens. Use `textContent`, no `innerHTML`. Do not add kind logic to `src/panels.ts`.
-5. **Docs and tests.** A README line, a GUIDE section, rows in this file for events, routes, actions and env vars; a unit test of the source (`test/openitems.test.ts`) and an e2e spec (`e2e/panels.spec.ts` style, own workspace and temp folders).
+5. **Docs and tests.** A README line, a USAGE section, rows in this file for events, routes, actions and env vars; a unit test of the source (`test/openitems.test.ts`) and an e2e spec (`e2e/panels.spec.ts` style, own workspace and temp folders).
 
 ### Add a job source
 

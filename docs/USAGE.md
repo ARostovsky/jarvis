@@ -1,10 +1,10 @@
-# Jarvis user guide
+# Using Jarvis
 
-The details behind the [README](../README.md): what the screen shows, controls, voice input, safety, costs and every setting. For internals see [ARCHITECTURE.md](ARCHITECTURE.md).
+The details behind the [README](../README.md): what the screen shows, controls, safety, costs and the settings. Topics with their own page: [voice input](VOICE.md) and [job sources](JOB-SOURCES.md). For internals see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Contents
 
-- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input, connections, status dot, notes folder, panels and jobs, open items
+- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input (short), connections, status dot, notes folder, panels and jobs, open items
 - [Safety](#safety)
 - [Costs](#costs)
 - [Settings](#settings)
@@ -59,21 +59,7 @@ Jarvis is in the center, agents around it. Each tab is a separate workspace: its
 
 ### Voice input (optional)
 
-Off by default. A mic button next to SEND turns speech into text with a local Whisper model (faster-whisper in a Python sidecar). Jarvis itself records the microphone through PipeWire, so the browser asks for no permission. Audio stays on your machine and is never stored (unless you set `JARVIS_VOICE_DEBUG_WAV`, see the env table); on release the transcript is sent at once to the agent that was selected when you started, like a voice message. Text already in the input box goes with it: one message, your draft first, a blank line, then the transcript, and the box is cleared like after SEND. If the recording is cancelled, transcription fails or the send fails, the draft stays in the box. Text you type after you released the button (while it transcribes) is not sent and stays in the box; the draft part that was sent with the transcript is cut from it, so the next SEND does not repeat it. With `JARVIS_VOICE_AUTOSEND=0` it lands in the input box at the caret instead and is never sent by itself. A failed send puts the text into that agent's draft.
-
-To enable it:
-
-1. Linux with PipeWire and `pw-record` (package `pipewire`, or `pipewire-bin` / `pipewire-utils`). Jarvis records the default input of your sound server: the one `wpctl status` marks with `*` under Sources.
-2. Set up Python with `faster-whisper` (`voice/setup.sh` creates `voice/.venv` and fetches the models; Jarvis uses that venv by default), or point `JARVIS_VOICE_PYTHON` at a Python that already has it.
-3. Start Jarvis with `JARVIS_VOICE=1` (`cpu` forces CPU). To have it on after every restart without passing the variable, put `JARVIS_VOICE=1` on a line in `$XDG_CONFIG_HOME/jarvis/env` (`~/.config/jarvis/env`). Jarvis reads that optional file of `KEY=value` lines at start, for any `JARVIS_*` variable. A variable set in the environment overrides the file; a missing file changes nothing. `JARVIS_ENV_FILE` points at another file.
-
-If `pw-record`, Python or `faster-whisper` is missing, Jarvis starts as usual, logs one `voice disabled: ...` line (for example `voice disabled: pw-record not found`) to `server.log` and shows no mic button. The check runs after the server starts, so the mic button appears a moment later (reload the page if it is missing right after a start).
-
-Push-to-talk: hold the mic button, or hold `Ctrl+Space` in the input box or `Alt+V` anywhere, and release to transcribe and send the text to the agent that was selected when you started (`JARVIS_VOICE_AUTOSEND=0` puts it into the input box instead). Voice follows the same guard as typing: for an agent that works for a lead the input is read-only, so recording does not start until you double-click the input to unlock it. While recording, a red strip replaces SEND: `● 0:07 release sends` (Esc, a tap or dragging away cancels; the hint is cut with an ellipsis in a narrow panel, the timer never; the typed draft keeps at least 28% of the row). To cancel, release within 0.4 s of the press (a tap), press `Esc`, or, with the mouse, drag the pointer more than about 60 px away from the button (it turns grey and struck through; move back to keep recording) and release there. A cancel sends and transcribes nothing; with autosend, switching to another window cancels too. While it transcribes the strip says `transcribing… Esc discards` and the button ignores presses; `Esc` then drops the text when it arrives (it is not inserted or sent; the transcription itself still runs to the end). The mic button is greyed out like SEND while the input is read-only. Recording stops by itself after 60 s (`JARVIS_VOICE_MAX_S`). If the server ends a recording on its own (it lost track of the page, or restarted), the button goes back to idle and a toast says `Recording stopped`. The button turns red and shows a level meter while it records. Recording starts when Jarvis has the first audio from `pw-record`, about a tenth of a second after the press, so wait for the red button before the first word. If `pw-record` cannot start, a toast says why. A muted microphone records silence and gives `No speech recognized`: check `wpctl status`.
-
-The recorder never outlives its use: it stops on release, on `Esc`, after 60 s, when the page stops reporting for 4 s (tab closed, crash), and when Jarvis exits. Only the tab that started a recording can stop or cancel it.
-
-The default model is `large-v3` (float16, beam 5): about 4 GB of VRAM at peak, loaded on the first recording and unloaded after 10 idle minutes. On CPU it falls back to `large-v3-turbo` (int8), which is slower than real time on a short clip. English and Russian are detected per recording. `JARVIS_VOICE_MODEL` picks another model.
+Off by default. A mic button next to SEND turns speech into text with a local Whisper model; hold it (or `Ctrl+Space` in the input box, or `Alt+V`), speak and release to send. Setup, controls, the vocabulary and every setting are in [VOICE.md](VOICE.md).
 
 ### Connections
 
@@ -182,20 +168,6 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |
 | `JARVIS_JOB_SOURCES_DIR` | `$XDG_CONFIG_HOME/jarvis/job-sources` (`~/.config/...`) | Folder with job sources, one subfolder each |
 | `JARVIS_JOBS_MIN_POLL_S` | unset | Tests only: lowers the minimum poll, slow-field interval and `timeoutS` (normally 15 s, 15 min and 5 s) to this many seconds |
-| `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces CPU. See Voice input |
-| `JARVIS_VOICE_AUTOSEND` | `1` | On release the transcript is sent at once to the agent that was selected when recording started (like a Telegram voice message); a draft in the input box is sent with it, ahead of the transcript. `0` inserts it into the input box instead, without sending |
-| `JARVIS_VOICE_MAX_S` | `60` | Seconds after which the server stops a recording by itself (the audio so far is still transcribed on release) |
-| `JARVIS_VOICE_LEASE_S` | `4` | Seconds without a level poll from the page after which the server discards a recording and closes the microphone |
-| `JARVIS_VOICE_MUTE_OUTPUT` | `1` | `0` keeps the speakers on while recording. By default Jarvis mutes the default output while it records (it looks up the sink's numeric id and node name once and mutes and unmutes that sink, so a headset reconnect or a changed default cannot leave it muted; if the lookup fails it mutes nothing and logs one line), so sound from speakers does not bleed into the microphone, and unmutes it when the last active recording ends for any reason (stop, cancel, error, lease, exit, SIGTERM/SIGINT/SIGHUP). Several Jarvis processes share the mute: the last one to finish unmutes. An output you had muted before stays muted; a mute you set yourself during a recording is undone when it ends. A failed unmute is retried every 2 s (5 times), at the next recording and at exit, and the last failure logs `voice: cannot unmute sink <id>`. Jarvis keeps a marker file `voice-muted` in its data folder while it holds the mute (if you delete it while recordings run, the first one to end unmutes); after a crash or SIGKILL the next start (also with `JARVIS_VOICE_MUTE_OUTPUT=0`) or the next recording unmutes exactly that sink (a headset that came back with a new id is found by its node name) and logs `voice: restored the output mute left by a previous run`. Known limit: if Jarvis is killed with SIGKILL and never started again, the output stays muted: `wpctl set-mute @DEFAULT_AUDIO_SINK@ 0`. Without `wpctl` it logs one line and does nothing |
-| `JARVIS_VOICE_PYTHON` | `voice/.venv/bin/python` if it exists, else `python3` | Python with `faster-whisper` for the voice sidecar |
-| `JARVIS_VOICE_MODEL` | `large-v3` | Whisper model of the sidecar |
-| `JARVIS_VOICE_LANGS` | `en,ru` | Languages the sidecar picks from |
-| `JARVIS_VOICE_IDLE_S` | `600` | Idle seconds before the sidecar exits and frees VRAM |
-| `JARVIS_VOICE_TIMEOUT_S` | `120` | Seconds one recording may take to transcribe; then the sidecar is killed, the request fails and the next one restarts it |
-| `JARVIS_VOICE_PROMPT` | unset | Extra Whisper initial-prompt terms, appended to the built-in list (comma-separated names and terms). The built-in list biases recognition toward English dev terms said in Russian speech: Jarvis, workspace, worktree, arbiter, agent, spawn, board, notes, Claude, Opus, Sonnet, git, commit, branch, rebase, merge, push, pull request, PR, main, diff, review, test, e2e, npm, TypeScript, Python, Docker, Kafka, API, CI, bug, fix, refactor, deploy (full text: `DEFAULT_PROMPT` in `voice/stt.py`). Keep it a plain list of terms, not a sentence: a result that equals or nearly equals the prompt, repeats its start, or repeats a run of two or more of its terms is dropped as an echo (a prompt under 4 words only when repeated whole) |
-| `JARVIS_VOICE_VOCAB` | `$XDG_CONFIG_HOME/jarvis/voice-vocab.txt` (`~/.config/...`) | Vocabulary file for recognition: one word or phrase per line (UTF-8, Russian and English mixed), blank lines and `#` comment lines ignored. Its words go into the Whisper prompt after the built-in list and before `JARVIS_VOICE_PROMPT`. Whisper keeps about 224 prompt tokens, so words that do not fit are cut from the end of the file (logged once). Re-read when the file changes, at the next recording, no restart. Missing file: no change; an unreadable one is logged once and ignored. Jarvis never creates it; see `voice/voice-vocab.example.txt` |
-| (vocabulary by chat) | | With voice on, tell the arbiter "add the word X to the voice dictionary" (or remove it, or list it): its `voice_vocab` tool edits the vocabulary file above. It creates the file and folder if missing, skips duplicates (case-insensitive), empty or `#` words, words over 80 characters, and anything past 8 KB in total, keeps comment lines, and warns when the Whisper prompt budget cuts the tail. Agents do not have the tool |
-| `JARVIS_VOICE_PROMPT_DEFAULT` | `1` | `0` leaves the built-in term list out, so only `JARVIS_VOICE_PROMPT` is used; with both, no prompt at all |
-| `JARVIS_VOICE_DEBUG_WAV` | unset (off) | Directory. **Deliberately writes your audio and its transcript to disk**: every recording overwrites `<dir>/last.wav` (16 kHz mono s16) and `<dir>/last.txt`. For diagnosing recognition quality; leave unset otherwise |
+| `JARVIS_VOICE`, `JARVIS_VOICE_*` | unset (off) | Voice input and its tuning. All variables are in [VOICE.md](VOICE.md#configuration) |
 
 Data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never in this repo.

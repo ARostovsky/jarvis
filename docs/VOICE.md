@@ -2,7 +2,7 @@
 
 Voice input is an optional push-to-talk feature. A mic button next to SEND records the microphone on the machine that runs Jarvis, a local Whisper model (faster-whisper, in a Python sidecar) turns the audio into text, and the text goes to the selected agent like a typed message. Audio stays on your machine.
 
-This page covers use, setup, configuration and internals. The user guide ([GUIDE.md](GUIDE.md#voice-input-optional)) has a shorter walk-through; this page is the reference for voice and wins when they differ.
+This page is the reference for voice: use, setup, configuration and internals. [USAGE.md](USAGE.md) only points here.
 
 ## Contents
 
