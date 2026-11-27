@@ -1222,15 +1222,21 @@ function switchTo(id) {
   refreshTabs();
 }
 
-// Recent folders, newest first. No prefill: the browser filters a datalist by the typed text, so a filled input would hide the rest.
+// Recent folders, newest first. No prefill of the datalists: the browser filters a datalist by the typed text, so a filled input would hide the rest.
+let projectNotes = {}, prefilled = ''; // notes folder per project; the value we filled in, so a manual edit is never overwritten
 async function openNewWs() {
   try {
     const recent = await (await fetch('/recent')).json();
     for (const [id, k] of [['recentProject', 'project'], ['recentNotes', 'notes']]) $(id).replaceChildren(...recent[k].map((p) => Object.assign(document.createElement('option'), { value: p })));
+    projectNotes = recent.projectNotes ?? {}; prefilled = '';
   } catch {}
   $('newws').showModal();
 }
 
+$('wsProject').addEventListener('input', () => {
+  const n = projectNotes[$('wsProject').value.trim()], cur = $('wsNotes').value;
+  if (n && (!cur || cur === prefilled)) $('wsNotes').value = prefilled = n;
+});
 $('emptyNew').onclick = openNewWs;
 $('emptyArchive').onclick = () => $('archived').showModal();
 $('newwsForm').onsubmit = async (ev) => {

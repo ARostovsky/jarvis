@@ -7,7 +7,7 @@ import { join } from 'node:path';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-recent-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
-const { touchRecent, recentFolders, addWorkspace } = await import('../src/agents.ts');
+const { touchRecent, recentFolders, addWorkspace, notesByProject } = await import('../src/agents.ts');
 const dir = (n: string) => (mkdirSync(join(tmp, n)), join(tmp, n));
 const [a, b, c, n1] = ['a', 'b', 'c', 'n1'].map(dir);
 
@@ -32,4 +32,17 @@ test('a corrupt or malformed recent.json is seeded again, not thrown on', () => 
     touchRecent({ notes: n1 });
     assert.equal(recentFolders().notes[0], n1);
   }
+});
+
+test('notesByProject: newest workspace of a project wins, none gives no entry, gone folders are skipped', () => {
+  const [n2, n3] = ['n2', 'n3'].map(dir);
+  const r = notesByProject([
+    { meta: { project: a, notes: n2 }, at: 5 },
+    { meta: { project: a, notes: n1 }, at: 1 },
+    { meta: { project: b }, at: 9 },
+    { meta: { project: c, notes: join(tmp, 'gone') }, at: 9 },
+    { meta: { project: c, notes: n3 }, at: 2 },
+  ]);
+  assert.deepEqual(r, { [a]: n2, [c]: n3 });
+  assert.equal(r[b], undefined);
 });

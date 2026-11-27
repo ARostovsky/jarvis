@@ -1811,6 +1811,18 @@ export function recentFolders() {
   return { project: list(r.project), notes: list(r.notes) };
 }
 
+// Notes folder last used per project: the newest workspace (live or archived, dated by its folder) of that project that has one and whose folder still exists.
+export function notesByProject(items: { meta: Pick<WorkspaceMeta, 'project' | 'notes'>; at: number }[]): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const { meta } of [...items].sort((a, b) => a.at - b.at)) if (meta.project && meta.notes && existsSync(meta.notes)) out[meta.project] = meta.notes;
+  return out;
+}
+
+export function projectNotes() {
+  const at = (dir: string) => (existsSync(dir) ? statSync(dir).mtimeMs : 0);
+  return notesByProject([...[...workspaces.values()].map((w) => ({ meta: w.meta, at: at(w.dir) })), ...listArchived().map((m) => ({ meta: m, at: at(join(ARCHIVE, m.id)) }))]);
+}
+
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, providers?: string[]): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   if (notes) prepareNotes(resolve(notes));
