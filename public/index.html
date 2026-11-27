@@ -276,7 +276,7 @@
     .jr .prov, .jr .l2 > .id, .jr .l2 > a, .jr .step, .jr .det { padding-left: 6px; } /* air between a column's resize line (on the track edge) and the next column's text */
     .jr .lab { grid-column: 1; } .jr .prov { grid-column: 2; } .jr .l2 > .id, .jr .l2 > a { grid-column: 3; } .jr .step { grid-column: 4; }
     .jr .det { grid-column: 5; } .jr .det.sw, .jr .err { grid-column: 5; grid-row: 2; } .jr .prog { grid-column: 6; }
-    .jr .dur { grid-column: 7; min-width: 5ch; text-align: right; } .jr .cost { grid-column: 8; } .jr .x { position: static; align-self: stretch; margin: 2px 0; grid-column: 9; grid-row: 1 / span 2; padding-right: 0; } .jr:has(> .l1 > .x) .l1 { padding-right: 0; }
+    .jr .dur { grid-column: 7; min-width: 5ch; text-align: right; } .jr .cost { grid-column: 8; } .jr .x { position: relative; align-self: stretch; margin: 2px 0; grid-column: 9; grid-row: 1 / span 2; padding-right: 0; min-width: 30px; } .jr:has(> .l1 > .x) .l1 { padding-right: 0; } /* relative, not static: the cross is drawn by pseudo-elements positioned against the button */
   }
   .ci { display: flex; align-items: baseline; gap: 8px; padding-top: 4px; padding-bottom: 4px; margin-bottom: 2px; }
   .ci .mk { flex: none; width: 16px; text-align: center; color: var(--e); font: 400 14px 'JetBrains Mono', monospace; }
