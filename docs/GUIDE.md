@@ -4,7 +4,7 @@ The details behind the [README](../README.md): what the screen shows, controls, 
 
 ## Contents
 
-- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input, status dot, notes folder, panels and jobs, open items
+- [What you see](#what-you-see): map, log, approvals, controls, big teams, voice input, connections, status dot, notes folder, panels and jobs, open items
 - [Safety](#safety)
 - [Costs](#costs)
 - [Settings](#settings)
@@ -74,6 +74,14 @@ Push-to-talk: hold the mic button, or hold `Ctrl+Space` in the input box or `Alt
 The recorder never outlives its use: it stops on release, on `Esc`, after 60 s, when the page stops reporting for 4 s (tab closed, crash), and when Jarvis exits. Only the tab that started a recording can stop or cancel it.
 
 The default model is `large-v3` (float16, beam 5): about 4 GB of VRAM at peak, loaded on the first recording and unloaded after 10 idle minutes. On CPU it falls back to `large-v3-turbo` (int8), which is slower than real time on a short clip. English and Russian are detected per recording. `JARVIS_VOICE_MODEL` picks another model.
+
+### Connections
+
+**CONNECTIONS** (top bar) lists how agents reach an LLM: **Anthropic login** (built in, the default) and gateways you add, for example a company LiteLLM. **ADD CONNECTION** asks for a name, the base URL of the gateway (a trailing `/` or `/v1` is removed), the API key and the model name the gateway serves for each of haiku, sonnet and opus. **TEST CONNECTION** saves the form and sends a 1-token request to the gateway; the result shows below the form. **SET AS DEFAULT** makes workspaces without their own choice use it; after a confirmation their agents stop and start new sessions without their earlier conversation. Changing the base URL of a connection in use asks the same. The API key is required. On edit, an empty key field keeps the stored key. Claude Code officially supports only Claude-named models through a gateway; other names may work, with no guarantee.
+
+The New workspace form has a **Connection** dropdown; the label `via <name>` at the bottom left shows the connection of the open workspace and opens the same choice as the tab menu entry `Connection…`. Changing it stops all agents of the workspace and starts new sessions without their earlier conversation (the files stay); Jarvis never continues a conversation under another provider. A connection that a workspace uses cannot be deleted. Keys are stored in `~/.config/jarvis/connections.json` (readable only by you) and are never sent to the browser again; the list shows only the last 4 characters. A connection that only archived workspaces name can be deleted (restoring such a workspace makes it follow the default).
+
+With a gateway as default, the health dot checks the gateway; its tooltip still shows the status.claude.com level, which does not matter for workspaces that use the gateway.
 
 ### Claude health dot
 

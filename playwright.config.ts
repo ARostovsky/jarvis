@@ -13,11 +13,11 @@ process.env.TMPDIR = process.env.JARVIS_TMP_ROOT;
 process.env.JARVIS_TMPGUARD = '0'; // test servers never sweep the real /tmp
 
 // Every worker owns a server (port BASE + STRIDE * worker index) and a data dir, so specs running in parallel never see each other's state.
-// Some specs also start extra servers at the worker's port + OFFSETS (resume and voice 1000-1005, arbiter-reset 1100, health 2000).
+// Some specs also start extra servers at the worker's port + OFFSETS (resume and voice 1000-1005, arbiter-reset 1100, connections-default 1200, health 2000).
 // No port is used twice: two ports clash only if two offsets differ by STRIDE times the distance between two workers, i.e. by 10, 20, ... 90 (at most 10 workers). The offsets differ by 1-5 (inside 1000-1005), 95-100 (1100 against 1000-1005), 895-1000 and more: never by 10-90.
 const BASE = Number(process.env.E2E_PORT || 7798);
 const STRIDE = 10;
-const OFFSETS = [0, 1000, 1001, 1002, 1003, 1004, 1005, 1100, 2000];
+const OFFSETS = [0, 1000, 1001, 1002, 1003, 1004, 1005, 1100, 1200, 2000];
 // A 2 vCPU CI runner gets 2 workers; a bigger machine half its CPUs (each worker is a browser plus a server), at most 8.
 const WORKERS = Number(process.env.E2E_WORKERS || (process.env.CI ? 2 : Math.min(8, Math.max(2, availableParallelism() >> 1))));
 if (!Number.isInteger(WORKERS) || WORKERS < 1 || WORKERS > 10) throw new Error(`bad E2E_WORKERS (1-10): ${process.env.E2E_WORKERS}`);

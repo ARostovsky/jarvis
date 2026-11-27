@@ -46,6 +46,7 @@ test('the New workspace dialog prefills the notes folder of the project, never o
 test('the themed dropdowns work from the keyboard and long paths stay readable', async ({ page }) => {
   await page.goto('/');
   await page.locator('#tabs button[title="New workspace"]').click();
+  await expect(page.locator('#newws')).toBeVisible(); // focus() on a button of a dialog that is not open yet does nothing
   const model = page.locator('#wsModelBtn');
   await expect(model).toHaveText('default (sonnet)');
   await model.focus();
