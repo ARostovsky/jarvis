@@ -337,7 +337,7 @@ test('progress bars have one width and the counters one x whatever the step tota
     expect(b.cnt.x).toBeCloseTo(boxes[0].cnt.x, 1);
   }
   // the panel redraws on every poll, so measure the live segments again until they settle
-  await expect.poll(async () => Math.min(...await row(page, p.name, 't50').locator('.bar i').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width)))).toBeGreaterThanOrEqual(2);
+  await expect.poll(async () => { const w = await row(page, p.name, 't50').locator('.bar i').evaluateAll((els) => els.map((e) => e.getBoundingClientRect().width)); return w.length > 0 ? Math.min(...w) : 0; }).toBeGreaterThanOrEqual(2);
 });
 
 test('clear_jobs keepCurrent leaves only the unfinished rows; agents never get watch_jobs or clear_jobs', async ({ page }) => {
