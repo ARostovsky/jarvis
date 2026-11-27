@@ -6,7 +6,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { configFromEnv, describePair, lock, redact, split, startBridge as start, pair, type Cfg } from '../src/telegram-bridge.ts';
+import { configFromEnv, lock, describePair, redact, split, startBridge as start, pair, type Cfg } from '../src/telegram-bridge.ts';
 
 const TOKEN = '123456:FAKE-token_for-tests';
 const USER = 111, CHAT = -100222;
@@ -66,6 +66,9 @@ function fakeJarvis(wss: { id: string; name: string }[]) {
   let connects = 0;
   let gate: Promise<void> = Promise.resolve();
   const flags = { failSay: false };
+  let clock = 1;
+  const history = new Map<string, object[]>(); // what the real server replays before `ready`; events carry `at` like the real ones
+  const hist = (ws: string) => history.get(ws) ?? (history.set(ws, [{ type: 'text', agentId: 'arbiter', text: `OLD ${ws}`, at: clock++ }]), history.get(ws)!);
   const server = createServer(async (req, res) => {
     const url = new URL(req.url!, 'http://x');
     if (url.pathname === '/workspaces') return void res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ workspaces: wss }));
@@ -74,7 +77,7 @@ function fakeJarvis(wss: { id: string; name: string }[]) {
       const ws = url.searchParams.get('ws')!;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
       res.write(': ping\n\n'); // keepalive comment
-      res.write(`data: ${JSON.stringify({ type: 'text', agentId: 'arbiter', text: `OLD ${ws}` })}\n\n`); // replay of history
+      for (const e of hist(ws)) res.write(`data: ${JSON.stringify(e)}\n\n`); // replay of history
       res.write(`data: ${JSON.stringify({ type: 'ready' })}\n\n`);
       streams.set(ws, [...(streams.get(ws) ?? []), res]);
       return;
@@ -82,19 +85,19 @@ function fakeJarvis(wss: { id: string; name: string }[]) {
     if (url.pathname === '/say') { says.push({ body: await body(req), origin: req.headers.origin, type: req.headers['content-type'] }); await gate; return void res.writeHead(flags.failSay ? 500 : 204).end(); }
     res.writeHead(404).end();
   });
-  const emit = (ws: string, e: object) => streams.get(ws)?.forEach((r) => r.write(`data: ${JSON.stringify(e)}\n\n`));
-  const text = (ws: string, t: string, agentId = 'arbiter') => emit(ws, { type: 'text', agentId, text: t });
+  const emit = (ws: string, e: object, at = clock++) => { const ev = { ...e, at }; hist(ws).push(ev); streams.get(ws)?.forEach((r) => r.write(`data: ${JSON.stringify(ev)}\n\n`)); };
+  const text = (ws: string, t: string, agentId = 'arbiter', at?: number) => emit(ws, { type: 'text', agentId, text: t }, at);
   const drop = (ws: string) => { streams.get(ws)?.forEach((r) => r.destroy()); streams.delete(ws); };
   const hold = () => { let open!: () => void; gate = new Promise<void>((r) => { open = r; }); return open; };
   const ping = (ws: string) => streams.get(ws)?.forEach((r) => r.write(': ping\n\n'));
-  return { server, says, emit, text, drop, hold, ping, connects: () => connects, set failSay(v: boolean) { flags.failSay = v; } };
+  return { server, says, emit, text, drop, hold, ping, history, connects: () => connects, set failSay(v: boolean) { flags.failSay = v; } };
 }
 
 async function setup(wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }], o: { forum?: boolean; state?: string } = {}) {
   const t = fakeTelegram({ forum: o.forum }), j = fakeJarvis(wss);
   const [tp, jp] = [await listen(t.server), await listen(j.server)];
   const stateFile = o.state ?? join(mkdtempSync(join(tmp, 's-')), 'state.json');
-  const cfg: Cfg = { token: TOKEN, user: USER, chat: CHAT, jarvis: `http://127.0.0.1:${jp}`, api: `http://127.0.0.1:${tp}`, stateFile, debounceMs: 50, syncMs: 100, gapMs: 0 };
+  const cfg: Cfg = { token: TOKEN, user: USER, chat: CHAT, jarvis: `http://127.0.0.1:${jp}`, api: `http://127.0.0.1:${tp}`, stateFile, debounceMs: 50, syncMs: 100, gapMs: 0, backfill: 0 };
   const open = [t.server, j.server];
   const end = async () => { open.forEach((s) => { s.closeAllConnections(); s.close(); }); };
   return { t, j, cfg, end };
@@ -135,7 +138,7 @@ test('redact removes the token and bot URLs', () => {
   assert.ok(!redact('/bot999:other/x', TOKEN).includes('999'));
 });
 
-test('topics are created per workspace, persisted and reused after a restart; replay is skipped; text goes to the right thread', async () => {
+test('topics are created per workspace, persisted and reused after a restart; with backfill 0 the history is not forwarded; text goes to the right thread', async () => {
   const s = await setup();
   const b = await startBridge(s.cfg);
   await until(() => s.j.connects() >= 2 && s.t.calls.filter((c) => c.method === 'createForumTopic').length === 2);
@@ -165,7 +168,7 @@ test('topics are created per workspace, persisted and reused after a restart; re
   await s.end();
 });
 
-test('a workspace that appears later gets a topic; an SSE reconnect skips the replay again', async () => {
+test('a workspace that appears later gets a topic; after an SSE reconnect the replayed history is not forwarded again', async () => {
   const wss = [{ id: 'w1', name: 'One' }];
   const s = await setup(wss);
   const b = await startBridge(s.cfg);
@@ -380,7 +383,7 @@ test('real server with the fake SDK: the arbiter text of a workspace arrives in 
     const ws: any = await (await post('/workspaces', { name: 'Live one' })).json();
     const t = fakeTelegram();
     const tp = await listen(t.server);
-    const cfg: Cfg = { token: TOKEN, user: USER, chat: CHAT, jarvis: origin, api: `http://127.0.0.1:${tp}`, stateFile: join(tmp, 'real-state.json'), debounceMs: 50, syncMs: 100, gapMs: 0 };
+    const cfg: Cfg = { token: TOKEN, user: USER, chat: CHAT, jarvis: origin, api: `http://127.0.0.1:${tp}`, stateFile: join(tmp, 'real-state.json'), debounceMs: 50, syncMs: 100, gapMs: 0, backfill: 0 };
     const b = await startBridge(cfg);
     await until(() => !!topicOf(t, 'Live one'));
     await new Promise((r) => setTimeout(r, 300)); // reader is past `ready`
@@ -527,15 +530,90 @@ test('--pair shows who wrote and warns about an anonymous admin or a private cha
   assert.match(describePair({ chat: 7, type: 'private', from: 7 }), /not the group/);
 });
 
+const lines = (t: ReturnType<typeof fakeTelegram>, th = 101) => t.msgs(th).flatMap((m) => m.split('\n\n'));
 const stateOf = (cfg: Cfg) => JSON.parse(readFileSync(cfg.stateFile, 'utf8'));
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+test('a restart forwards only what happened while the bridge was down, once; a reconnect repeats nothing', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge(s.cfg);
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.text('w1', 'one');
+  s.j.text('w1', 'two');
+  await until(() => s.t.msgs(101).length === 1);
+  await b.stop();
+  s.j.text('w1', 'missed a');
+  s.j.text('w1', 'missed b');
+  const b2 = await startBridge(s.cfg);
+  await until(() => s.t.msgs(101).length === 2);
+  assert.deepEqual(lines(s.t), ['one', 'two', 'missed a', 'missed b']);
+  s.j.drop('w1'); // reconnect: the whole history is replayed again
+  await until(() => s.j.connects() === 3, 10_000);
+  s.j.text('w1', 'after reconnect');
+  await until(() => s.t.msgs(101).length === 3);
+  await new Promise((r) => setTimeout(r, 200));
+  assert.deepEqual(lines(s.t), ['one', 'two', 'missed a', 'missed b', 'after reconnect']);
+  await b2.stop();
+  await s.end();
+});
+
+test('events that share one millisecond are neither repeated nor lost', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge(s.cfg);
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.text('w1', 'a', 'arbiter', 500);
+  s.j.text('w1', 'b', 'arbiter', 500);
+  await until(() => s.t.msgs(101).length === 1);
+  await b.stop();
+  s.j.text('w1', 'c', 'arbiter', 500); // written while down, same `at` as the two done
+  s.j.text('w1', 'd', 'arbiter', 501);
+  const b2 = await startBridge(s.cfg);
+  await until(() => s.t.msgs(101).length === 2);
+  assert.deepEqual(lines(s.t), ['a', 'b', 'c', 'd']);
+  await b2.stop();
+  await s.end();
+});
+
+test('the first run forwards the last N events: N, 0 and all', async () => {
+  for (const [backfill, expected] of [[2, ['e3', 'e4']], [0, []], [Infinity, ['OLD w1', 'e1', 'e2', 'e3', 'e4']]] as [number, string[]][]) {
+    const s = await setup([{ id: 'w1', name: 'One' }]);
+    for (const t of ['e1', 'e2', 'e3', 'e4']) s.j.text('w1', t);
+    const b = await startBridge({ ...s.cfg, backfill });
+    await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+    s.j.text('w1', 'live');
+    await until(() => lines(s.t).includes('live'));
+    assert.deepEqual(lines(s.t).filter((l) => l !== 'live'), expected, `backfill ${backfill}`);
+    await b.stop();
+    await s.end();
+  }
+});
+
+test('TELEGRAM_BACKFILL: default 10, a number, 0 or all; garbage is rejected', () => {
+  const base = { TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER: '1', TELEGRAM_CHAT_ID: '-1' };
+  assert.equal(configFromEnv(base).backfill, 10);
+  assert.equal(configFromEnv(base).gapMs, 3000, 'Telegram allows about 20 messages a minute in a group');
+  assert.equal(configFromEnv({ ...base, TELEGRAM_BACKFILL: '3' }).backfill, 3);
+  assert.equal(configFromEnv({ ...base, TELEGRAM_BACKFILL: '0' }).backfill, 0);
+  assert.equal(configFromEnv({ ...base, TELEGRAM_BACKFILL: 'all' }).backfill, Infinity);
+  for (const v of ['-1', 'ten', '1.5', '99999999', '1e3']) assert.throws(() => configFromEnv({ ...base, TELEGRAM_BACKFILL: v }), /TELEGRAM_BACKFILL/, v);
+});
+
+test('the cursor is saved before the text is queued', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge({ ...s.cfg, debounceMs: 60_000 }); // the text stays queued
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.text('w1', 'not sent yet', 'arbiter', 900);
+  await until(() => stateOf(s.cfg).cursors.w1?.at === 900);
+  assert.equal(s.t.msgs(101).length, 0);
+  await b.stop();
+  await s.end();
+});
 
 test('stop sends the text that still waits for its debounce, and gives up after the drain time', async () => {
   const s = await setup([{ id: 'w1', name: 'One' }]);
   const b = await startBridge({ ...s.cfg, debounceMs: 60_000 });
   await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
   s.j.text('w1', 'last words');
-  await wait(200);
+  await until(() => stateOf(s.cfg).cursors.w1?.skip === 1 && JSON.stringify(stateOf(s.cfg).cursors.w1).includes('"at"') && stateOf(s.cfg).cursors.w1.at > 1);
   assert.equal(s.t.msgs(101).length, 0);
   await b.stop();
   assert.deepEqual(s.t.msgs(101), ['last words']);
@@ -545,7 +623,7 @@ test('stop sends the text that still waits for its debounce, and gives up after 
   await until(() => s2.j.connects() === 1 && !!topicOf(s2.t, 'One'));
   s2.t.failNext.push({ code: 429, retry: 30 }); // Telegram asks for 30 s
   s2.j.text('w1', 'never sent');
-  await wait(200);
+  await until(() => stateOf(s2.cfg).cursors.w1?.at > 1);
   const t0 = Date.now();
   await b2.stop();
   assert.ok(Date.now() - t0 < 3000, 'stop did not wait for retry_after');
@@ -560,32 +638,50 @@ test('a failing chunk for an old topic does not drop the topic that replaced it'
   s.t.failNext.push({ code: 400, description: 'Bad Request: message thread not found', delayMs: 500 }); // second piece fails late, after the sync made topic 102
   s.j.text('w1', `${'a'.repeat(3000)}\n${'b'.repeat(3000)}`);
   await until(() => s.t.calls.filter((c) => c.method === 'createForumTopic').length === 2);
-  await wait(900);
+  await new Promise((r) => setTimeout(r, 900));
   assert.equal(stateOf(s.cfg).topics.w1, 102);
   assert.equal(s.t.calls.filter((c) => c.method === 'createForumTopic').length, 2);
   await b.stop();
   await s.end();
 });
 
-test('a workspace that stays away for several syncs loses its topic; one missing answer does not', async () => {
+test('a workspace that stays away for several syncs loses its topic and cursor; one missing answer does not', async () => {
   const wss = [{ id: 'w1', name: 'One' }, { id: 'w2', name: 'Two' }];
   const s = await setup(wss);
   const b = await startBridge({ ...s.cfg, syncMs: 200 });
   await until(() => s.j.connects() === 2 && !!topicOf(s.t, 'Two'));
+  s.j.text('w2', 'hi');
+  await until(() => stateOf(s.cfg).cursors.w2?.at > 1);
   wss.pop();
-  await wait(250); // one sync without Two
+  await new Promise((r) => setTimeout(r, 250)); // one sync without Two
   wss.push({ id: 'w2', name: 'Two' });
-  await wait(500);
+  await new Promise((r) => setTimeout(r, 500));
   assert.equal(stateOf(s.cfg).topics.w2, 102, 'kept');
   assert.equal(s.t.calls.filter((c) => c.method === 'createForumTopic' && c.params.name === 'Two').length, 1);
   wss.pop();
   await until(() => stateOf(s.cfg).topics.w2 === undefined);
-  assert.ok(stateOf(s.cfg).topics.w1);
+  const st = stateOf(s.cfg);
+  assert.ok(st.topics.w1 && !st.cursors.w2);
   s.t.updates.push(s.t.msg('/help'));
   const help = () => s.t.calls.filter((c) => c.method === 'sendMessage' && c.params.message_thread_id === undefined).map((c) => c.params.text as string);
   await until(() => help().length === 1);
   assert.match(help()[0], /- One/);
   assert.ok(!help()[0].includes('Two'));
+  await b.stop();
+  await s.end();
+});
+
+test('the cursor never moves back: an older live event is dropped', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge(s.cfg);
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.text('w1', 'now', 'arbiter', 1000);
+  await until(() => s.t.msgs(101).length === 1);
+  s.j.text('w1', 'from the past', 'arbiter', 400);
+  s.j.text('w1', 'next', 'arbiter', 1001);
+  await until(() => s.t.msgs(101).length === 2);
+  assert.deepEqual(lines(s.t), ['now', 'next']);
+  assert.equal(stateOf(s.cfg).cursors.w1.at, 1001);
   await b.stop();
   await s.end();
 });
@@ -599,8 +695,26 @@ test('the state file is private', async () => {
   await s.end();
 });
 
-test('the default gap is 3 s, and sends are gapMs apart', async () => {
-  assert.equal(configFromEnv({ TELEGRAM_BOT_TOKEN: TOKEN, TELEGRAM_ALLOWED_USER: '1', TELEGRAM_CHAT_ID: '-1' }).gapMs, 3000, 'Telegram allows about 20 messages a minute in a group');
+test('what the user typed is not forwarded; a Telegram message goes straight to /say, past a busy send queue', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  const b = await startBridge({ ...s.cfg, gapMs: 3000 });
+  await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
+  s.j.emit('w1', { type: 'routed', from: 'user', to: 'arbiter', text: 'typed in the web' });
+  s.j.emit('w1', { type: 'routed', from: 'user', to: 'arbiter', text: '[agent a1 finished, typed by a user]' });
+  s.j.text('w1', 'answer');
+  await until(() => s.t.msgs(101).length === 1);
+  s.j.text('w1', 'waits for the 3 s gap');
+  await new Promise((r) => setTimeout(r, 200));
+  s.t.updates.push(s.t.msg('typed in telegram', { message_thread_id: 101 }));
+  await until(() => s.j.says.length === 1, 1000);
+  assert.deepEqual(s.t.msgs(101), ['answer']);
+  assert.ok(!JSON.stringify(s.t.calls).includes('typed in'), 'no user line reaches Telegram');
+  assert.ok(!('said' in stateOf(s.cfg)));
+  await b.stop();
+  await s.end();
+});
+
+test('sends are gapMs apart', async () => {
   const s = await setup([{ id: 'w1', name: 'One' }]);
   const b = await startBridge({ ...s.cfg, gapMs: 400 });
   await until(() => s.j.connects() === 1 && !!topicOf(s.t, 'One'));
@@ -613,17 +727,58 @@ test('the default gap is 3 s, and sends are gapMs apart', async () => {
 });
 
 const threads = (t: ReturnType<typeof fakeTelegram>) => t.calls.filter((c) => c.method === 'sendMessage').map((c) => c.params.message_thread_id as number);
+const big = (n: number) => Array.from({ length: n }, (_, i) => String(i).repeat(3000));
+
+// w2 is not new: its history is done (topic 77), so only its live text goes through the queue.
+const seedW2 = (s: Awaited<ReturnType<typeof setup>>) => {
+  s.j.text('w2', 'old'); // the history of w2 ends at `at` 2
+  writeFileSync(s.cfg.stateFile, JSON.stringify({ chat: CHAT, offset: 0, topics: { w2: 77 }, cursors: { w2: { at: 2, skip: 1 } } }));
+};
+
+test('live text goes before the backfill of another workspace', async () => {
+  const s = await setup();
+  seedW2(s);
+  for (const t of big(4)) s.j.text('w1', t); // four chunks of backfill (the old line shares the first)
+  const b = await startBridge({ ...s.cfg, gapMs: 300, backfill: Infinity });
+  await until(() => threads(s.t).length === 1 && s.j.connects() === 2);
+  s.j.text('w2', 'LIVE');
+  await until(() => s.t.msgs(77).includes('LIVE'));
+  assert.equal(threads(s.t).indexOf(77), 1, 'right after the chunk that was in flight');
+  await until(() => s.t.msgs(101).length === 4, 10_000);
+  await b.stop();
+  await s.end();
+});
 
 test('live text of a noisy workspace does not starve another one', async () => {
   const s = await setup();
   const b = await startBridge({ ...s.cfg, gapMs: 200 });
   await until(() => s.j.connects() === 2 && !!topicOf(s.t, 'Two'));
-  s.j.text('w1', Array.from({ length: 4 }, (_, i) => String(i).repeat(3000)).join('\n')); // four chunks
+  s.j.text('w1', big(4).join('\n')); // four chunks
   s.j.text('w2', 'short');
   await until(() => s.t.msgs(101).length === 4 && s.t.msgs(102).length === 1, 10_000);
   assert.ok(threads(s.t).indexOf(102) <= 2, threads(s.t).join());
   await b.stop();
   await s.end();
+});
+
+test('the backfills of two workspaces take turns', async () => {
+  const s = await setup();
+  for (const t of big(3)) { s.j.text('w1', t); s.j.text('w2', t); }
+  const b = await startBridge({ ...s.cfg, gapMs: 200, backfill: Infinity });
+  await until(() => s.t.msgs(101).length === 3 && s.t.msgs(102).length === 3, 10_000);
+  assert.ok(threads(s.t).slice(0, 4).includes(102), threads(s.t).join());
+  assert.ok(threads(s.t).slice(0, 6).filter((x) => x === 101).length <= 4);
+  await b.stop();
+  await s.end();
+});
+
+test('the lock file is read back after it was created: a lost race counts as taken', () => {
+  const file = join(mkdtempSync(join(tmp, 'l-')), 'x.lock');
+  assert.throws(() => lock(file, { afterCreate: () => writeFileSync(file, '1') }), /another telegram bridge took the lock/);
+  const un = lock(`${file}2`);
+  assert.ok(existsSync(`${file}2`));
+  un();
+  assert.ok(!existsSync(`${file}2`));
 });
 
 const sends = (t: ReturnType<typeof fakeTelegram>) => t.calls.filter((c) => c.method === 'sendMessage');
@@ -722,11 +877,29 @@ test('a stale lock is taken over atomically: a copy that took it meanwhile keeps
   un();
 });
 
-test('the lock file is read back after it was created: a lost race counts as taken', () => {
-  const file = join(mkdtempSync(join(tmp, 'l-')), 'x.lock');
-  assert.throws(() => lock(file, { afterCreate: () => writeFileSync(file, '1') }), /another telegram bridge took the lock/);
-  const un = lock(`${file}2`);
-  assert.ok(existsSync(`${file}2`));
-  un();
-  assert.ok(!existsSync(`${file}2`));
+test('while a workspace has backfill waiting, its live text queues behind it; other workspaces still go first', async () => {
+  const s = await setup();
+  seedW2(s);
+  for (const t of big(3)) s.j.text('w1', t); // three chunks of backfill (the old line shares the first)
+  const b = await startBridge({ ...s.cfg, gapMs: 300, backfill: Infinity });
+  await until(() => s.j.connects() === 2 && s.t.msgs(101).length === 1);
+  s.j.text('w1', 'LIVE');
+  s.j.text('w2', 'LIVE2');
+  await until(() => s.t.msgs(101).length === 4 && s.t.msgs(77).includes('LIVE2'), 10_000);
+  assert.equal(s.t.msgs(101).at(-1), 'LIVE', 'after its own backfill');
+  assert.equal(sends(s.t).findIndex((c) => c.params.text === 'LIVE2'), 1, 'before the rest of the backfill');
+  await b.stop();
+  await s.end();
+});
+
+test('a state file with fields the bridge does not know loads, and they are not written back', async () => {
+  const s = await setup([{ id: 'w1', name: 'One' }]);
+  writeFileSync(s.cfg.stateFile, JSON.stringify({ chat: CHAT, offset: 5, topics: { w1: 101 }, cursors: {}, said: { w1: ['abc'] }, future: 1 }));
+  const b = await startBridge(s.cfg);
+  await until(() => s.j.connects() === 1 && !!stateOf(s.cfg).cursors.w1);
+  assert.equal(s.t.calls.filter((c) => c.method === 'createForumTopic').length, 0, 'topic reused');
+  const st = stateOf(s.cfg);
+  assert.ok(st.offset >= 5 && st.topics.w1 === 101 && !('said' in st) && !('future' in st));
+  await b.stop();
+  await s.end();
 });

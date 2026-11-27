@@ -12,6 +12,7 @@ export type Cfg = {
   retryTotalMs?: number; // how long one message part is retried before it is dropped (default 60 s)
   drainMs?: number; // how long stop() waits for queued text to be sent (default 5 s)
   conflictMs?: number; // how long a 409 from getUpdates is retried before the bridge gives up (default 90 s)
+  backfill: number; // events forwarded from the history of a workspace seen for the first time (Infinity: all)
 };
 
 const LIMIT = 4096; // Bot API: sendMessage text is 1-4096 characters
@@ -31,6 +32,13 @@ function baseUrl(name: string, value: string, mustBeLoopback: boolean): string {
   return value.replace(/\/+$/, '');
 }
 
+function backfill(v: string | undefined): number {
+  if (v === undefined || v.trim() === '') return 10;
+  if (v.trim() === 'all') return Infinity;
+  if (!/^\d{1,6}$/.test(v.trim())) throw new Error('TELEGRAM_BACKFILL must be a number of events, 0, or all');
+  return Number(v);
+}
+
 // Fail closed: without both ids nothing is forwarded in either direction.
 export function configFromEnv(env: NodeJS.ProcessEnv, pairing = false): Cfg {
   const token = env.TELEGRAM_BOT_TOKEN;
@@ -46,6 +54,7 @@ export function configFromEnv(env: NodeJS.ProcessEnv, pairing = false): Cfg {
     api: baseUrl('TELEGRAM_API_BASE', env.TELEGRAM_API_BASE || 'https://api.telegram.org', false), // TELEGRAM_API_BASE: tests only
     stateFile: env.TELEGRAM_STATE_FILE || join(dataDir(), 'telegram-bridge.json'),
     debounceMs: 1500, syncMs: 10_000, gapMs: 3000, // Telegram allows about 20 messages a minute in a group
+    backfill: backfill(env.TELEGRAM_BACKFILL),
   };
 }
 
@@ -105,7 +114,8 @@ class TgError extends Error {
   constructor(message: string, code = 0, retryAfter = 0) { super(message); this.code = code; this.retryAfter = retryAfter; }
 }
 
-type State = { chat: number; offset: number; topics: Record<string, number> };
+// cursors: the last event forwarded per workspace, as its `at` plus how many events with exactly that `at` are done (events carry no sequence number, and two can share a millisecond).
+type State = { chat: number; offset: number; topics: Record<string, number>; cursors: Record<string, { at: number; skip: number }> };
 const ABSENT_SYNCS = 3;
 // `done` settles when polling ends: it rejects for an error that cannot be retried (bad token, another bot instance or a webhook).
 type Handle = { stop(): Promise<void>; done: Promise<void> };
@@ -147,8 +157,8 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
   }
 
   // Topic map and update offset survive a restart.
-  let state: State = { chat: cfg.chat, offset: 0, topics: {} };
-  try { const s = JSON.parse(readFileSync(cfg.stateFile, 'utf8')); if (s.chat === cfg.chat) state = { chat: cfg.chat, offset: Number(s.offset) || 0, topics: s.topics ?? {} }; } catch { /* first run */ }
+  let state: State = { chat: cfg.chat, offset: 0, topics: {}, cursors: {} };
+  try { const s = JSON.parse(readFileSync(cfg.stateFile, 'utf8')); if (s.chat === cfg.chat) state = { chat: cfg.chat, offset: Number(s.offset) || 0, topics: s.topics ?? {}, cursors: s.cursors ?? {} }; } catch { /* first run */ }
   const save = () => {
     try { mkdirSync(dirname(cfg.stateFile), { recursive: true }); const tmp = `${cfg.stateFile}.tmp`; writeFileSync(tmp, JSON.stringify(state), { mode: 0o600 }); chmodSync(tmp, 0o600); renameSync(tmp, cfg.stateFile); } catch (e) { log('state not saved:', (e as Error).message); }
   };
@@ -163,19 +173,21 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     throw e;
   }
 
-  // One queue for the whole group, one send per `gapMs` (Telegram allows about 20 messages a minute in a group). The workspaces take turns, so one noisy workspace cannot starve the others.
+  // One queue for the whole group, one send per `gapMs` (Telegram allows about 20 messages a minute in a group). Live text goes first; the backfill of a new workspace goes out only when no live chunk waits, and while a workspace has backfill waiting its live text queues behind it, so a topic stays in order. Each lane serves the workspaces round-robin, so a noisy one cannot starve the others.
   type Item = { thread?: number; text: string; ws: string };
-  const lane = new Map<string, Item[]>();
+  const lanes = { live: new Map<string, Item[]>(), backfill: new Map<string, Item[]>() };
   let pumping: Promise<void> = Promise.resolve(), busy = false, last = 0; // last: end of the latest send attempt
-  const pending = () => lane.size > 0;
+  const pending = () => Object.values(lanes).some((l) => l.size);
   function next(): Item | undefined {
-    const first = lane.entries().next().value;
-    if (!first) return;
-    const [ws, items] = first;
-    const item = items.shift()!;
-    lane.delete(ws);
-    if (items.length) lane.set(ws, items); // the workspace goes to the back of the line
-    return item;
+    for (const lane of [lanes.live, lanes.backfill]) {
+      const first = lane.entries().next().value;
+      if (!first) continue;
+      const [ws, items] = first;
+      const item = items.shift()!;
+      lane.delete(ws);
+      if (items.length) lane.set(ws, items); // the workspace goes to the back of the line
+      return item;
+    }
   }
   // The gap is measured from the end of the last attempt, success or not. It uses the `stop` signal, so it holds while the queue drains after `quit`.
   function pump() {
@@ -185,7 +197,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
       let dropped = 0;
       while (pending()) {
         await sleep(Math.max(0, last + cfg.gapMs - Date.now()), stop.signal);
-        if (stop.signal.aborted) { for (const q of lane.values()) dropped += q.length; lane.clear(); break; }
+        if (stop.signal.aborted) { for (const l of Object.values(lanes)) { for (const q of l.values()) dropped += q.length; l.clear(); } break; }
         const item = next();
         if (!item) break;
         try { await sendChunk(item); } catch (e) { if (stop.signal.aborted) dropped++; else log('send failed:', (e as Error).message); } finally { last = Date.now(); }
@@ -208,10 +220,11 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
       }
     }
   }
-  function send(thread: number | undefined, text: string, ws = '') {
-    const q = lane.get(ws) ?? [];
+  function send(thread: number | undefined, text: string, ws = '', lane: keyof typeof lanes = 'live') {
+    if (lanes.backfill.has(ws)) lane = 'backfill';
+    const q = lanes[lane].get(ws) ?? [];
     for (const p of split(text)) q.push({ thread, text: p, ws });
-    if (q.length) { lane.set(ws, q); pump(); }
+    if (q.length) { lanes[lane].set(ws, q); pump(); }
   }
 
   // Merge a burst of arbiter text and finished-lines of one workspace into one message.
@@ -229,21 +242,25 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     if (b) { clearTimeout(b.timer); if (state.topics[ws]) send(state.topics[ws], b.lines.join('\n\n'), ws); }
   }
   // `result.text` repeats the last arbiter `text` of the turn, so only `text` events are forwarded. `ask` prompts stay in the web UI.
-  function onEvent(ws: string, e: any) {
-    if (e.type === 'text' && e.agentId === 'arbiter' && typeof e.text === 'string') push(ws, e.text);
-    else if (e.type === 'routed' && e.to === 'arbiter' && typeof e.text === 'string' && /^\[agent \S+ finished/.test(e.text)) push(ws, e.text.split('\n')[0].slice(0, 200));
-  }
+  // Relevant: arbiter text and agent-finished lines. What the user typed (in the web UI or here) is not shown in the topic.
+  const finished = (e: any) => e.from !== 'user' && /^\[agent \S+ finished/.test(e.text);
+  const relevant = (e: any) => (e.type === 'text' && e.agentId === 'arbiter' && typeof e.text === 'string') || (e.type === 'routed' && e.to === 'arbiter' && typeof e.text === 'string' && finished(e));
+  const lineOf = (e: any): string => e.type === 'text' ? e.text : e.text.split('\n')[0].slice(0, 200);
+  // The cursor never moves back: an event older than it (a clock that went back) is not forwarded.
+  const cursor = (ws: string, at: number) => { const c = state.cursors[ws]; if (c && at < c.at) return; if (c && c.at === at) c.skip++; else state.cursors[ws] = { at, skip: 1 }; };
 
-  // One SSE reader per workspace; everything up to `ready` is replay of history and is skipped.
+  // One SSE reader per workspace. The server replays the whole history before `ready`: what is newer than the cursor is forwarded then (a first run only the last `backfill` events), then the live events. The cursor is saved before the text is queued: a crash loses a message, never repeats it.
   const readers = new Map<string, AbortController>();
-  async function follow(ws: string, signal: AbortSignal) {
+  async function follow(ws: string, signal: AbortSignal) { // signal: quit or this workspace's own
     let delay = 1000;
     while (!signal.aborted) {
       try {
         const r = await fetch(`${cfg.jarvis}/events?ws=${encodeURIComponent(ws)}`, { signal, headers: { origin } });
         if (r.status === 404) return;
         if (!r.ok || !r.body) throw new Error(`events ${r.status}`);
-        let live = false, buf = '';
+        let live = false, buf = '', same = 0;
+        const replay: { at: number; e: any }[] = [];
+        const first = !state.cursors[ws];
         for await (const chunk of r.body.pipeThrough(new TextDecoderStream())) {
           buf += chunk;
           for (let i; (i = buf.indexOf('\n\n')) >= 0;) {
@@ -252,7 +269,26 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
             const data = block.split('\n').filter((l) => l.startsWith('data: ')).map((l) => l.slice(6)).join('\n');
             let e: any;
             try { e = JSON.parse(data); } catch { continue; }
-            if (e.type === 'ready') { live = true; delay = 1000; } else if (live) onEvent(ws, e);
+            if (e.type === 'ready') {
+              live = true; delay = 1000;
+              const keep = first ? replay.slice(Math.max(0, replay.length - cfg.backfill)) : replay;
+              for (const x of replay) cursor(ws, x.at);
+              state.cursors[ws] ??= { at: 0, skip: 0 };
+              save();
+              const lines = keep.map((x) => lineOf(x.e));
+              if (!first) for (const l of lines) push(ws, l); // missed while down: in order with the live text
+              else if (lines.length && state.topics[ws]) send(state.topics[ws], lines.join('\n\n'), ws, 'backfill'); // history of a new workspace: slow lane
+            } else if (!relevant(e)) continue;
+            else if (!live) {
+              const at = Number(e.at) || 0, c = state.cursors[ws];
+              if (!c || at > c.at || (at === c.at && ++same > c.skip)) replay.push({ at, e });
+            } else {
+              const at = Number(e.at) || 0, c = state.cursors[ws];
+              if (c && at < c.at) continue;
+              cursor(ws, at);
+              save();
+              push(ws, lineOf(e));
+            }
           }
         }
       } catch (e) { if (signal.aborted) return; log(`events ${ws}:`, (e as Error).message); }
@@ -261,7 +297,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     }
   }
   const unfollow = (ws: string) => { readers.get(ws)?.abort(); readers.delete(ws); };
-  function forget(ws: string) { unfollow(ws); delete state.topics[ws]; bursts.delete(ws); save(); }
+  function forget(ws: string) { unfollow(ws); delete state.topics[ws]; delete state.cursors[ws]; bursts.delete(ws); save(); }
 
   async function ensureTopic(w: { id: string; name: string }) {
     for (let tries = 0; !state.topics[w.id]; tries++) {
@@ -288,7 +324,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
       if (!readers.has(w.id)) { const c = new AbortController(); readers.set(w.id, c); const sig = AbortSignal.any([quit.signal, c.signal]); void follow(w.id, sig).finally(() => { if (readers.get(w.id) === c) readers.delete(w.id); }); }
     }
     for (const ws of readers.keys()) if (!ids.has(ws)) unfollow(ws);
-    // A workspace that stays away for several syncs in a row is gone (deleted or archived): its topic goes. One bad answer does not wipe the map.
+    // A workspace that stays away for several syncs in a row is gone (deleted or archived): its topic, cursor go. One bad answer does not wipe the map.
     for (const ws of Object.keys(state.topics)) {
       if (ids.has(ws)) { absent.delete(ws); continue; }
       const n = (absent.get(ws) ?? 0) + 1;
@@ -334,7 +370,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
     }
     const ws = Object.keys(state.topics).find((k) => state.topics[k] === thread);
     if (!ws) return;
-    try { await jarvis('/say', { ws, text: m.text }); } catch (e) { log('say failed:', (e as Error).message); send(thread, 'Jarvis did not take the message.'); return; }
+    try { await jarvis('/say', { ws, text: m.text }); } catch (e) { log('say failed:', (e as Error).message); send(thread, 'Jarvis did not take the message.', ws); return; } // straight to Jarvis, not through the send queue
     react(m.message_id);
   }
 

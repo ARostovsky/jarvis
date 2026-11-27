@@ -55,6 +55,7 @@ All settings are environment variables. The bridge reads `telegram.env` from the
 | `TELEGRAM_BOT_TOKEN` | none, required | Token from @BotFather. Never logged. |
 | `TELEGRAM_ALLOWED_USER` | none, required (not for `--pair`) | Your numeric Telegram user id. Only this user is obeyed. |
 | `TELEGRAM_CHAT_ID` | none, required (not for `--pair`) | Numeric id of the group, usually negative. Only this chat is served. |
+| `TELEGRAM_BACKFILL` | `10` | How many of the last messages of a workspace the bridge sends when it sees that workspace for the first time: a number, `0` for none, or `all` for the whole history. Anything else stops the start. |
 | `JARVIS_URL` | `http://127.0.0.1:7777` | Where Jarvis listens. Must be `127.0.0.1`, `localhost` or `[::1]`; set it when Jarvis runs on another `PORT`. |
 | `TELEGRAM_ENV_FILE` | `telegram.env` next to the Jarvis env file | Another file to read the settings from. |
 | `JARVIS_ENV_FILE` | `$XDG_CONFIG_HOME/jarvis/env`, else `~/.config/jarvis/env` | The Jarvis env file (also read by the bridge). Its folder decides where `telegram.env` is looked for. |
@@ -67,13 +68,17 @@ All settings are environment variables. The bridge reads `telegram.env` from the
 
 **Topics.** A topic is made for each workspace the bridge sees, named like the workspace (at most 128 characters). The bridge checks the list of workspaces every 10 s, so a new workspace gets its topic within that time. The topic ids are kept in the state file, so a restart reuses the topics and never makes a second one. A renamed workspace keeps its topic name. If you delete a topic in Telegram, the bridge notices at the next send, forgets it and makes a new one at the next check. A workspace that is deleted or archived in Jarvis (missing from the list for 3 checks in a row) loses its entry in the state; its Telegram topic stays.
 
-**What goes to Telegram.** The text of the arbiter, and the first line (at most 200 characters) of the message that says an agent finished. Texts of one workspace that come within 1.5 s are merged into one message. Text is sent as plain text, split on line breaks when it is longer than 4096 characters. Nothing from before the bridge connected is sent, and what was written while the bridge was down is not sent either.
+**What goes to Telegram.** The text of the arbiter, and the first line (at most 200 characters) of the message that says an agent finished. Texts of one workspace that come within 1.5 s are merged into one message. Text is sent as plain text, split on line breaks when it is longer than 4096 characters. What you typed yourself, in Telegram or in the web UI, is never repeated in the topic.
 
 **What comes from Telegram.** A text message in a topic goes to the Jarvis of that workspace. After Jarvis accepted it, the bridge puts 👀 on the message. If Jarvis did not accept it, the topic gets "Jarvis did not take the message." and there is no 👀. Messages that are not text (photos, voice, files), edited messages and messages in an unknown topic are ignored. In the General topic only `/help` is answered.
 
 **The 👀 reaction.** It is a separate cheap call, not part of the send queue, and it never delays the message to Jarvis. Reactions go one after another; if more than 20 wait, new ones are skipped. A reaction that fails (for example, the group does not allow 👀 as a reaction) is logged once per kind of error and never retried; the message still reached Jarvis.
 
-**Send queue.** One queue serves the whole group and sends one message every 3 s, because Telegram allows about 20 messages a minute in a group. The workspaces take turns, so one noisy workspace does not hold back the others. A send that fails with a rate limit (429), a network error or a server error (5xx) is tried again, waiting what Telegram asks or 1 s, 2 s, 4 s and so on (at most 15 s); a part that still fails after 60 s is dropped and `send failed` is logged.
+**Catch-up.** The bridge keeps for each workspace the time of the last event it handled, in the state file. After a restart or a lost connection it sends what was written meanwhile, in order and without repeating anything: the position is saved before the text is queued, so a crash can lose a message but never sends one twice.
+
+**First run and new workspaces.** A workspace the bridge has not seen before gets only its last `TELEGRAM_BACKFILL` messages (default 10; the count is of what would be sent, not of everything in the log), merged into one text. `all` sends the whole history.
+
+**Send queue.** One queue serves the whole group and sends one message every 3 s, because Telegram allows about 20 messages a minute in a group. Live text always goes first; the history of a new workspace goes only when no live text waits, so a large `all` backfill arrives slowly (minutes or hours) and does not hold back the live replies of other workspaces. The live text of the workspace that still has history waiting goes after that history, so its topic stays in order. Within each of the two, the workspaces take turns, so one noisy workspace does not hold back the others. A send that fails with a rate limit (429), a network error or a server error (5xx) is tried again, waiting what Telegram asks or 1 s, 2 s, 4 s and so on (at most 15 s); a part that still fails after 60 s is dropped and `send failed` is logged.
 
 **Stopping.** Ctrl-C or SIGTERM sends the text that still waits (for at most 5 s), then exits.
 
@@ -89,12 +94,13 @@ Whoever can write to the bot can make Jarvis run commands. The allowlist is the 
 - Keep the group private, with only the bot and you as members: every member reads all that Jarvis writes there, including the `/help` list of your workspaces.
 - The token is a secret. Keep it outside the repo, in a file only you can read. Every log line and error is cleaned of it before it is printed.
 - `JARVIS_URL` must be on loopback, and the Telegram address must be https. Otherwise the bridge does not start.
-- The state file (topic ids, update position) has mode `0600`. The lock file holds only the process id, with the default file mode.
+- The state file (topic ids, update position, position per workspace) has mode `0600`. The lock file holds only the process id, with the default file mode.
 
 ## Limits
 
 - One user, one group, text only: no voice, files or buttons.
-- What waits in the send queue is lost when the bridge crashes or is killed, and when a stop runs out of its 5 s.
+- What waits in the send queue is lost when the bridge crashes or is killed, and when a stop runs out of its 5 s; most of all the rest of a long backfill. It is never sent twice, because its position was saved before it was queued.
+- An event whose time is older than the saved position (the clock of the machine went backwards) is not sent.
 - Telegram limits a message to 4096 characters (longer text is split) and a group to about 20 messages a minute (the 3 s gap keeps the bridge below it). Many messages in a short time therefore arrive slowly.
 - What you type in the web UI is not shown in Telegram.
 - Telegram sees all that Jarvis writes in the group: do not use it for text that must not leave your machine.
@@ -107,7 +113,7 @@ Whoever can write to the bot can make Jarvis run commands. The allowlist is the 
 - **`... is not a forum supergroup`.** Enable **Topics** in the group settings.
 - **`TELEGRAM_CHAT_ID is the id of a group that was upgraded to a supergroup`.** You took the id before turning Topics on. Run `npm run telegram -- --pair` again, write in the group and set the new `TELEGRAM_CHAT_ID`.
 - **`TELEGRAM_ALLOWED_USER is not set` / `TELEGRAM_CHAT_ID is not set`.** Run `npm run telegram -- --pair` and set both ids.
-- **Nothing arrives in Telegram.** Check that Jarvis runs and `JARVIS_URL` points at it (the log says `events <workspace>: ...` when it cannot connect). Only the arbiter's text and the agent-finished lines are sent, and only what happens after the bridge connected.
 - **`--pair` waits forever.** The bot does not see plain text: make it an admin of the group, or turn privacy mode off with `/setprivacy` in @BotFather and add the bot again (see Setup).
+- **Nothing arrives in Telegram.** Check that Jarvis runs and `JARVIS_URL` points at it (the log says `events <workspace>: ...` when it cannot connect). Only the arbiter's text and the agent-finished lines are sent, and only what is newer than the last one sent (a new workspace: its last `TELEGRAM_BACKFILL` messages; `TELEGRAM_BACKFILL=0` sends no history).
 - **My message gets no reaction and no answer.** It was not accepted: check that it is text, written in a topic (not General) by `TELEGRAM_ALLOWED_USER` in `TELEGRAM_CHAT_ID`, and not forwarded or sent as an anonymous admin. Make the bot an admin of the group.
 - **A topic is missing.** The bridge makes it within 10 s and needs the **Manage Topics** right; the log says `topic for <workspace>: ...` when it fails. A workspace that was archived or deleted loses its topic entry; when it comes back, it gets a new topic.
