@@ -6,7 +6,7 @@ import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
 import { startGuard } from './tmpguard.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, projectNotes, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listProviders, listProviderFiles, getProviderDetails, getProviderScreenshot, approveProvider, rejectProvider, setWorkspaceProviders, listArchived, recentFolders, projectNotes, normPath, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -115,7 +115,7 @@ createServer(async (req, res) => {
     if (r) res.writeHead(500, { 'content-type': 'application/json' }).end(JSON.stringify(r));
     else res.writeHead(200, { 'content-type': 'application/json' }).end('{"ok":true}');
   } else if (req.method === 'GET' && url.pathname === '/recent') {
-    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...recentFolders(), projectNotes: projectNotes() }));
+    res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify({ ...recentFolders(), projectNotes: projectNotes(), ...(url.searchParams.has('project') ? { projectNote: projectNotes()[normPath(url.searchParams.get('project')!.trim())] ?? '' } : {}) }));
   } else if (req.method === 'GET' && url.pathname === '/health') {
     // Global (not per workspace) and never persisted: the current state, then each change.
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });

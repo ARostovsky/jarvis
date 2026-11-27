@@ -1335,9 +1335,14 @@ async function openNewWs() {
   $('newws').showModal();
 }
 
-$('wsProject').addEventListener('input', () => {
-  const n = projectNotes[$('wsProject').value.trim()], cur = $('wsNotes').value;
-  if (n && (!cur || cur === prefilled)) { $('wsNotes').value = prefilled = n; syncShort($('wsNotes')); }
+let prefillSeq = 0; // the server normalizes the typed path; only the newest answer counts
+$('wsProject').addEventListener('input', async () => {
+  const q = $('wsProject').value.trim(), seq = ++prefillSeq;
+  let n = '';
+  if (q) try { n = (await (await fetch(`/recent?project=${encodeURIComponent(q)}`)).json()).projectNote ?? ''; } catch {}
+  if (seq !== prefillSeq) return;
+  const cur = $('wsNotes').value;
+  if (cur === prefilled || !cur) { $('wsNotes').value = prefilled = n; syncShort($('wsNotes')); } // no history clears an auto-prefill, a typed value stays
   hintNotes();
 });
 $('emptyNew').onclick = openNewWs;

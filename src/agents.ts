@@ -1812,9 +1812,19 @@ export function recentFolders() {
 }
 
 // Notes folder last used per project: the newest workspace (live or archived, dated by its folder) of that project that has one and whose folder still exists.
+// Key for comparing folders: absolute, symlinks resolved; a missing or partial path stays as resolve() gives it.
+export function normPath(p: string): string {
+  const r = resolve(p);
+  try { return realpathSync(r); } catch { return r; }
+}
+
 export function notesByProject(items: { meta: Pick<WorkspaceMeta, 'project' | 'notes'>; at: number }[]): Record<string, string> {
   const out: Record<string, string> = {};
-  for (const { meta } of [...items].sort((a, b) => a.at - b.at)) if (meta.project && meta.notes && existsSync(meta.notes)) out[meta.project] = meta.notes;
+  for (const { meta } of [...items].sort((a, b) => a.at - b.at)) {
+    if (!meta.project || !meta.notes || !existsSync(meta.notes)) continue;
+    const key = normPath(meta.project);
+    if (key !== normPath(meta.notes)) out[key] = meta.notes;
+  }
   return out;
 }
 
@@ -1825,6 +1835,7 @@ export function projectNotes() {
 
 export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, providers?: string[]): Workspace {
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
+  if (notes && project && normPath(notes) === normPath(project)) throw new Error('notes folder must not be the project folder');
   if (notes) prepareNotes(resolve(notes));
   const slug = slugOf(name);
   // Journals are matched to workspaces by the id suffix: it must differ from every live and archived workspace and from every journal already in the notes folder.

@@ -26,6 +26,13 @@ test('the New workspace dialog prefills the notes folder of the project, never o
   await page.locator('#wsName').focus();
   if (process.env.PREFILL_SHOT) await page.locator('#newws').screenshot({ path: process.env.PREFILL_SHOT });
 
+  // A project without history clears the auto-prefill and its hint.
+  await page.fill('#wsProject', noHistory);
+  await expect(page.locator('#wsNotes')).toHaveValue('');
+  await expect(page.locator('#notesHint')).toBeHidden();
+  await page.fill('#wsProject', withHistory + '/');
+  await expect(page.locator('#wsNotes')).toHaveValue(notes);
+
   // Switching projects keeps the prefill logic live; a hand-typed value then survives a re-pick.
   await page.fill('#wsProject', noHistory);
   await page.fill('#wsProject', withHistory);

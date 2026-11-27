@@ -1,13 +1,13 @@
 // recent.json: folders sorted by last use, updated on use, gone folders left out.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const tmp = mkdtempSync(join(tmpdir(), 'jarvis-recent-test-'));
 process.env.XDG_DATA_HOME = join(tmp, 'data'); // read when agents.ts loads
-const { touchRecent, recentFolders, addWorkspace, notesByProject } = await import('../src/agents.ts');
+const { touchRecent, recentFolders, addWorkspace, notesByProject, normPath } = await import('../src/agents.ts');
 const dir = (n: string) => (mkdirSync(join(tmp, n)), join(tmp, n));
 const [a, b, c, n1] = ['a', 'b', 'c', 'n1'].map(dir);
 
@@ -45,4 +45,19 @@ test('notesByProject: newest workspace of a project wins, none gives no entry, g
   ]);
   assert.deepEqual(r, { [a]: n2, [c]: n3 });
   assert.equal(r[b], undefined);
+});
+
+test('normPath: trailing slash and symlink find the same key, a missing path does not throw', () => {
+  const [p, n] = ['np', 'nn'].map(dir);
+  symlinkSync(p, join(tmp, 'np-link'));
+  const r = notesByProject([{ meta: { project: p, notes: n }, at: 1 }]);
+  assert.equal(r[normPath(p + '/')], n);
+  assert.equal(r[normPath(join(tmp, 'np-link'))], n);
+  assert.equal(normPath(join(tmp, 'gone', 'deeper')), join(tmp, 'gone', 'deeper'));
+});
+
+test('notes folder equal to the project folder is rejected and never prefilled', () => {
+  const p = dir('same');
+  assert.throws(() => addWorkspace('same', p, {}, p + '/'), /must not be the project folder/);
+  assert.deepEqual(notesByProject([{ meta: { project: p, notes: p }, at: 1 }]), {});
 });
