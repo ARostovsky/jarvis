@@ -6,6 +6,7 @@ import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
 import { listConnections, createConnection, updateConnection, setDefaultConnection, testConnection } from './connections.ts';
 import { startGuard } from './tmpguard.ts';
+import { startTelegram } from './telegram-autostart.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
 import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, setWorkspaceConnection, removeConnection, changingConnections, archiveWorkspace, archivePreview, restoreWorkspace, listJobSources, listJobSourceFiles, getJobSourceDetails, getJobSourceScreenshot, approveJobSource, rejectJobSource, setWorkspaceJobSources, normPath, listArchived, recentFolders, projectNotes, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
@@ -180,3 +181,5 @@ if (process.env.JARVIS_VOICE) {
     voice = v;
   }, (e) => console.error(`voice disabled: ${(e as Error).message}`));
 }
+// Telegram bridge: opt-in like voice, on when JARVIS_TELEGRAM is set (shell or the Jarvis env file). It runs as a child process and dies with Jarvis; a failure is one log line.
+if (process.env.JARVIS_TELEGRAM) startTelegram();
