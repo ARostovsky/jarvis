@@ -213,6 +213,7 @@
   #menu.open { display: block; }
   #menu button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); padding: 10px 14px; }
   #menu button:last-child { border-bottom: 0; }
+  #menu button:disabled { opacity: .45; cursor: default; }
   #empty { display: none; position: fixed; inset: 0; z-index: 1; flex-direction: column; align-items: center; justify-content: center; gap: 12px; text-align: center; }
   #empty h2 { margin: 0; color: var(--cyan); letter-spacing: .3em; }
   #empty p { margin: 0 0 12px; color: var(--cyan-dim); }
@@ -257,7 +258,15 @@
   .pn.collapsed .pn-body { visibility: hidden; overflow: hidden; transition: visibility 0s .16s; } /* a folded body must not stay in the tab order */
   .pn-note { padding: 4px 12px; font-size: 13px; color: var(--amber); overflow-wrap: anywhere; }
   .pn-note button { border: 1px solid var(--line) !important; margin-left: 8px; padding: 0 8px; font-size: 11px; letter-spacing: .1em !important; }
-  .jt-bar { display: flex; gap: 2px; padding: 4px 12px 0; border-bottom: 1px solid var(--line); overflow-x: auto; position: sticky; top: 0; z-index: 2; background: #061420; }
+  .jt-bar { display: flex; gap: 2px; align-items: flex-end; padding: 4px 12px 0; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 2; background: #061420; }
+  .jt-tabs { display: flex; gap: 2px; min-width: 0; overflow: auto hidden; scrollbar-width: none; } /* no vertical overflow: the tabs' -1px margin made `overflow-x: auto` show a tiny vertical scrollbar; the wheel scrolls it sideways */
+  .jt-tabs::-webkit-scrollbar { display: none; }
+  .jt-tabs { margin-bottom: -1px; } .jt-tabs .jt { margin-bottom: 0; } /* the -1px overlap of the bar's rule sits on the strip, so the tabs do not overflow it */
+  .jt-add { flex: none; position: relative; margin: 0 0 -1px auto; border: 0; border-bottom: 2px solid transparent; padding: 0 12px; color: var(--cyan-dim); font: 600 18px/1.2 Rajdhani, sans-serif; }
+  .jt-add:hover, .jt-add:focus-visible { color: var(--text); border-bottom-color: var(--cyan-dim); outline: none; }
+  .jt-add[aria-disabled="true"] { opacity: .4; cursor: default; } .jt-add[aria-disabled="true"]:hover, .jt-add[aria-disabled="true"]:focus-visible { border-bottom-color: transparent; color: var(--cyan-dim); opacity: .7; }
+  #tip { position: fixed; z-index: 11; width: 230px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--cyan); box-shadow: 0 0 12px rgba(79, 216, 255, .25); color: var(--text); font: 400 13px/1.35 Rajdhani, sans-serif; letter-spacing: .02em; pointer-events: none; } #tip[hidden] { display: none; } /* fixed: a panel body would clip it */
+  .jt-add.chg { color: var(--amber); } .jt-add.chg::after { content: ''; position: absolute; top: 3px; right: 5px; width: 6px; height: 6px; border-radius: 50%; background: var(--amber); box-shadow: 0 0 6px var(--amber); }
   .jt { flex: none; display: flex; gap: 8px; align-items: baseline; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px; padding: 3px 12px 3px 10px; color: var(--cyan-dim); font: 600 13px Rajdhani, sans-serif; letter-spacing: .08em; }
   .jt:hover { color: var(--text); border-bottom-color: var(--cyan-dim); }
   .jt.on { color: var(--text); border-bottom-color: var(--cyan); background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .14)); }
@@ -341,6 +350,7 @@
 </head>
 <body>
 <div id="grid"></div>
+<div id="tip" role="tooltip" hidden></div>
 <nav id="tabs" aria-label="Workspaces"></nav>
 <div id="empty"><h2>NO WORKSPACES</h2><p>Create a workspace to start.</p><div><button id="emptyNew">NEW WORKSPACE</button><button id="emptyArchive" hidden>ARCHIVE</button></div></div>
 <div id="menu" role="menu"></div>
@@ -421,6 +431,7 @@
 
 <script>
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
+const wsProviders = new Map(); // workspace id -> its provider allow-list (empty or unset = all approved)
 const wsNames = new Map(); // workspace id -> name, for messages between workspaces
 const wsNotes = new Map(); // workspace id -> notes folder, for the RESET warning
 const wsLive = new Set(); // workspaces whose arbiter has a live session: only then RESET asks it to save first
@@ -1070,9 +1081,9 @@ async function refreshTabs() {
   try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
   $('mic').hidden = !voice;
   if (Date.now() - provAt > 30000) loadProviders(); // the server hashes every provider folder per call: not on each 2 s poll
-  wsNames.clear();
+  wsNames.clear(); wsProviders.clear();
   wsNotes.clear(); wsLive.clear();
-  list.forEach((w) => (wsNames.set(w.id, w.name), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
+  list.forEach((w) => (wsNames.set(w.id, w.name), w.providers?.length && wsProviders.set(w.id, w.providers), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
   renderTitle();
   renderArchived(archived);
   if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
@@ -1161,21 +1172,27 @@ async function stopAllWs(id) {
 }
 
 // Right-click menu: items are [label, action, danger?].
+let menuFrom = null; // what had the focus before the menu opened: it gets it back when the menu closes
 function menu(ev, items) {
   ev.preventDefault();
   ev.stopPropagation();
   const m = $('menu');
-  m.replaceChildren(...items.map(([label, run, danger]) => Object.assign(document.createElement('button'), {
-    textContent: label, className: danger ? 'danger' : '', role: 'menuitem', onclick: () => { closeMenu(); run(); },
+  if (!m.classList.contains('open')) menuFrom = document.activeElement;
+  m.replaceChildren(...items.map(([label, run, danger, hint]) => Object.assign(document.createElement('button'), {
+    textContent: label, className: danger ? 'danger' : '', role: 'menuitem', disabled: !run, title: hint ?? '', onclick: () => { closeMenu(); run(); }, // no run = disabled, the hint says why
   })));
   m.classList.add('open');
   m.style.left = `${Math.min(ev.clientX, innerWidth - m.offsetWidth - 8)}px`;
   m.style.top = `${Math.min(ev.clientY, innerHeight - m.offsetHeight - 8)}px`;
-  m.querySelector('button').focus();
+  (m.querySelector('button:not(:disabled)') ?? m.querySelector('button')).focus();
 }
-const closeMenu = () => $('menu').classList.remove('open');
+function closeMenu() {
+  const m = $('menu'), was = m.classList.contains('open'), f = menuFrom;
+  m.classList.remove('open'); menuFrom = null;
+  if (was && f?.isConnected && (document.activeElement === document.body || m.contains(document.activeElement))) f.focus({ preventScroll: true });
+}
 addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#menu')) closeMenu(); });
-addEventListener('keydown', (ev) => { if (ev.key === 'Escape') closeMenu(); });
+addEventListener('keydown', (ev) => { if (ev.key === 'Escape' && $('menu').classList.contains('open')) { ev.stopPropagation(); closeMenu(); } }, true); // an open menu takes the Esc: it does not also close the agent panel
 
 const postJson = (path, data) => fetch(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(data) });
 async function wsPost(path, data) {
@@ -1245,6 +1262,7 @@ function renderArchived(archived) {
 }
 
 function switchTo(id) {
+  $('tip').hidden = true; closeMenu();
   $('pclose').onclick(); // saves the open draft under the old workspace
   WS = id;
   $('dinput').value = '';
@@ -1935,20 +1953,35 @@ const PANEL_KINDS = {
       if (!status && !replaying && rows.length) notes.push(h('div', 'pn-note', 'Not checked since restart'));
       const keys = () => ordered.map(jobKey), ordered = jobOrder(rows, st, ctx.ui.order);
       // One sub-tab per provider when there are several. Rows are only filtered: the order, the drop keys and CLEAR DONE stay panel-wide.
-      const names = [...new Set(rows.map((r) => r.provider))].sort(), saved = arr(ctx.ui.tabOrder).filter((n) => names.includes(n)), provs = [...saved, ...names.filter((n) => !saved.includes(n))], tabbed = provs.length > 1, sel = provs.includes(ctx.ui.tab) ? ctx.ui.tab : provs[0];
+      const rowNames = new Set(rows.map((r) => r.provider)), approved = new Set(provList.filter((p) => p.status === 'approved').map((p) => p.name));
+      const added = arr(ctx.ui.added).filter((n) => !provList.length || approved.has(n) || rowNames.has(n)); // a provider that lost approval or is gone drops out (not before /providers has loaded)
+      const names = [...new Set([...rowNames, ...added])].sort(), saved = arr(ctx.ui.tabOrder).filter((n) => names.includes(n)), provs = [...saved, ...names.filter((n) => !saved.includes(n))], tabbed = provs.length > 1;
+      // Closing a tab only hides it (`closedTabs`): the provider is still polled and watched. `added` = tabs of approved providers without rows here, opened with "+".
+      const hid = arr(ctx.ui.closedTabs).filter((n) => provs.includes(n)), vis = provs.filter((n) => !hid.includes(n)).length ? provs.filter((n) => !hid.includes(n)) : provs; // never nothing visible
+      const sel = vis.includes(ctx.ui.tab) ? ctx.ui.tab : vis[0];
       let shown = ordered, host = el;
       const last = (n) => Math.max(0, ...rows.filter((r) => r.provider === n).map((r) => Date.parse(r.changedAt) || 0)); // newest server-stamped state change of that provider (no local clock: it would beat `seen` on every reload)
       const seen = Object.fromEntries(provs.filter((n) => ctx.ui.seen?.[n] !== undefined).map((n) => [n, ctx.ui.seen[n]])); // providers that are gone drop out
       for (const n of provs) if (seen[n] === undefined || n === sel) seen[n] = last(n); // first sight and the open tab count as seen, also in the single-provider view
       const patch = {};
+      $('tip').hidden = true; // the redraw replaces the "+" a tip may belong to
       if (provs.length && JSON.stringify(seen) !== JSON.stringify(ctx.ui.seen ?? {})) patch.seen = seen;
       if (ctx.ui.tabOrder && JSON.stringify(provs) !== JSON.stringify(arr(ctx.ui.tabOrder))) patch.tabOrder = provs; // vanished providers drop out, new ones sit at the end
+      if (ctx.ui.closedTabs && JSON.stringify(hid) !== JSON.stringify(ctx.ui.closedTabs)) patch.closedTabs = hid;
+      if (ctx.ui.added && JSON.stringify(added) !== JSON.stringify(ctx.ui.added)) patch.added = added;
       if (tabbed && sel !== ctx.ui.tab) patch.tab = sel; // the saved tab is gone: keep what is shown
       if (Object.keys(patch).length) ctx.setUi(patch);
       if (tabbed) {
         const pick = (n) => { ctx.setUi({ tab: n, seen: { ...seen, [n]: last(n) } }); ctx.rerender(); };
-        const bar = h('div', 'jt-bar'); bar.setAttribute('role', 'tablist'); bar.setAttribute('aria-label', 'Job providers');
-        for (const n of provs) {
+        const bar = h('div', 'jt-bar'), tl = h('div', 'jt-tabs'); tl.setAttribute('role', 'tablist'); tl.setAttribute('aria-label', 'Job providers');
+        tl.addEventListener('wheel', (ev) => { if (!ev.deltaY || tl.scrollWidth <= tl.clientWidth) return; ev.preventDefault(); tl.scrollLeft += ev.deltaY; }, { passive: false }); // the strip has no scrollbar: the wheel scrolls it sideways like the workspace tabs
+        const closeTab = (n) => {
+          if (vis.length < 2) return;
+          const i = vis.indexOf(n), next = n === sel ? vis[i + 1] ?? vis[i - 1] : sel; // the neighbour takes over; an unseen change in the closed tab stays unseen (the "+" keeps its dot) until it is opened again
+          ctx.setUi({ closedTabs: [...hid, n], tab: next, seen: { ...seen, [next]: last(next) } }); ctx.rerender();
+        };
+        const tabMenu = (ev, n) => menu(ev, [vis.length < 2 ? ['Close tab (last one)', null, false, 'The last open tab cannot be closed'] : ['Close tab', () => { closeTab(n); el.querySelector('.jt.on')?.focus(); }]]);
+        for (const n of vis) {
           const mine = rows.filter((r) => r.provider === n), nf = mine.filter((r) => r.state === 'failed').length, nr = mine.filter((r) => r.state === 'running' || r.state === 'queued').length;
           const hot = n !== sel && last(n) > (ctx.ui.seen?.[n] ?? Infinity);
           const b = h('button', `jt${n === sel ? ' on' : ''}${hot ? ' chg' : ''}`, h('span', 'jt-n', provLabel(n)), nf > 0 && h('span', 'jt-f', `✕${nf}`), nr > 0 && h('span', 'jt-r', `▶${nr}`));
@@ -1972,23 +2005,45 @@ const PANEL_KINDS = {
             pdrag = null; ctx.setUi({ tabOrder: o }); ctx.rerender();
           };
           b.ondragend = () => { pdrag = null; ctx.rerender(); };
+          b.oncontextmenu = (ev) => tabMenu(ev, n);
           b.onkeydown = (ev) => {
-            if (ev.altKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { // Alt+Arrow moves the tab, focus stays on it
+            if (ev.key === 'ContextMenu' || (ev.shiftKey && ev.key === 'F10')) { const r = b.getBoundingClientRect(); tabMenu({ preventDefault() { ev.preventDefault(); }, stopPropagation() {}, clientX: r.left, clientY: r.bottom }, n); return; }
+            if (ev.key === 'Delete') { ev.preventDefault(); closeTab(n); el.querySelector('.jt.on')?.focus(); return; }
+            if (ev.altKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { // Alt+Arrow moves the tab among the visible ones, focus stays on it
               ev.preventDefault();
-              const i = provs.indexOf(n), j = i + (ev.key === 'ArrowLeft' ? -1 : 1);
-              if (j < 0 || j >= provs.length) return;
-              ctx.setUi({ tabOrder: move(provs, n, j) }); ctx.rerender(); el.querySelector(`[data-tab="${CSS.escape(n)}"]`)?.focus();
+              const i = vis.indexOf(n), j = i + (ev.key === 'ArrowLeft' ? -1 : 1);
+              if (j < 0 || j >= vis.length) return;
+              ctx.setUi({ tabOrder: move(provs, n, provs.indexOf(vis[j])) }); ctx.rerender(); el.querySelector(`[data-tab="${CSS.escape(n)}"]`)?.focus();
               return;
             }
-            const i = provs.indexOf(n), j = { ArrowRight: (i + 1) % provs.length, ArrowLeft: (i + provs.length - 1) % provs.length, Home: 0, End: provs.length - 1 }[ev.key];
+            const i = vis.indexOf(n), j = { ArrowRight: (i + 1) % vis.length, ArrowLeft: (i + vis.length - 1) % vis.length, Home: 0, End: vis.length - 1 }[ev.key];
             if (j === undefined) return;
-            ev.preventDefault(); pick(provs[j]); el.querySelector(`[data-tab="${CSS.escape(provs[j])}"]`)?.focus(); // the redraw moved focus off the tab that was pressed: put it on the new one
+            ev.preventDefault(); pick(vis[j]); el.querySelector(`[data-tab="${CSS.escape(vis[j])}"]`)?.focus(); // the redraw moved focus off the tab that was pressed: put it on the new one
           };
-          bar.append(b);
+          tl.append(b);
         }
+        // "+" lists approved providers (and any with rows here) that have no open tab; a dot says a hidden one changed.
+        const allow = wsProviders.get(WS), cands = () => [...new Set([...provList.filter((p) => p.status === 'approved' && (!allow?.length || allow.includes(p.name))).map((p) => p.name), ...provs])].filter((n) => !vis.includes(n)).sort();
+        const dot = cands().some((n) => hid.includes(n) && last(n) > (ctx.ui.seen?.[n] ?? Infinity)); // same test as `lit` below
+        const none = !cands().length, add = h('button', `jt-add${dot ? ' chg' : ''}`, '+'); add.type = 'button'; add.dataset.fk = 'jt-add'; add.setAttribute('aria-haspopup', 'menu');
+        const TIP_NONE = 'No other providers to add. Ask the agent to create one (status provider).';
+        if (none) { add.setAttribute('aria-disabled', 'true'); add.dataset.tip = TIP_NONE;
+          const tipShow = () => { const t = $('tip'), r = add.getBoundingClientRect(); t.textContent = TIP_NONE; t.hidden = false; t.style.left = `${Math.max(8, Math.min(r.right - 230, innerWidth - 238))}px`; t.style.top = `${r.bottom + 6}px`; }, tipHide = () => { $('tip').hidden = true; };
+          add.onmouseenter = add.onfocus = tipShow; add.onmouseleave = add.onblur = tipHide; add.setAttribute('aria-label', `Add provider tab. ${TIP_NONE}`); } // aria-disabled keeps it focusable, so the tip shows on focus too; the tip is a fixed `#tip` element, a panel body would clip a CSS one
+        else { add.title = 'Add provider tab'; add.setAttribute('aria-label', `Add provider tab${dot ? ', a hidden one changed' : ''}`); }
+        const lit = (n) => hid.includes(n) && last(n) > (ctx.ui.seen?.[n] ?? Infinity);
+        const addTab = (n) => { ctx.setUi({ closedTabs: hid.filter((x) => x !== n), added: [...new Set([...added, n])], tab: n, seen: { ...seen, [n]: last(n) } }); ctx.rerender(); el.querySelector('.jt.on')?.focus(); };
+        add.onclick = async () => {
+          if (none) return;
+          const r = add.getBoundingClientRect(); await loadProviders(); // a fresh list: the cached one can be 30 s old
+          const cand = cands();
+          menu({ preventDefault() {}, stopPropagation() {}, clientX: r.right - 200, clientY: r.bottom }, cand.length ? cand.map((n) => [provLabel(n) + (lit(n) ? ' ●' : ''), () => addTab(n)]) : [['No other providers', null, false, 'Approve a provider to add it here']]);
+        };
+        bar.append(tl, add);
         el.append(bar); // moved below the notes at the end
         shown = ordered.filter((r) => r.provider === sel);
         host = h('div', 'jt-panel'); host.id = 'jt-panel'; host.setAttribute('role', 'tabpanel'); host.setAttribute('aria-labelledby', `jt-${provs.indexOf(sel)}`);
+        if (!shown.length) host.append(h('div', 'pn-note jt-empty', `No jobs from ${provLabel(sel)} yet.`));
       }
       const ul = h('ul', 'pn-list');
       const clear = () => ul.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
