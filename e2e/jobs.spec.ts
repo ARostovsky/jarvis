@@ -299,6 +299,31 @@ test('the progress bar and counter are vertically centered with the row text', a
   }
 });
 
+test('the × button is vertically centered in every row variant, wide and narrow', async ({ page }) => {
+  const p = await setup(page);
+  const long = 'a very long step name that has to be cut short with an ellipsis because it never fits '.repeat(3);
+  p.set('x-fail', { state: 'failed', error: 'boom' }); p.set('x-short', { state: 'done', step: 'merged' }); p.set('x-long', { state: 'done', step: long, label: 'Long step' });
+  p.set('x-run', { state: 'running', step: 'eval', progress: { done: 3, total: 8 } }); p.set('x-fin', { state: 'done', progress: { done: 8, total: 8 }, costUsd: 1.5 });
+  const ids = ['x-fail', 'x-short', 'x-long', 'x-run', 'x-fin'];
+  await watch(page, p.ws, p.name, ids);
+  const mid = (r: { y: number; height: number }) => r.y + r.height / 2;
+  for (const [width, shot] of [[760, 'wide'], [440, 'narrow']] as const) { // the panel is a container: 640px and up is the one-line grid, below it the stacked rows
+    await page.evaluate((w) => localStorage.setItem('jarvis.panel', JSON.stringify({ w })), width);
+    await page.reload();
+    await expect(block(page)).toBeVisible();
+    expect((await block(page).boundingBox())!.width >= 640).toBe(width >= 640);
+    for (const id of ids) {
+      const r = row(page, p.name, id);
+      await expect(r).toBeVisible();
+      const rb = (await r.boundingBox())!;
+      if (id === 'x-run') { await expect(r.getByRole('button', { name: /^Remove/ })).toHaveCount(0); continue; } // a running job has no ×
+      const xb = (await r.getByRole('button', { name: /^Remove/ }).boundingBox())!;
+      expect(Math.abs(mid(xb) - mid(rb)), `${id} at ${width}px: × at ${mid(xb)}, row at ${mid(rb)}`).toBeLessThanOrEqual(1);
+    }
+    if (process.env.SHOTS) await block(page).screenshot({ path: join(process.env.SHOTS, `x-center-${shot}.png`) });
+  }
+});
+
 test('progress bars have one width and the counters one x whatever the step total', async ({ page }) => {
   await page.setViewportSize({ width: 1400, height: 900 });
   const p = await setup(page);
