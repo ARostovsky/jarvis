@@ -42,6 +42,11 @@ export async function createWs(page: Page, name: string, extra: object = {}): Pr
 }
 
 // A tab may also carry badges after its name (jobs, unread mail).
+// The archive dialog lives in the Settings gear menu.
+export async function openArchive(page: Page) {
+  await page.getByRole('button', { name: 'Settings' }).click();
+  await page.getByRole('menuitem', { name: 'Archived workspaces…' }).click();
+}
 export const tab = (page: Page, name: string) => page.locator('#tabs button').filter({ hasText: new RegExp(`^${name}(?!\\w)`) });
 
 // Opens the page on workspace `name` and waits until its tab is the active one and its event log is replayed.

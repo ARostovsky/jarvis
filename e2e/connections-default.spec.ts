@@ -45,7 +45,8 @@ test('the default connection changes: workspaces that follow it restart fresh on
 
   // the UI confirms first and says that sessions restart; the result is shown
   await page.goto('/');
-  await page.getByRole('button', { name: 'CONNECTIONS' }).click();
+  await page.getByRole('button', { name: 'Settings' }).click();
+    await page.getByRole('menuitem', { name: 'Connections…' }).click();
   await page.locator('#connList > div').filter({ hasText: a }).getByRole('button', { name: 'EDIT' }).click();
   await page.locator('#cfDefault').click();
   await expect(page.locator('#choiceQuestion')).toContainText('stop and start new sessions without their earlier conversation');

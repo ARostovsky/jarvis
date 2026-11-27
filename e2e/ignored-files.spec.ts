@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { test, expect, createWs, open, uniq, tmp, say, post, events, tab, DATA, type Page } from './helpers.ts';
+import { test, expect, createWs, open, uniq, tmp, say, post, events, tab, DATA, type Page, openArchive } from './helpers.ts';
 
 // Spawns one agent that runs `task` on the fake SDK and waits until it and Jarvis (its report turn) are idle.
 async function spawnIdle(page: Page, ws: string, name: string, task: string) {
@@ -49,12 +49,12 @@ test('files git ignores move with the archive, come back on restore, and are nam
 
   // The delete-forever dialog lists them; cancel it.
   const row = page.locator('#archivedList div').filter({ hasText: name });
-  await page.locator('#tabs button[title="Archived workspaces"]').click();
+  await openArchive(page);
   await row.getByRole('button', { name: 'DELETE' }).click();
   await expect(page.locator('#choiceText')).toContainText(`files ignored by git, parked from agent workdirs:\n  ${agent.id}: .env`);
   await buttons(page).filter({ hasText: 'CANCEL' }).click();
 
-  await page.locator('#tabs button[title="Archived workspaces"]').click();
+  await openArchive(page);
   await row.getByRole('button', { name: 'RESTORE' }).click();
   await expect(tab(page, name)).toHaveClass('active');
   expect(readFileSync(join(agent.cwd, '.env'), 'utf8')).toBe('SECRET=1');
