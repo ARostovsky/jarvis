@@ -29,8 +29,8 @@ export const tmp = (prefix: string) => mkdtempSync(join(tmpdir(), `jarvis-e2e-${
 export const post = (page: Page, path: string, data: object) =>
   page.request.post(path, { headers: { origin: ORIGIN }, data });
 
-// Persisted events of a workspace, oldest first.
-export const events = (ws: string): any[] => readFileSync(join(DATA, 'workspaces', ws, 'events.jsonl'), 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l));
+// Persisted events of a workspace, oldest first. The server appends while a spec polls, so the text after the last newline may be a half-written line: skip it.
+export const events = (ws: string): any[] => readFileSync(join(DATA, 'workspaces', ws, 'events.jsonl'), 'utf8').split('\n').slice(0, -1).filter(Boolean).map((l) => JSON.parse(l));
 
 // Lines of a script for the fake SDK (e2e/fake-sdk.ts), sent to the arbiter.
 export const say = (page: Page, ws: string, ...lines: string[]) => post(page, '/say', { ws, text: lines.join('\n') });
