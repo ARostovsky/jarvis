@@ -352,7 +352,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `GET /workspaces` | | `{workspaces: [{id, name, project?, notes?, jobSources?, connectionId?, running, waiting, costUsd, arbiterLive, intercom, panels: [{panelId, badge?}]}], archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS?}`; the `voice*` fields are in [VOICE.md](VOICE.md#server-endpoints) |
 | `GET /recent[?project=path]` | | folders used before and the project/notes pairs behind the dialog prefill; see [NOTES.md](NOTES.md#setting-it-up) |
 | `GET /health` | | SSE, global: the current `{level, description, incidents, checked, local?}` (`description`, `incidents`, `checked`: the status page; `local`: `{ok, kind?, at, latencyMs}` of the last relevant outcome, `kind` is `auth\|network\|server\|rate\|slow`; `level` combines both, `level`: `ok\|minor\|major\|critical\|unknown`), then one per poll or outcome. Not in any event log |
-| `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events |
+| `GET /events?ws=<id>` | | SSE: snapshot, `ready`, live events; a `: ping` comment every 30 s |
 | `POST /voice/start`, `/voice/stop`, `/voice/cancel`, `/voice/level` | | Voice input, only when voice is on (404 otherwise). See [VOICE.md](VOICE.md#server-endpoints) |
 | `POST /workspaces` | `{name, project?, notes?, model?, effort?}` | new workspace meta; a missing `notes` folder is created |
 | `POST /workspaces/rename` | `{ws, name}` | 204 |

@@ -142,7 +142,8 @@ createServer(async (req, res) => {
     for (const line of w.snapshot()) res.write(`data: ${line}\n\n`);
     send({ type: 'ready' }); // end of replay: UI animates only events after this
     w.bus.on('event', send);
-    req.on('close', () => w.bus.off('event', send));
+    const ping = setInterval(() => res.write(': ping\n\n'), 30_000); // clients such as the Telegram bridge (fetch) drop a stream that is silent for 300 s
+    req.on('close', () => { w.bus.off('event', send); clearInterval(ping); });
   } else if (req.method === 'POST' && commands[url.pathname]) {
     // Any website can POST to localhost; agents run tools, so only accept our own page.
     if (!ORIGINS.has(req.headers.origin ?? '') || req.headers['content-type'] !== 'application/json') {
