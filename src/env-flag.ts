@@ -19,3 +19,7 @@ export function pickFlag(name: string, also: string[], shell: string | undefined
 }
 
 export const resolveFlag = (name: string, ...also: string[]): Flag => pickFlag(name, also, fromFile.has(name) ? undefined : process.env[name], fileEnv[name]);
+
+// The lines `jarvis start` prints; also what the arguments of the resolver mean to a reader.
+export const flagLine = (label: string, f: Flag) => `${label}: ${f.enabled ? 'enabled' : 'disabled'}${f.mode ? `, ${f.mode} mode` : ''} (${f.source})`;
+export const statusLines = () => [flagLine('voice input', resolveFlag('JARVIS_VOICE', 'cpu')), flagLine('telegram bridge', resolveFlag('JARVIS_TELEGRAM'))];

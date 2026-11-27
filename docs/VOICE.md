@@ -26,6 +26,8 @@ This page is the reference for voice: use, setup, configuration and internals. [
 
 Voice is off unless `JARVIS_VOICE` is `1` or `cpu` (`0` or unset: off; any other value is reported in the log and ignored, and the next source decides (shell, then env file, then off)). Then `src/voice.ts` is not even loaded, there are no `/voice` routes and no process. The server calls `listen` first and runs the preflight afterwards, so a slow preflight never delays the start; the mic button appears a moment later (reload the page if it is missing right after a start).
 
+`jarvis start` and `jarvis restart` print one status line when they start the server, for example `voice input: enabled (env file)`, `voice input: enabled, cpu mode (shell)` or `voice input: disabled (default)`; a value that is not `1`, `0` or `cpu` is reported there too and ignored. A server that is already running is not touched and prints no such line.
+
 The sidecar (`voice/server.py`) starts on the first recording, handles one job at a time and exits after `JARVIS_VOICE_IDLE_S` without work (this frees the VRAM). A crash or a job over `JARVIS_VOICE_TIMEOUT_S` fails that one recording; the next one starts a fresh sidecar. Protocol: on stdin, frames of a 4-byte big-endian length and that many bytes of 16 kHz mono s16le PCM; on stdout, one JSON line per frame (`{"text"}`, `""` meaning no speech, or `{"error"}`); stderr is for logs (never audio or text); EOF on stdin ends it. A frame over 4 MiB (about 131 s) is answered with an error and the sidecar exits.
 
 ## Setup

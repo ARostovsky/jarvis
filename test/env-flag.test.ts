@@ -4,7 +4,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { pickFlag } from '../src/env-flag.ts';
+import { flagLine, pickFlag } from '../src/env-flag.ts';
 
 test('pickFlag: shell, then env file, then off; garbage warns and falls through', () => {
   const table: { shell?: string; file?: string; want: [boolean, string, string?]; warns: string[] }[] = [
@@ -52,4 +52,21 @@ test('real env file and shell: shell 0 beats file 1, garbage shell falls back to
   assert.equal(bad.out, 'true env file |true env file'); // garbage shell values do not hide the file
   assert.match(bad.err, /JARVIS_VOICE: unknown value "true" in shell \(use 1 or 0\), ignoring it/);
   assert.match(bad.err, /JARVIS_TELEGRAM: unknown value "off" in shell/);
+});
+
+test('flagLine formats the status lines of jarvis start', () => {
+  assert.equal(flagLine('voice input', { enabled: true, source: 'env file' }), 'voice input: enabled (env file)');
+  assert.equal(flagLine('voice input', { enabled: true, source: 'shell', mode: 'cpu' }), 'voice input: enabled, cpu mode (shell)');
+  assert.equal(flagLine('voice input', { enabled: false, source: 'default' }), 'voice input: disabled (default)');
+  assert.equal(flagLine('telegram bridge', { enabled: false, source: 'shell' }), 'telegram bridge: disabled (shell)');
+});
+
+test('statusLines uses the resolver: file, shell and the warning of a bad shell value', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'env-flag-')), 'env');
+  writeFileSync(file, 'JARVIS_VOICE=1\n');
+  const src = "import './src/local-env.ts'; import { statusLines } from './src/env-flag.ts'; console.log(statusLines().join('|'));";
+  const { JARVIS_VOICE: _v, JARVIS_TELEGRAM: _t, ...base } = process.env;
+  const r = spawnSync(process.execPath, ['--input-type=module', '-e', src], { encoding: 'utf8', cwd: join(import.meta.dirname, '..'), env: { ...base, JARVIS_ENV_FILE: file, JARVIS_TELEGRAM: 'maybe' } });
+  assert.equal(r.stdout.trim(), 'voice input: enabled (env file)|telegram bridge: disabled (default)');
+  assert.match(r.stderr, /JARVIS_TELEGRAM: unknown value "maybe" in shell/);
 });

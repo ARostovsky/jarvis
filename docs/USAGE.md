@@ -132,6 +132,8 @@ With a notes folder, the read-only **Open items** panel shows the workspace's `o
 
 ## Settings
 
+`jarvis start` and `jarvis restart` print whether voice input and the Telegram bridge are on and where each setting came from. Details: [VOICE.md](VOICE.md#configuration), [TELEGRAM.md](TELEGRAM.md#start-with-jarvis).
+
 All optional. Set as environment variables before `jarvis` or `npm start`:
 
 | Variable | Default | What it does |
