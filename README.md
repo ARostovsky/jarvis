@@ -37,6 +37,7 @@ Also `jarvis stop|restart|status|logs`; foreground: `npm start`. Then click **NE
 - **Jobs panel.** Long jobs (CI, training, deploys) polled by small approved scripts, with no tokens per poll. [Details](docs/USAGE.md#panels-and-jobs), [contract](docs/JOB-SOURCES.md), [skill](templates/job-source/SKILL.md) and [examples](templates/job-source/examples/README.md)
 - **Voice input** (optional, off by default). Push-to-talk with a local Whisper model. [Details](docs/VOICE.md)
 - **Open items panel.** The workspace's `open-items.md` above the chat, read-only. [Details](docs/NOTES.md#open-items)
+- **Telegram** (optional, off by default). Talk to Jarvis from your phone: a topic per workspace in your private group. [Details](docs/TELEGRAM.md)
 - **Claude health dot** (bottom left). Whether your Claude access works. [Details](docs/USAGE.md#claude-health-dot)
 - **Local only.** Listens on `127.0.0.1`, every event is on disk. [Details](docs/USAGE.md#safety)
 
