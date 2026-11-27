@@ -32,11 +32,11 @@ Also `jarvis stop|restart|status|logs`; foreground: `npm start`. Then click **NE
 - **Approvals.** Only what Claude Code's `auto` classifier cannot decide shows up as an ALLOW / DENY card. [Details](docs/USAGE.md#approvals)
 - **Teams.** Jarvis picks the cheapest fitting model per task; leads hire helpers. [Details](docs/USAGE.md#big-teams)
 - **Costs.** Cost per agent and workspace, COMPACT and RESET for long contexts. [Details](docs/USAGE.md#costs)
-- **Notes folder.** Optional shared markdown folder Jarvis keeps current and commits to git. [Details](docs/USAGE.md#notes-folder)
+- **Notes folder.** Optional shared markdown folder Jarvis keeps current and commits to git. [Details](docs/NOTES.md)
 - **Connections.** Your Anthropic login or a company gateway such as LiteLLM, per workspace. [Details](docs/USAGE.md#connections)
 - **Jobs panel.** Long jobs (CI, training, deploys) polled by small approved scripts, with no tokens per poll. [Details](docs/USAGE.md#panels-and-jobs), [contract](docs/JOB-SOURCES.md), [skill](templates/job-source/SKILL.md) and [examples](templates/job-source/examples/README.md)
 - **Voice input** (optional, off by default). Push-to-talk with a local Whisper model. [Details](docs/VOICE.md)
-- **Open items panel.** The workspace's `open-items.md` above the chat, read-only. [Details](docs/USAGE.md#open-items)
+- **Open items panel.** The workspace's `open-items.md` above the chat, read-only. [Details](docs/NOTES.md#open-items)
 - **Claude health dot** (bottom left). Whether your Claude access works. [Details](docs/USAGE.md#claude-health-dot)
 - **Local only.** Listens on `127.0.0.1`, every event is on disk. [Details](docs/USAGE.md#safety)
 
