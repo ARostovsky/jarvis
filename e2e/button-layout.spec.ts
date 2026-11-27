@@ -40,10 +40,10 @@ test('input row: buttons share size and one spacing, one-line and tall drafts', 
   if (process.env.SHOT_DIR) await page.screenshot({ path: `${process.env.SHOT_DIR}/input-tall.png`, clip: { x: 0, y: tall.t - 20, width: (await page.viewportSize())!.width, height: tall.b - tall.t + 30 } });
 });
 
-for (const id of ['archived', 'providers', 'provDetails']) {
+for (const id of ['archived', 'job-sources', 'jobSourceDetails']) {
   test(`dialog ${id}: CLOSE keeps a gap below the list and its label is centred`, async ({ page }) => {
     await page.goto('/');
-    await page.evaluate((d) => { const el = document.getElementById(d) as HTMLDialogElement; if (d === 'provDetails') document.getElementById('pdBody')!.textContent = 'body text'; document.getElementById(d === 'archived' ? 'archivedList' : 'provList')!.textContent = 'list'; /* non-empty: an empty list lets the margins collapse */ el.showModal(); }, id);
+    await page.evaluate((d) => { const el = document.getElementById(d) as HTMLDialogElement; if (d === 'jobSourceDetails') document.getElementById('pdBody')!.textContent = 'body text'; document.getElementById(d === 'archived' ? 'archivedList' : 'jobSourceList')!.textContent = 'list'; /* non-empty: an empty list lets the margins collapse */ el.showModal(); }, id);
     const close = `#${id} button[value=""]`;
     const gap = await page.evaluate(([d, c]) => {
       const dl = document.getElementById(d)!, b = dl.querySelector(c)!.getBoundingClientRect(), form = dl.querySelector('form')!.getBoundingClientRect(), prev = dl.querySelector('form')!.previousElementSibling!.getBoundingClientRect();

@@ -3,11 +3,11 @@ import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 
-const DIR = new URL('../templates/status-provider/', import.meta.url).pathname;
-const run = (...args: string[]) => JSON.parse(execFileSync('python3', [DIR + 'status_provider_example.py', ...args], { encoding: 'utf8' }));
+const DIR = new URL('../templates/job-source/', import.meta.url).pathname;
+const run = (...args: string[]) => JSON.parse(execFileSync('python3', [DIR + 'job_source_example.py', ...args], { encoding: 'utf8' }));
 const STATES = ['queued', 'running', 'waiting', 'done', 'failed', 'stopped', 'unknown'];
 
-test('example provider prints schema v1 with a row per id', () => {
+test('example job source prints schema v1 with a row per id', () => {
   const out = run('a1', 'b2');
   assert.equal(out.schema, 1);
   assert.ok(!Number.isNaN(Date.parse(out.checked)));
@@ -29,11 +29,11 @@ test('example manifest is valid schema v1 and matches the example script', () =>
   assert.match(m.name, /^[a-z0-9][a-z0-9-]{0,39}$/);
   assert.deepEqual(m.args, ['{ids}']);
   assert.ok(m.slow_fields.cost);
-  assert.ok(m.command.includes('status_provider_example.py'));
+  assert.ok(m.command.includes('job_source_example.py'));
 });
 
 test('skill template has frontmatter and stays generic', () => {
   const t = readFileSync(DIR + 'SKILL.md', 'utf8');
-  assert.match(t, /^---\nname: status-provider\ndescription: .+\n---\n/);
+  assert.match(t, /^---\nname: job-source\ndescription: .+\n---\n/);
   assert.doesNotMatch(t, /zenml|benchroom|long-horizon/i);
 });

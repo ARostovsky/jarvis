@@ -1,5 +1,5 @@
 #!/bin/sh
-# Jarvis status provider (schema v1): is a host answering over HTTP? Read-only.
+# Jarvis job source (schema v1): is a host answering over HTTP? Read-only.
 # Usage: http_up.sh <host> [<host> ...]   (an id is a host name, optionally host:port)
 # Env: HTTP_SCHEME (default https). Needs only `curl`.
 # ids are safe for JSON because manifest idPattern only allows [A-Za-z0-9.:-].

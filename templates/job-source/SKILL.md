@@ -1,15 +1,15 @@
 ---
-name: status-provider
-description: Build a status provider for a kind of long job (CI runs, Kubernetes jobs, training, deploys, pipeline runs): a small deterministic, read-only program that prints job status as JSON, so Jarvis shows it in a panel above its chat and nobody (no person, no model) has to poll it. Use when asked to "make a status view / status provider for X" or to stop checking a job by hand.
+name: job-source
+description: Build a job source for a kind of long job (CI runs, Kubernetes jobs, training, deploys, pipeline runs): a small deterministic, read-only program that prints job status as JSON, so Jarvis shows it in a panel above its chat and nobody (no person, no model) has to poll it. Use when asked to "make a status view / job source for X" or to stop checking a job by hand.
 ---
 
-# Build a status provider
+# Build a job source
 
-A status provider is a folder with `manifest.json` and a small program. Jarvis runs the program on an interval with job ids and reads one JSON object from its stdout. This file is enough to build one. Longer reference: `<jarvis repo>/docs/STATUS-PROVIDERS.md` (`<jarvis repo>` is the folder that holds `bin/jarvis.mjs`).
+A job source is a folder with `manifest.json` and a small program. Jarvis runs the program on an interval with job ids and reads one JSON object from its stdout. This file is enough to build one. Longer reference: `<jarvis repo>/docs/JOB-SOURCES.md` (`<jarvis repo>` is the folder that holds `bin/jarvis.mjs`).
 
 ## Contract (schema v1)
 
-**How Jarvis calls the program.** `manifest.command` + `manifest.args`. `{ids}` expands to one argv entry per id, one call for all ids. `{id}` makes one call per id (max 4 at once). No shell, argv only. cwd is the provider folder. Env is a minimal base (`PATH`, `HOME`, `USER`, `LANG`, `TZ`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `SSL_CERT_FILE`, `HTTPS_PROXY`, `NO_PROXY`; no `HTTP_PROXY`), plus `env.pass` names, plus `env.set`, plus `JARVIS_STATUS_SCHEMA=1`. A slow run adds `--fields cost` (the `slow_fields` keys) to the same argv.
+**How Jarvis calls the program.** `manifest.command` + `manifest.args`. `{ids}` expands to one argv entry per id, one call for all ids. `{id}` makes one call per id (max 4 at once). No shell, argv only. cwd is the job source folder. Env is a minimal base (`PATH`, `HOME`, `USER`, `LANG`, `TZ`, `XDG_CONFIG_HOME`, `XDG_CACHE_HOME`, `SSL_CERT_FILE`, `HTTPS_PROXY`, `NO_PROXY`; no `HTTP_PROXY`), plus `env.pass` names, plus `env.set`, plus `JARVIS_STATUS_SCHEMA=1`. A slow run adds `--fields cost` (the `slow_fields` keys) to the same argv.
 
 **What the program prints.** Exactly one JSON object on stdout, exit code 0. Non-JSON stdout fails the poll with "output is not a JSON object". Exit != 0 or a timeout fails it too, and the last stderr line (300 chars) becomes the error. Failed polls back off 1x, 2x, 4x `pollS` (max 5 min). Stdout max 2 MB.
 
@@ -46,7 +46,7 @@ Rules: unknown fields are ignored. At most 200 rows. Output is shown as text and
 | `description` | required, one line |
 | `command` | required argv. A relative entry is a file of the folder (it is hashed); others come from `PATH`. Never `claude` |
 | `args` | `["{ids}"]`; exactly one of `{ids}` or `{id}` |
-| `cwd` | default: the provider folder. Leave it unset: a project folder, notes folder or worktree is refused or warned |
+| `cwd` | default: the job source folder. Leave it unset: a project folder, notes folder or worktree is refused or warned |
 | `pollS` | 60, clamped 15..3600 |
 | `timeoutS` | 60, clamped 5..300; the child is killed after it |
 | `slow_fields` | none. `{"cost": "30m"}`: key = row field (`cost` means `costUsd`; also `label`, `detail`, `step`, `progress`, `startedAt`, `finishedAt`, `link`, `error`; never `id` or `state`). Value `15m`..`60m`, clamped (not refused); `null` or `true` = `30m` |
@@ -60,7 +60,7 @@ Rules: unknown fields are ignored. At most 200 rows. Output is shown as text and
 
 **Folder limits.** Regular files only, no symlinks, at most 50 files and 1 MB, no `.venv`, `node_modules`, `__pycache__`.
 
-**Where it goes.** Build it in `<your worktree>/status-providers/<name>/`, outside any notes folder and project folder. Installed providers live in `~/.config/jarvis/status-providers/<name>/` (`$JARVIS_PROVIDERS_DIR`); only the user installs, by approving in the UI.
+**Where it goes.** Build it in `<your worktree>/job-sources/<name>/`, outside any notes folder and project folder. Installed job sources live in `~/.config/jarvis/job-sources/<name>/` (`$JARVIS_JOB_SOURCES_DIR`); only the user installs, by approving in the UI.
 
 ## Examples (run them first, copy the closest)
 
@@ -69,7 +69,7 @@ In `examples/` next to this file, each with `manifest.json`:
 - `json-file/`: Python stdlib, reads a JSON file, state map, progress, slow `cost` field, per-id error.
 - `github-prs/`: Python + `gh api graphql`, ids are PR numbers, `env.set` for the repo, `errorKind` from the error text.
 
-Check one: `node <jarvis repo>/bin/jarvis.mjs provider-check <folder> <id> ...`. See `examples/README.md`.
+Check one: `node <jarvis repo>/bin/jarvis.mjs job-source-check <folder> <id> ...`. See `examples/README.md`.
 
 ## Pitfalls
 
@@ -81,7 +81,7 @@ Check one: `node <jarvis repo>/bin/jarvis.mjs provider-check <folder> <id> ...`.
 - A hard-coded user value (repo, project, namespace) in the code is wrong: put it in `env.set`.
 - Print times as ISO 8601 UTC with `Z`, never local times.
 - Do not call `claude`, an LLM or a login command. On auth failure print top-level `error` with `errorKind: "auth"`.
-- `provider-check` skips the location rules and approval. A folder inside a project, notes folder or worktree is refused later by the server.
+- `job-source-check` skips the location rules and approval. A folder inside a project, notes folder or worktree is refused later by the server.
 
 ## Hard rules
 
@@ -106,7 +106,7 @@ Check one: `node <jarvis repo>/bin/jarvis.mjs provider-check <folder> <id> ...`.
 
    An existing script is the best source of logic, but do not copy its display choices (time zone, duration text, Markdown tables) or its location.
 2. **Map the states.** Write a table from every source state to `queued | running | waiting | done | failed | stopped | unknown`. Look for final states that hide a failed part, such as a run "completed" with a failed step, or a workflow "success" with an allowed failure. Map them to `failed` and name the part in `detail`. Unmapped states become `unknown`, never a guess.
-3. **Write the program** in a new folder `<your worktree>/status-providers/<name>/` (`name`: lower case, digits, dashes, named after the job kind or tool). Start from the closest folder in `examples/` or from `status_provider_example.py`, or write the same in any language. It must:
+3. **Write the program** in a new folder `<your worktree>/job-sources/<name>/` (`name`: lower case, digits, dashes, named after the job kind or tool). Start from the closest folder in `examples/` or from `job_source_example.py`, or write the same in any language. It must:
    - take the ids as arguments (or one id, if you use `{id}`);
    - if the manifest has `slow_fields`, accept `--fields <names>` (comma separated): with it, print rows with `id` and only those fields; without it, leave the slow fields out;
    - print exactly one JSON object with `"schema": 1`;
@@ -121,12 +121,12 @@ Check one: `node <jarvis repo>/bin/jarvis.mjs provider-check <folder> <id> ...`.
    - `timeoutS`; a strict `idPattern` from step 1; `env.pass` and `env.set`;
    - `slow_fields`: the slow numbers and their refresh intervals from step 1, e.g. `{"cost": "30m"}` (15m to 60m);
    - `needs`: what the user must have, e.g. VPN or a login; `notify` (default `any`).
-5. **Test on real jobs.** Run `jarvis provider-check <folder> <id> ...` (from the Jarvis repo: `node <jarvis repo>/bin/jarvis.mjs provider-check ...`):
+5. **Test on real jobs.** Run `jarvis job-source-check <folder> <id> ...` (from the Jarvis repo: `node <jarvis repo>/bin/jarvis.mjs job-source-check ...`):
    - with at least one finished job and, if one exists, one running job, read only;
    - once with a bogus id;
    - the check also runs the slow mode (`--fields cost`) when the manifest has `slow_fields`; read its output too;
    - once without the login or network, if you can do that without changing the user's setup.
 
    Fix and repeat until it passes, and explain any warning you leave. Compare by hand: state, step and link must match what the user sees in the source.
-6. **Screenshot (optional, only if you can run Jarvis).** Rows reach the panel only through the arbiter tool `watch_jobs`, and a builder agent has no such tool, so skip this step unless your session can run a separate Jarvis and drive its arbiter. If it can: start it (`XDG_DATA_HOME=<empty temp dir> XDG_CONFIG_HOME=<temp dir> JARVIS_PROVIDERS_DIR=<temp dir with a copy of your folder> PORT=<spare port> node <jarvis repo>/src/server.ts`; never the user's instance on 7777), approve the copy in its Providers dialog, have its arbiter call `watch_jobs` with test ids, open it with a headless browser (e.g. Playwright) and save the panel as `screenshot.png` (png, webp or jpg, under 1 MB) in the provider folder. No real secrets, ids or private project data in the picture. Set `"screenshot": "screenshot.png"` in `manifest.json`. Jarvis only displays it. The image file is part of the approval hash, so a later change of the picture needs re-approval. Otherwise skip this step.
-7. **Report.** Your final message: the VERDICT line, the folder path, the provider name, the `provider-check` report of the real-job run, the state map and the `needs`. Do not install anything. The arbiter proposes your folder with `propose_provider` (name, absolute folder path, your report); an approval card appears and only the user approves it in the Jarvis UI. Outside Jarvis, tell the user to copy the folder into `~/.config/jarvis/status-providers/` (or `$JARVIS_PROVIDERS_DIR`) and approve it in the Providers dialog.
+6. **Screenshot (optional, only if you can run Jarvis).** Rows reach the panel only through the arbiter tool `watch_jobs`, and a builder agent has no such tool, so skip this step unless your session can run a separate Jarvis and drive its arbiter. If it can: start it (`XDG_DATA_HOME=<empty temp dir> XDG_CONFIG_HOME=<temp dir> JARVIS_JOB_SOURCES_DIR=<temp dir with a copy of your folder> PORT=<spare port> node <jarvis repo>/src/server.ts`; never the user's instance on 7777), approve the copy in its Job sources dialog, have its arbiter call `watch_jobs` with test ids, open it with a headless browser (e.g. Playwright) and save the panel as `screenshot.png` (png, webp or jpg, under 1 MB) in the job source folder. No real secrets, ids or private project data in the picture. Set `"screenshot": "screenshot.png"` in `manifest.json`. Jarvis only displays it. The image file is part of the approval hash, so a later change of the picture needs re-approval. Otherwise skip this step.
+7. **Report.** Your final message: the VERDICT line, the folder path, the job source name, the `job-source-check` report of the real-job run, the state map and the `needs`. Do not install anything. The arbiter proposes your folder with `propose_job_source` (name, absolute folder path, your report); an approval card appears and only the user approves it in the Jarvis UI. Outside Jarvis, tell the user to copy the folder into `~/.config/jarvis/job-sources/` (or `$JARVIS_JOB_SOURCES_DIR`) and approve it in the Job sources dialog.

@@ -3,10 +3,10 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, symlinkSync, renameSync, readFileSync, existsSync, readdirSync, realpathSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { providerDetails, providerScreenshot } from '../src/provider-admin.ts';
-import { hashFolder, validateManifest, checkLocations, loadProvider, createRegistry, idOk, limits, type Locations } from '../src/providers.ts';
+import { jobSourceDetails, jobSourceScreenshot } from '../src/job-source-admin.ts';
+import { hashFolder, validateManifest, checkLocations, loadJobSource, createRegistry, jobSourcesDir, legacyJobSourcesDir, idOk, limits, type Locations } from '../src/job-sources.ts';
 
-const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'jarvis-prov-')));
+const tmp = () => realpathSync(mkdtempSync(join(tmpdir(), 'jarvis-jobsrc-')));
 const manifest = (o: object = {}) => ({ schema: 1, name: 'demo', description: 'd', command: ['node', 's.mjs'], ...o });
 function folder(root: string, name = 'demo', m: object = {}, script = 'console.log(1)') {
   const d = join(root, name);
@@ -131,7 +131,7 @@ test('location rules after realpath, also through a symlinked parent', () => {
   assert.equal(w.length, 1);
   assert.match(w[0], /agents may edit/);
   fail(() => checkLocations(d, mf({ command: [join(r, 'notes', 'sub', 'x.sh')] }), loc), /command/);
-  fail(() => checkLocations(d, mf({ command: ['../x.sh'] }), loc), /leaves the provider folder/);
+  fail(() => checkLocations(d, mf({ command: ['../x.sh'] }), loc), /leaves the job source folder/);
 });
 
 test('args entries follow the same location rules as command', () => {
@@ -166,7 +166,7 @@ test('env.set refuses PATH, interpreter and loader variables', () => {
 });
 
 test('a refused draft leaves an already staged copy in place', () => {
-  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r) });
   const d = folder(r, 'demo');
   const l = reg.stage(d);
   assert.throws(() => reg.stage(d, () => { throw new Error('nope'); }), /nope/);
@@ -174,7 +174,7 @@ test('a refused draft leaves an already staged copy in place', () => {
 });
 
 function reg(r: string, onStep?: (s: string) => void) {
-  return createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r), onStep: onStep as never });
+  return createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r), onStep: onStep as never });
 }
 
 test('registry: stage, approve installs the copy, change stops it, stale hash fails', () => {
@@ -184,14 +184,14 @@ test('registry: stage, approve installs the copy, change stops it, stale hash fa
   const s = g.stage(draft);
   assert.ok(existsSync(s.stagingDir));
   writeFileSync(join(draft, 's.mjs'), 'console.log("changed after staging")');
-  fail(() => g.use('demo'), /unknown provider/);
+  fail(() => g.use('demo'), /unknown job source/);
   const rec = g.approve('demo', s.sha256);
   assert.equal(rec.sha256, s.sha256);
-  assert.equal(readFileSync(join(r, 'prov', 'demo', 's.mjs'), 'utf8'), 'console.log(1)', 'the staged copy is installed, not the edited draft');
+  assert.equal(readFileSync(join(r, 'jobsrc', 'demo', 's.mjs'), 'utf8'), 'console.log(1)', 'the staged copy is installed, not the edited draft');
   assert.equal(g.info('demo').state, 'approved');
   assert.equal(g.use('demo').sha256, s.sha256);
-  assert.ok(JSON.parse(readFileSync(join(r, 'data', 'providers.json'), 'utf8')).demo.files.length === 2);
-  writeFileSync(join(r, 'prov', 'demo', 's.mjs'), 'tampered');
+  assert.ok(JSON.parse(readFileSync(join(r, 'data', 'job-sources.json'), 'utf8')).demo.files.length === 2);
+  writeFileSync(join(r, 'jobsrc', 'demo', 's.mjs'), 'tampered');
   assert.equal(g.info('demo').state, 'changed');
   fail(() => g.use('demo'), /files changed/);
   fail(() => g.approve('demo', s.sha256), /stale/);
@@ -201,29 +201,29 @@ test('registry: stage, approve installs the copy, change stops it, stale hash fa
 test('registry: refuses a draft in a notes folder, approves a hand-placed folder by hash', () => {
   const r = setupLocs(), g = reg(r);
   fail(() => g.stage(folder(join(r, 'notes', 'sub'))), /notes folder/);
-  const placed = folder(join(r, 'prov'));
+  const placed = folder(join(r, 'jobsrc'));
   assert.equal(g.list()[0].state, 'unapproved');
   const h = hashFolder(placed).sha256;
   g.approve('demo', h);
   assert.equal(g.list()[0].state, 'approved');
-  const bad = folder(join(r, 'prov'), 'badone', { kind: 'x' });
+  const bad = folder(join(r, 'jobsrc'), 'badone', { kind: 'x' });
   assert.equal(g.list().find((x) => x.name === 'badone')!.state, 'invalid');
   void bad;
 });
 
-test('registry: a newer approval moves the old version to provider-old', () => {
+test('registry: a newer approval moves the old version to job-source-old', () => {
   const r = setupLocs(), g = reg(r);
   const draft = folder(join(r, 'ok'));
   g.approve('demo', g.stage(draft).sha256);
   writeFileSync(join(draft, 's.mjs'), 'console.log("v2")');
   const s2 = g.stage(draft);
   g.approve('demo', s2.sha256);
-  assert.equal(readFileSync(join(r, 'prov', 'demo', 's.mjs'), 'utf8'), 'console.log("v2")');
-  const olds = readdirSync(join(r, 'data', 'provider-old'));
+  assert.equal(readFileSync(join(r, 'jobsrc', 'demo', 's.mjs'), 'utf8'), 'console.log("v2")');
+  const olds = readdirSync(join(r, 'data', 'job-source-old'));
   assert.equal(olds.length, 1);
   assert.match(olds[0], /^demo-\d{4}-\d{2}-\d{2}$/);
-  assert.equal(readFileSync(join(r, 'data', 'provider-old', olds[0], 's.mjs'), 'utf8'), 'console.log(1)');
-  assert.deepEqual(readdirSync(join(r, 'prov')), ['demo']);
+  assert.equal(readFileSync(join(r, 'data', 'job-source-old', olds[0], 's.mjs'), 'utf8'), 'console.log(1)');
+  assert.deepEqual(readdirSync(join(r, 'jobsrc')), ['demo']);
 });
 
 test('registry: a crash at any step leaves the old or the new version, never a mix', () => {
@@ -238,41 +238,41 @@ test('registry: a crash at any step leaves the old or the new version, never a m
     const crashing = reg(r, (s) => { if (s === crashAt) throw new Error('crash'); });
     fail(() => crashing.approve('demo', v2), /crash/);
     const after = reg(r); // a restart recovers
-    const h = hashFolder(join(r, 'prov', 'demo')).sha256;
+    const h = hashFolder(join(r, 'jobsrc', 'demo')).sha256;
     assert.ok(h === v1 || h === v2, `${crashAt}: installed folder is a whole old or new version`);
-    assert.deepEqual(readdirSync(join(r, 'prov')), ['demo'], `${crashAt}: no leftovers`);
+    assert.deepEqual(readdirSync(join(r, 'jobsrc')), ['demo'], `${crashAt}: no leftovers`);
     // A folder that differs from its approval never runs.
     const ap = after.approvals().demo.sha256;
     assert.equal(after.info('demo').state, ap === h ? 'approved' : 'changed', crashAt);
   }
 });
 
-test('loadProvider reads manifest and hash; folder name must match', () => {
+test('loadJobSource reads manifest and hash; folder name must match', () => {
   const r = tmp(), d = folder(r);
-  assert.equal(loadProvider(d).manifest.name, 'demo');
-  fail(() => loadProvider(d, { name: 'other' }), /folder name/);
+  assert.equal(loadJobSource(d).manifest.name, 'demo');
+  fail(() => loadJobSource(d, { name: 'other' }), /folder name/);
   writeFileSync(join(d, 'manifest.json'), '{nope');
-  fail(() => loadProvider(d), /manifest\.json/);
+  fail(() => loadJobSource(d), /manifest\.json/);
 });
 
-test('providerDetails: masks env values, shows approval state and both hashes, rejects unknown and traversal names', async () => {
-  const { providerDetails } = await import('../src/provider-admin.ts');
+test('jobSourceDetails: masks env values, shows approval state and both hashes, rejects unknown and traversal names', async () => {
+  const { jobSourceDetails } = await import('../src/job-source-admin.ts');
   const r = setupLocs(), g = reg(r);
   const s = g.stage(folder(join(r, 'ok'), 'demo', { args: ['{ids}', '--x'], env: { pass: ['HOME'], set: { TOKEN: 'sekret' } } }));
   g.approve('demo', s.sha256);
-  writeFileSync(join(r, 'prov', 'demo', 'README.md'), 'hi');
-  let d = providerDetails(g, 'demo');
+  writeFileSync(join(r, 'jobsrc', 'demo', 'README.md'), 'hi');
+  let d = jobSourceDetails(g, 'demo');
   assert.equal(d.status, 'changed'); // README added after approval
   assert.equal(d.approvedHash, s.sha256);
   assert.notEqual(d.currentHash, d.approvedHash);
   assert.deepEqual(d.docs, ['README.md']);
   assert.ok(d.manifestText?.includes('"TOKEN": "••••"') && !d.manifestText.includes('sekret'));
   assert.ok(d.manifestText?.includes('"--x"') && d.manifestText.includes('node'));
-  rmSync(join(r, 'prov', 'demo', 'README.md'));
-  d = providerDetails(g, 'demo');
+  rmSync(join(r, 'jobsrc', 'demo', 'README.md'));
+  d = jobSourceDetails(g, 'demo');
   assert.equal(d.status, 'approved');
   assert.equal(d.currentHash, d.approvedHash);
-  for (const n of ['../x', 'nope', '..', 'demo/../demo']) assert.throws(() => providerDetails(g, n), /unknown provider/);
+  for (const n of ['../x', 'nope', '..', 'demo/../demo']) assert.throws(() => jobSourceDetails(g, n), /unknown job source/);
 });
 
 // --- screenshot ---
@@ -285,20 +285,20 @@ const shotFolder = (r: string, shot: unknown, file?: { path: string; data: Buffe
 
 test('screenshot: a valid file inside the folder is kept', () => {
   for (const [p, data] of [['screenshot.png', PNG], ['img/a.jpg', Buffer.from([0xff, 0xd8, 0xff, 0, 0])], ['a.webp', Buffer.from('RIFF\0\0\0\0WEBPVP8 ')]] as const) {
-    const l = loadProvider(shotFolder(tmp(), p, { path: p, data }), { name: 'demo' });
+    const l = loadJobSource(shotFolder(tmp(), p, { path: p, data }), { name: 'demo' });
     assert.equal(l.manifest.screenshot, p);
     assert.deepEqual(l.warnings, []);
   }
 });
 
-test('screenshot: bad values are ignored with a warning and the provider stays valid', () => {
+test('screenshot: bad values are ignored with a warning and the job source stays valid', () => {
   const big = Buffer.concat([PNG, Buffer.alloc(1024 * 1024)]);
   const cases: [unknown, { path: string; data: Buffer } | undefined][] = [
     ['../x.png', undefined], ['/etc/x.png', undefined], ['a/../b.png', undefined], ['s.gif', { path: 's.gif', data: PNG }], ['s.png', { path: 's.png', data: Buffer.from('not an image') }],
     ['s.png', { path: 's.png', data: big }], ['missing.png', undefined], [42, undefined], ['s.png', undefined],
   ];
   for (const [shot, file] of cases) {
-    const l = loadProvider(shotFolder(tmp(), shot, file), { name: 'demo' });
+    const l = loadJobSource(shotFolder(tmp(), shot, file), { name: 'demo' });
     assert.equal(l.manifest.screenshot, undefined, String(shot));
     assert.ok(l.warnings.some((w) => /screenshot ignored/.test(w)), String(shot));
     assert.equal(l.manifest.name, 'demo');
@@ -309,11 +309,11 @@ test('screenshot: a symlink (file or folder) is ignored; a file used by command 
   const r = tmp(), d = shotFolder(r, 'l.png');
   writeFileSync(join(r, 'real.png'), PNG);
   symlinkSync(join(r, 'real.png'), join(d, 'l.png'));
-  // hashFolder refuses symlinks anyway, so the provider fails as a whole, never serves the link
-  fail(() => loadProvider(d, { name: 'demo' }), /symlink/);
+  // hashFolder refuses symlinks anyway, so the job source fails as a whole, never serves the link
+  fail(() => loadJobSource(d, { name: 'demo' }), /symlink/);
   const e = shotFolder(tmp(), 's.png', { path: 's.png', data: PNG });
   writeFileSync(join(e, 'manifest.json'), JSON.stringify({ ...manifest(), screenshot: 's.png', command: ['node', 's.png'] }));
-  const l = loadProvider(e, { name: 'demo' });
+  const l = loadJobSource(e, { name: 'demo' });
   assert.equal(l.manifest.screenshot, undefined);
   assert.ok(l.files.some((f) => f.path === 's.png'));
 });
@@ -345,8 +345,8 @@ test('screenshot: the hash covers the picture file but not the manifest member',
 });
 
 test('screenshot: changing the picture or adding the member after approval makes the state changed', () => {
-  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
-  const d = folder(join(r, 'prov'));
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r) });
+  const d = folder(join(r, 'jobsrc'));
   writeFileSync(join(d, 'screenshot.png'), PNG);
   const m = JSON.parse(readFileSync(join(d, 'manifest.json'), 'utf8'));
   writeFileSync(join(d, 'manifest.json'), JSON.stringify({ ...m, screenshot: 'screenshot.png' }));
@@ -355,8 +355,8 @@ test('screenshot: changing the picture or adding the member after approval makes
   writeFileSync(join(d, 'screenshot.png'), Buffer.concat([PNG, Buffer.from('x')]));
   assert.equal(reg.list()[0].state, 'changed');
   // a screenshot member added afterwards, pointing at a data file the code reads
-  const r2 = tmp(), reg2 = createRegistry({ data: join(r2, 'data'), dir: join(r2, 'prov'), locations: () => locs(r2) });
-  const e = folder(join(r2, 'prov'));
+  const r2 = tmp(), reg2 = createRegistry({ data: join(r2, 'data'), dir: join(r2, 'jobsrc'), locations: () => locs(r2) });
+  const e = folder(join(r2, 'jobsrc'));
   writeFileSync(join(e, 'data.png'), PNG);
   reg2.approve('demo', reg2.list()[0].sha256!);
   assert.equal(reg2.list()[0].state, 'approved');
@@ -367,36 +367,61 @@ test('screenshot: changing the picture or adding the member after approval makes
 });
 
 test('screenshot endpoint data: serves only the validated file, 404 otherwise', () => {
-  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
-  const d = folder(join(r, 'prov'), 'demo', { screenshot: 'screenshot.png' });
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r) });
+  const d = folder(join(r, 'jobsrc'), 'demo', { screenshot: 'screenshot.png' });
   writeFileSync(join(r, 'secret.png'), PNG);
   writeFileSync(join(d, 'screenshot.png'), PNG);
-  const s = providerScreenshot(reg, 'demo');
+  const s = jobSourceScreenshot(reg, 'demo');
   assert.equal(s.type, 'image/png');
   assert.ok(s.data.equals(PNG));
-  for (const n of ['../demo', '..', 'nope', 'demo/../demo', '']) assert.throws(() => providerScreenshot(reg, n), (e: any) => e.status === 404);
+  for (const n of ['../demo', '..', 'nope', 'demo/../demo', '']) assert.throws(() => jobSourceScreenshot(reg, n), (e: any) => e.status === 404);
   writeFileSync(join(d, 'manifest.json'), JSON.stringify({ ...manifest(), screenshot: '../secret.png' }));
-  assert.throws(() => providerScreenshot(reg, 'demo'), (e: any) => e.status === 404);
-  assert.equal(providerDetails(reg, 'demo').screenshot, undefined);
-  assert.ok(providerDetails(reg, 'demo').warnings?.some((w) => /screenshot ignored/.test(w)));
+  assert.throws(() => jobSourceScreenshot(reg, 'demo'), (e: any) => e.status === 404);
+  assert.equal(jobSourceDetails(reg, 'demo').screenshot, undefined);
+  assert.ok(jobSourceDetails(reg, 'demo').warnings?.some((w) => /screenshot ignored/.test(w)));
 });
 
-test('providerDetails: a malformed env.set masks the whole env', async () => {
-  const { providerDetails } = await import('../src/provider-admin.ts');
-  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
-  const d = folder(join(r, 'prov'), 'demo', { env: { set: 'TOKEN=abc' } });
-  const t = providerDetails(reg, 'demo').manifestText ?? '';
+test('jobSourceDetails: a malformed env.set masks the whole env', async () => {
+  const { jobSourceDetails } = await import('../src/job-source-admin.ts');
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r) });
+  const d = folder(join(r, 'jobsrc'), 'demo', { env: { set: 'TOKEN=abc' } });
+  const t = jobSourceDetails(reg, 'demo').manifestText ?? '';
   assert.ok(t.includes('"env"') && !t.includes('abc'), t);
 });
 
-test('providerScreenshot: a symlink swapped in after validation is rejected', async () => {
-  const { providerScreenshot } = await import('../src/provider-admin.ts');
-  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'prov'), locations: () => locs(r) });
-  const d = folder(join(r, 'prov'), 'demo', { screenshot: 'screenshot.png' });
+test('jobSourceScreenshot: a symlink swapped in after validation is rejected', async () => {
+  const { jobSourceScreenshot } = await import('../src/job-source-admin.ts');
+  const r = tmp(), reg = createRegistry({ data: join(r, 'data'), dir: join(r, 'jobsrc'), locations: () => locs(r) });
+  const d = folder(join(r, 'jobsrc'), 'demo', { screenshot: 'screenshot.png' });
   writeFileSync(join(d, 'screenshot.png'), PNG);
   writeFileSync(join(r, 'real.png'), PNG);
-  assert.equal(providerScreenshot(reg, 'demo').data.length, PNG.length);
+  assert.equal(jobSourceScreenshot(reg, 'demo').data.length, PNG.length);
   rmSync(join(d, 'screenshot.png'));
   symlinkSync(join(r, 'real.png'), join(d, 'screenshot.png'));
-  assert.throws(() => providerScreenshot(reg, 'demo'), (e: any) => e.status === 404);
+  assert.throws(() => jobSourceScreenshot(reg, 'demo'), (e: any) => e.status === 404);
+});
+
+test('job sources: the legacy status-providers folder is read next to job-sources, which wins on a name clash', () => {
+  const home = mkdtempSync(join(tmpdir(), 'jarvis-jobsrc-dir-')), saved = { ...process.env };
+  try {
+    delete process.env.JARVIS_JOB_SOURCES_DIR; delete process.env.JARVIS_PROVIDERS_DIR; process.env.XDG_CONFIG_HOME = home;
+    const base = join(home, 'jarvis');
+    assert.equal(jobSourcesDir(), join(base, 'job-sources'));
+    assert.equal(legacyJobSourcesDir(), undefined);
+    const mk = (dir: string, name: string, what: string) => { mkdirSync(join(dir, name), { recursive: true }); writeFileSync(join(dir, name, 'manifest.json'), `{${what}}`); };
+    mk(join(base, 'status-providers'), 'old-one', 'a');
+    mk(join(base, 'status-providers'), 'both', 'legacy');
+    assert.equal(legacyJobSourcesDir(), join(base, 'status-providers'));
+    mk(join(base, 'job-sources'), 'new-one', 'b');
+    mk(join(base, 'job-sources'), 'both', 'main');
+    assert.equal(jobSourcesDir(), join(base, 'job-sources'));
+    const reg = createRegistry({ data: join(home, 'data'), locations: () => ({ data: join(home, 'data'), notes: [], projects: [] }) });
+    assert.deepEqual(reg.list().map((i) => i.name), ['both', 'new-one', 'old-one']);
+    assert.equal(reg.folderOf('old-one'), join(base, 'status-providers', 'old-one'));
+    assert.equal(reg.folderOf('both'), join(base, 'job-sources', 'both'));
+    assert.equal(reg.folderOf('new-one'), join(base, 'job-sources', 'new-one'));
+    // an env variable names the folder: the legacy one is not read
+    process.env.JARVIS_JOB_SOURCES_DIR = join(home, 'elsewhere');
+    assert.equal(legacyJobSourcesDir(), undefined);
+  } finally { process.env = saved; rmSync(home, { recursive: true, force: true }); }
 });

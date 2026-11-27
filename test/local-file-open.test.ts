@@ -20,7 +20,7 @@ let server: ChildProcess;
 before(async () => {
   writeFileSync(stub, '#!/bin/sh\nprintf "%s\\n" "$1" >> "$JARVIS_OPEN_LOG"\n');
   chmodSync(stub, 0o755);
-  server = spawn(process.execPath, ['src/server.ts'], { stdio: 'ignore', env: { ...process.env, PORT: String(PORT), XDG_DATA_HOME: join(out, 'data'), JARVIS_FILE_ROOTS: tmp, JARVIS_OPEN_CMD: stub, JARVIS_OPEN_LOG: log, JARVIS_HEALTH_PROBE: '0', JARVIS_PROVIDERS_DIR: join(out, 'prov'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/' } });
+  server = spawn(process.execPath, ['src/server.ts'], { stdio: 'ignore', env: { ...process.env, PORT: String(PORT), XDG_DATA_HOME: join(out, 'data'), JARVIS_FILE_ROOTS: tmp, JARVIS_OPEN_CMD: stub, JARVIS_OPEN_LOG: log, JARVIS_HEALTH_PROBE: '0', JARVIS_JOB_SOURCES_DIR: join(out, 'jobsrc'), JARVIS_STATUS_URL: 'http://127.0.0.1:1/' } });
   for (let i = 0; i < 100; i++) { try { await fetch(`${base}/recent`); return; } catch { await wait(100); } }
   throw new Error('server did not start');
 });

@@ -272,7 +272,7 @@
   .jt.on { color: var(--text); border-bottom-color: var(--cyan); background: linear-gradient(180deg, transparent, rgba(79, 216, 255, .14)); }
   .jt:focus-visible { outline: 1px solid var(--cyan); outline-offset: -2px; }
   .jt .jt-f { color: var(--red); } .jt .jt-r { color: var(--cyan); } .jt .jt-f, .jt .jt-r { font: 400 11px 'JetBrains Mono', monospace; letter-spacing: 0; }
-  .jt.chg { color: var(--amber); border-bottom-color: var(--amber); box-shadow: 0 0 10px rgba(255, 181, 71, .35); } /* a state changed in this provider since its tab was open: lit until opened */
+  .jt.chg { color: var(--amber); border-bottom-color: var(--amber); box-shadow: 0 0 10px rgba(255, 181, 71, .35); } /* a state changed in this job source since its tab was open: lit until opened */
   .jt.drop-before { box-shadow: inset 3px 0 0 var(--cyan); } .jt.drop-after { box-shadow: inset -3px 0 0 var(--cyan); }
   .jt.chg .jt-n::after { content: ' ●'; font-size: 8px; vertical-align: 2px; }
   .pn-list { list-style: none; margin: 0; padding: 4px 12px 6px; }
@@ -290,7 +290,7 @@
   .jr .l1, .jr .l2 { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
   .jr .l2 { flex-wrap: wrap; gap: 2px 10px; margin-top: 2px; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; }
   .jr .lab { flex: 1; min-width: 0; overflow-wrap: anywhere; }
-  .jr .prov { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
+  .jr .job-source { flex: none; font: 400 11px 'JetBrains Mono', monospace; opacity: .6; }
   .jr .dur { flex: none; font: 400 12px 'JetBrains Mono', monospace; font-variant-numeric: tabular-nums; opacity: .85; }
   .jr .x { flex: none; position: absolute; right: 0; top: 2px; bottom: 2px; min-width: 30px; margin: 0; padding: 0; opacity: .5; border-left: 0; } /* the plate spans the row like the status bar (same 2px inset) */
   .jr:has(> .l1 > .x) .l1, .jr:has(> .l1 > .x) .l2 { padding-right: 34px; } /* narrow: the plate is pinned to the row's right edge, full height */
@@ -305,15 +305,15 @@
   .jr .cost .asof { opacity: .6; }
   .jr.drop-before { box-shadow: inset 0 2px 0 var(--cyan); } .jr.drop-after { box-shadow: inset 0 -2px 0 var(--cyan); }
   @container (max-width: 639px) { .jr .cost { flex-basis: 100%; } } /* narrow: the cost takes its own line */
-  @container (min-width: 640px) { /* one line per job, columns: label, provider, id, step, detail, progress, duration, cost, x */
+  @container (min-width: 640px) { /* one line per job, columns: label, source, id, step, detail, progress, duration, cost, x */
     /* a shared grid: the list owns the tracks, each row takes them as a subgrid, so every column starts at the same x in all rows; a column nobody fills is 0 wide */
-    .pn-list:has(> .jr) { display: grid; grid-template-columns: minmax(0, calc(var(--col-name, 197px) + 23px)) minmax(0, var(--col-prov, auto)) minmax(0, var(--col-id, auto)) minmax(0, var(--col-step, max-content)) minmax(0, 1fr) auto auto auto auto; }
+    .pn-list:has(> .jr) { display: grid; grid-template-columns: minmax(0, calc(var(--col-name, 197px) + 23px)) minmax(0, var(--col-job-source, auto)) minmax(0, var(--col-id, auto)) minmax(0, var(--col-step, max-content)) minmax(0, 1fr) auto auto auto auto; }
     .jr { grid-column: 1 / -1; display: grid; grid-template-columns: subgrid; align-items: baseline; margin-bottom: 2px; }
     .jr .l1, .jr .l2 { display: contents; }
     .jr .l1 > *, .jr .l2 > * { grid-row: 1; padding-right: 12px; min-width: 0; }
-    .jr .lab, .jr .prov, .jr .id, .jr .step, .jr .det { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .jr .prov, .jr .l2 > .id, .jr .l2 > a, .jr .step, .jr .det { padding-left: 6px; } /* air between a column's resize line (on the track edge) and the next column's text */
-    .jr .lab { grid-column: 1; } .jr .prov { grid-column: 2; } .jr .l2 > .id, .jr .l2 > a { grid-column: 3; } .jr .step { grid-column: 4; }
+    .jr .lab, .jr .job-source, .jr .id, .jr .step, .jr .det { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .jr .job-source, .jr .l2 > .id, .jr .l2 > a, .jr .step, .jr .det { padding-left: 6px; } /* air between a column's resize line (on the track edge) and the next column's text */
+    .jr .lab { grid-column: 1; } .jr .job-source { grid-column: 2; } .jr .l2 > .id, .jr .l2 > a { grid-column: 3; } .jr .step { grid-column: 4; }
     .jr .det { grid-column: 5; } .jr .det.sw, .jr .err { grid-column: 5; grid-row: 2; } .jr .prog { grid-column: 6; }
     .jr .dur { grid-column: 7; min-width: 5ch; text-align: right; } .jr .cost { grid-column: 8; } .jr .x { position: relative; align-self: stretch; margin: 2px 0; grid-column: 9; grid-row: 1 / span 2; padding-right: 0; min-width: 30px; } .jr:has(> .l1 > .x) .l1 { padding-right: 0; } /* relative, not static: the cross is drawn by pseudo-elements positioned against the button */
   }
@@ -333,19 +333,19 @@
   @media (prefers-reduced-motion: reduce) { #panels, #panels *, #panels *::before { animation: none !important; transition: none !important; } }
   .pbadge { font-size: 11px; line-height: 1.3; margin-left: 6px; padding: 0 5px; border: 1px solid currentColor; letter-spacing: 0; }
   .pbadge.active { color: var(--cyan); } .pbadge.ok { color: var(--cyan-dim); } .pbadge.warn { color: var(--amber); } .pbadge.error { color: var(--red); }
-  .ask.prov .warn { color: var(--red); } .ask.prov small { display: block; opacity: .7; margin: 4px 0; }
-  .ask.prov .pf { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } .ask.prov .pf button { margin: 0; padding: 2px 8px; font-size: 12px; letter-spacing: 0; }
-  .ask.prov input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; margin: 6px 0; }
-  #providers { border-color: var(--cyan); min-width: 480px; }
-  #provList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
-  #provList pre { flex: 1 1 100%; order: 1; min-width: 0; margin: 0; } /* the files view takes its own line under the row; as a plain flex item its text width squeezed the name and status to zero */
-  #provList .pi { flex: 1 1 200px; min-width: 0; } #provList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
-  #provDetails { border-color: var(--cyan); min-width: 480px; max-width: min(720px, 94vw); }
+  .ask.job-source .warn { color: var(--red); } .ask.job-source small { display: block; opacity: .7; margin: 4px 0; }
+  .ask.job-source .pf { display: flex; flex-wrap: wrap; gap: 4px; margin: 6px 0; } .ask.job-source .pf button { margin: 0; padding: 2px 8px; font-size: 12px; letter-spacing: 0; }
+  .ask.job-source input { border: 1px solid var(--line); padding: 6px 10px; font-size: 14px; width: 100%; margin: 6px 0; }
+  #job-sources { border-color: var(--cyan); min-width: 480px; }
+  #jobSourceList > div { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
+  #jobSourceList pre { flex: 1 1 100%; order: 1; min-width: 0; margin: 0; } /* the files view takes its own line under the row; as a plain flex item its text width squeezed the name and status to zero */
+  #jobSourceList .pi { flex: 1 1 200px; min-width: 0; } #jobSourceList small { display: block; color: var(--text); opacity: .7; overflow-wrap: anywhere; }
+  #jobSourceDetails { border-color: var(--cyan); min-width: 480px; max-width: min(720px, 94vw); }
   #pdBody small { display: block; opacity: .7; margin-top: 8px; } #pdBody div { overflow-wrap: anywhere; } #pdBody pre { max-height: 40vh; overflow: auto; margin: 4px 0; }
   #pdBody .pd-shot img { max-width: 100%; max-height: 40vh; display: block; border: 1px solid var(--line); margin-top: 4px; }
-  #provList .pthumb { width: 64px; height: 40px; object-fit: cover; border: 1px solid var(--line); flex: none; }
+  #jobSourceList .pthumb { width: 64px; height: 40px; object-fit: cover; border: 1px solid var(--line); flex: none; }
   #pdBody .bad, #pdBody .pd-warn { color: var(--red); } #pdBody .good { color: var(--cyan); }
-  #provList label { cursor: pointer; } #provList input { width: auto; flex: none; accent-color: var(--cyan); padding: 0; margin-right: 8px; }
+  #jobSourceList label { cursor: pointer; } #jobSourceList input { width: auto; flex: none; accent-color: var(--cyan); padding: 0; margin-right: 8px; }
 </style>
 </head>
 <body>
@@ -407,13 +407,13 @@
   <form method="dialog"><button value="">CLOSE</button></form>
 </dialog>
 
-<dialog id="providers">
-  <h3 id="provTitle" style="color:var(--cyan)">JOB PROVIDERS</h3>
-  <div id="provList"></div>
-  <form method="dialog"><button id="provSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
+<dialog id="job-sources">
+  <h3 id="jobSourceTitle" style="color:var(--cyan)">JOB SOURCES</h3>
+  <div id="jobSourceList"></div>
+  <form method="dialog"><button id="jobSourceSave" value="ok" hidden>SAVE</button><button value="">CLOSE</button></form>
 </dialog>
 
-<dialog id="provDetails">
+<dialog id="jobSourceDetails">
   <h3 id="pdTitle" style="color:var(--cyan)"></h3>
   <div id="pdBody"></div>
   <form method="dialog"><button value="">CLOSE</button></form>
@@ -431,7 +431,7 @@
 
 <script>
 const ARBITER = 'arbiter', R = 300; // internal id, shown as Jarvis
-const wsProviders = new Map(); // workspace id -> its provider allow-list (empty or unset = all approved)
+const wsJobSources = new Map(); // workspace id -> its job source allow-list (empty or unset = all approved)
 const wsNames = new Map(); // workspace id -> name, for messages between workspaces
 const wsNotes = new Map(); // workspace id -> notes folder, for the RESET warning
 const wsLive = new Set(); // workspaces whose arbiter has a live session: only then RESET asks it to save first
@@ -1080,10 +1080,10 @@ async function refreshTabs() {
   let list, archived;
   try { ({ workspaces: list, archived, settingsModel, arbiterModel, voice, voiceAutosend, voiceMaxS = 60 } = await (await fetch('/workspaces')).json()); } catch { return; }
   $('mic').hidden = !voice;
-  if (Date.now() - provAt > 30000) loadProviders(); // the server hashes every provider folder per call: not on each 2 s poll
-  wsNames.clear(); wsProviders.clear();
+  if (Date.now() - jobSrcAt > 30000) loadJobSources(); // the server hashes every job source folder per call: not on each 2 s poll
+  wsNames.clear(); wsJobSources.clear();
   wsNotes.clear(); wsLive.clear();
-  list.forEach((w) => (wsNames.set(w.id, w.name), w.providers?.length && wsProviders.set(w.id, w.providers), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
+  list.forEach((w) => (wsNames.set(w.id, w.name), w.jobSources?.length && wsJobSources.set(w.id, w.jobSources), w.notes && wsNotes.set(w.id, w.notes), w.arbiterLive && wsLive.add(w.id)));
   renderTitle();
   renderArchived(archived);
   if (!list.length) { // zero workspaces is valid: show the empty screen, no event stream
@@ -1098,7 +1098,7 @@ async function refreshTabs() {
   document.body.classList.toggle('empty', !list.length);
   $('emptyArchive').hidden = !archived.length;
   // Rebuilding every poll would swallow a click whose mousedown and mouseup straddle the rebuild.
-  const sig = JSON.stringify([WS, list, archived.length, provList.map((p) => [p.name, p.status])]);
+  const sig = JSON.stringify([WS, list, archived.length, jobSrcList.map((p) => [p.name, p.status])]);
   if (sig === tabsSig || dragId) return; // a rebuild mid-drag would drop the dragged tab; ondragend catches up
   tabsSig = sig;
   const keepScroll = $('tabs').scrollLeft; // replaceChildren clamps scrollLeft to 0
@@ -1133,15 +1133,15 @@ async function refreshTabs() {
     b.oncontextmenu = (ev) => menu(ev, [
       ['Rename', () => renameWs(w)],
       ['Notes folder…', () => notesWs(w)],
-      ...(provList.length ? [['Job providers…', () => openProviders(w)]] : []),
+      ...(jobSrcList.length ? [['Job sources…', () => openJobSources(w)]] : []),
       ['Stop all agents', () => stopAllWs(w.id)],
       ['Archive workspace', () => archiveWs(w), true],
     ]);
     return b;
   }), Object.assign(document.createElement('button'), { textContent: '+', title: 'New workspace', onclick: openNewWs }),
   ...(archived.length ? [Object.assign(document.createElement('button'), { textContent: 'ARCHIVE', title: 'Archived workspaces', onclick: () => $('archived').showModal() })] : []),
-  ...(provList.length || pendingProps().length ? [Object.assign(document.createElement('button'), { textContent: `PROVIDERS${pendingProps().length ? ` (${pendingProps().length})` : ''}`, title: pendingProps().length ? `Job providers, ${pendingProps().length} waiting for approval` : 'Job providers', onclick: () => openProviders() })] : []));
-  if ($('providers').open) renderProviders();
+  ...(jobSrcList.length || pendingProps().length ? [Object.assign(document.createElement('button'), { textContent: `JOB SOURCES${pendingProps().length ? ` (${pendingProps().length})` : ''}`, title: pendingProps().length ? `Job sources, ${pendingProps().length} waiting for approval` : 'Job sources', onclick: () => openJobSources() })] : []));
+  if ($('job-sources').open) renderJobSources();
   $('tabs').scrollLeft = keepScroll;
   if (shownWs !== WS) $('tabs').querySelector('.active')?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   shownWs = WS;
@@ -1827,16 +1827,16 @@ addEventListener('pointerdown', (ev) => { if (!ev.target.closest('#viewMenu, #pv
 const panelMap = new Map(), panelStatus = new Map(); // panelId -> { panel, status, el, ... } / latest panel_status
 const rowSeen = new Map(), hotRows = new Set(); // job row key -> { state, t, fresh, turned } (last state change); `key@changeTime` of rows that failed live under a manual order
 let pdrag = null; // job row being dragged: re-rendering mid-drag would drop it
-let provList = [], provAt = 0; // approved, changed and pending providers from /providers, and when they were fetched
-let provTimer = 0;
-const provSoon = () => { provTimer ||= setTimeout(() => { provTimer = 0; loadProviders(); }, Math.max(0, 2000 - (Date.now() - provAt))); }; // a row the server cannot poll means a provider changed or lost approval: no event says so, look now
-async function loadProviders() {
-  provAt = Date.now();
+let jobSrcList = [], jobSrcAt = 0; // approved, changed and pending job sources from /job-sources, and when they were fetched
+let jobSrcTimer = 0;
+const jobSrcSoon = () => { jobSrcTimer ||= setTimeout(() => { jobSrcTimer = 0; loadJobSources(); }, Math.max(0, 2000 - (Date.now() - jobSrcAt))); }; // a row the server cannot poll means a job source changed or lost approval: no event says so, look now
+async function loadJobSources() {
+  jobSrcAt = Date.now();
   try {
-    const r = await fetch('/providers'); if (!r.ok) return;
-    const j = await r.json(); provList = (Array.isArray(j) ? j : j.providers ?? []).filter((p) => p?.name);
+    const r = await fetch('/job-sources'); if (!r.ok) return;
+    const j = await r.json(); jobSrcList = (Array.isArray(j) ? j : j.jobSources ?? []).filter((p) => p?.name);
   } catch { return; }
-  if ($('providers').open) renderProviders();
+  if ($('job-sources').open) renderJobSources();
   schedulePanels();
 }
 const panelUiKey = () => `jarvis.panels.${WS}`; // { [panelId]: { collapsed?, hidden?, order? } }, a browser preference like folded agents
@@ -1854,18 +1854,18 @@ setInterval(() => document.querySelectorAll('#panels .dur').forEach(tickDur), 30
 const pnBtn = (label, fn, aria = label) => { const b = h('button', 'pn-btn', label); b.type = 'button'; b.setAttribute('aria-label', aria); b.dataset.fk = `b:${aria}`; b.onclick = fn; return b; };
 
 const JOB_END = new Set(['done', 'failed', 'stopped']), JOB_STATES = new Set(['queued', 'running', 'waiting', 'done', 'failed', 'stopped', 'unknown']);
-const jobRows = (data) => (Array.isArray(data?.rows) ? data.rows : []);
-const jobKey = (r) => `${r.provider}:${r.id}`;
-const provLabel = (n) => provList.find((p) => p.name === n)?.label || n; // manifests have no label field today: the id
-// Providers that cannot be trusted right now: a failed poll, or files changed since approval. Rows of those are dimmed and sort as "needs attention".
+const jobRows = (data) => (Array.isArray(data?.rows) ? data.rows : []).map((r) => (r && r.source === undefined && r.provider !== undefined ? { ...r, source: r.provider } : r)); // `provider` is the field of older logs
+const jobKey = (r) => `${r.source}:${r.id}`;
+const jobSrcLabel = (n) => jobSrcList.find((p) => p.name === n)?.label || n; // manifests have no label field today: the id
+// Job sources that cannot be trusted right now: a failed poll, or files changed since approval. Rows of those are dimmed and sort as "needs attention".
 function jobStale(data, status) {
-  const det = Array.isArray(status?.detail) ? status.detail : [], bad = new Map(det.filter((d) => d?.ok === false).map((d) => [d.provider, d]));
-  const used = new Set(jobRows(data).map((r) => r.provider));
-  const changed = new Set(provList.filter((p) => p.status === 'changed' && used.has(p.name)).map((p) => p.name));
-  const marked = new Map(jobRows(data).filter((r) => r.stale && !bad.has(r.provider) && !changed.has(r.provider)).map((r) => [r.provider, r.stale])); // the server marks rows it cannot poll (disabled, not approved)
+  const det = Array.isArray(status?.detail) ? status.detail : [], bad = new Map(det.filter((d) => d?.ok === false).map((d) => [d.source, d]));
+  const used = new Set(jobRows(data).map((r) => r.source));
+  const changed = new Set(jobSrcList.filter((p) => p.status === 'changed' && used.has(p.name)).map((p) => p.name));
+  const marked = new Map(jobRows(data).filter((r) => r.stale && !bad.has(r.source) && !changed.has(r.source)).map((r) => [r.source, r.stale])); // the server marks rows it cannot poll (disabled, not approved)
   return { bad, changed, marked, all: status?.ok === false && !bad.size };
 }
-const jobSev = (r, st) => (r.state === 'failed' ? 0 : r.pending ? 2 : st.all || r.stale || st.bad.has(r.provider) || st.changed.has(r.provider) || r.error || r.state === 'waiting' || r.state === 'unknown' ? 1 : r.state === 'running' || r.state === 'queued' ? 2 : 3);
+const jobSev = (r, st) => (r.state === 'failed' ? 0 : r.pending ? 2 : st.all || r.stale || st.bad.has(r.source) || st.changed.has(r.source) || r.error || r.state === 'waiting' || r.state === 'unknown' ? 1 : r.state === 'running' || r.state === 'queued' ? 2 : 3);
 function jobChangeTime(r) {
   const k = jobKey(r);
   let s = rowSeen.get(k);
@@ -1889,11 +1889,11 @@ function jobRow(r, o) {
   if (/^https?:\/\//i.test(r.link ?? '')) { idEl = h('a', '', sid); Object.assign(idEl, { href: r.link, target: '_blank', rel: 'noopener noreferrer' }); idEl.dataset.fk = `a:${o.key}`; }
   else idEl = h('span', 'id', sid);
   idEl.title = r.id;
-  const l1 = h('div', 'l1', h('span', 'lab', r.label || idEl), o.multi && h('span', 'prov', r.provider));
+  const l1 = h('div', 'l1', h('span', 'lab', r.label || idEl), o.multi && h('span', 'job-source', r.source));
   if (Date.parse(r.startedAt) && (!end || Date.parse(r.finishedAt))) {
     const d = h('span', 'dur'); d.dataset.s = r.startedAt; if (end) d.dataset.f = r.finishedAt; tickDur(d); l1.append(d);
   }
-  if (end) { const x = h('button', 'x xg', '×'); x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.label || r.id}`); x.dataset.fk = `x:${o.key}`; x.onclick = () => o.act('unwatch', { ids: [r.id], provider: r.provider }); l1.append(x); }
+  if (end) { const x = h('button', 'x xg', '×'); x.type = 'button'; x.setAttribute('aria-label', `Remove ${r.label || r.id}`); x.dataset.fk = `x:${o.key}`; x.onclick = () => o.act('unwatch', { ids: [r.id], source: r.source }); l1.append(x); }
   const l2 = h('div', 'l2');
   if (r.label) l2.append(idEl);
   if (r.step) l2.append(h('span', 'step', r.step));
@@ -1927,8 +1927,8 @@ const PANEL_KINDS = {
       if (st.bad.size || st.all || st.changed.size || st.marked.size) parts.push('stale');
       return parts.join(' · ') || 'no jobs';
     },
-    meta(data, status) { // provider name (when exactly one) and the last check time, shown while expanded
-      const names = new Set([...jobRows(data).map((r) => r.provider), ...(Array.isArray(status?.detail) ? status.detail.map((d) => d?.provider) : [])].filter(Boolean));
+    meta(data, status) { // job source name (when exactly one) and the last check time, shown while expanded
+      const names = new Set([...jobRows(data).map((r) => r.source), ...(Array.isArray(status?.detail) ? status.detail.map((d) => d?.source) : [])].filter(Boolean));
       return [names.size === 1 && [...names][0], hm(status?.at) && `checked ${hm(status.at)}`].filter(Boolean).join(' · ');
     },
     collapsed: (data) => !jobRows(data).some((r) => !JOB_END.has(r.state) || r.state === 'failed'), // anything running, waiting or failed keeps it open
@@ -1944,36 +1944,36 @@ const PANEL_KINDS = {
       const rows = jobRows(data), st = jobStale(data, status);
       const notes = [];
       for (const [name, d] of st.bad) {
-        const needs = [].concat(provList.find((p) => p.name === name)?.needs ?? []).filter(Boolean);
+        const needs = [].concat(jobSrcList.find((p) => p.name === name)?.needs ?? []).filter(Boolean);
         notes.push(h('div', 'pn-note', `${name} stale since ${hm(d.at)}${d.error ? `: ${d.error}.` : '.'}${needs.length && ['auth', 'network'].includes(d.errorKind) ? ` Needs: ${needs.join(', ')}.` : ''}`));
       }
       for (const [name, why] of st.marked) notes.push(h('div', 'pn-note', `${name}: ${why}`));
       if (st.all) notes.push(h('div', 'pn-note', `Check failed${status.error ? `: ${status.error}` : ''}`));
-      for (const name of st.changed) { const n = h('div', 'pn-note', `${name} files changed.`); n.append(pnBtn('Approve again', () => openProviders())); notes.push(n); }
+      for (const name of st.changed) { const n = h('div', 'pn-note', `${name} files changed.`); n.append(pnBtn('Approve again', () => openJobSources())); notes.push(n); }
       if (!status && !replaying && rows.length) notes.push(h('div', 'pn-note', 'Not checked since restart'));
       const keys = () => ordered.map(jobKey), ordered = jobOrder(rows, st, ctx.ui.order);
-      // One sub-tab per provider when there are several. Rows are only filtered: the order, the drop keys and CLEAR DONE stay panel-wide.
-      const rowNames = new Set(rows.map((r) => r.provider)), approved = new Set(provList.filter((p) => p.status === 'approved').map((p) => p.name));
-      const added = arr(ctx.ui.added).filter((n) => !provList.length || approved.has(n) || rowNames.has(n)); // a provider that lost approval or is gone drops out (not before /providers has loaded)
-      const names = [...new Set([...rowNames, ...added])].sort(), saved = arr(ctx.ui.tabOrder).filter((n) => names.includes(n)), provs = [...saved, ...names.filter((n) => !saved.includes(n))], tabbed = provs.length > 1;
-      // Closing a tab only hides it (`closedTabs`): the provider is still polled and watched. `added` = tabs of approved providers without rows here, opened with "+".
-      const hid = arr(ctx.ui.closedTabs).filter((n) => provs.includes(n)), vis = provs.filter((n) => !hid.includes(n)).length ? provs.filter((n) => !hid.includes(n)) : provs; // never nothing visible
+      // One sub-tab per job source when there are several. Rows are only filtered: the order, the drop keys and CLEAR DONE stay panel-wide.
+      const rowNames = new Set(rows.map((r) => r.source)), approved = new Set(jobSrcList.filter((p) => p.status === 'approved').map((p) => p.name));
+      const added = arr(ctx.ui.added).filter((n) => !jobSrcList.length || approved.has(n) || rowNames.has(n)); // a job source that lost approval or is gone drops out (not before /job-sources has loaded)
+      const names = [...new Set([...rowNames, ...added])].sort(), saved = arr(ctx.ui.tabOrder).filter((n) => names.includes(n)), jobSrcs = [...saved, ...names.filter((n) => !saved.includes(n))], tabbed = jobSrcs.length > 1;
+      // Closing a tab only hides it (`closedTabs`): the job source is still polled and watched. `added` = tabs of approved job sources without rows here, opened with "+".
+      const hid = arr(ctx.ui.closedTabs).filter((n) => jobSrcs.includes(n)), vis = jobSrcs.filter((n) => !hid.includes(n)).length ? jobSrcs.filter((n) => !hid.includes(n)) : jobSrcs; // never nothing visible
       const sel = vis.includes(ctx.ui.tab) ? ctx.ui.tab : vis[0];
       let shown = ordered, host = el;
-      const last = (n) => Math.max(0, ...rows.filter((r) => r.provider === n).map((r) => Date.parse(r.changedAt) || 0)); // newest server-stamped state change of that provider (no local clock: it would beat `seen` on every reload)
-      const seen = Object.fromEntries(provs.filter((n) => ctx.ui.seen?.[n] !== undefined).map((n) => [n, ctx.ui.seen[n]])); // providers that are gone drop out
-      for (const n of provs) if (seen[n] === undefined || n === sel) seen[n] = last(n); // first sight and the open tab count as seen, also in the single-provider view
+      const last = (n) => Math.max(0, ...rows.filter((r) => r.source === n).map((r) => Date.parse(r.changedAt) || 0)); // newest server-stamped state change of that job source (no local clock: it would beat `seen` on every reload)
+      const seen = Object.fromEntries(jobSrcs.filter((n) => ctx.ui.seen?.[n] !== undefined).map((n) => [n, ctx.ui.seen[n]])); // job sources that are gone drop out
+      for (const n of jobSrcs) if (seen[n] === undefined || n === sel) seen[n] = last(n); // first sight and the open tab count as seen, also in the single-job-source view
       const patch = {};
       $('tip').hidden = true; // the redraw replaces the "+" a tip may belong to
-      if (provs.length && JSON.stringify(seen) !== JSON.stringify(ctx.ui.seen ?? {})) patch.seen = seen;
-      if (ctx.ui.tabOrder && JSON.stringify(provs) !== JSON.stringify(arr(ctx.ui.tabOrder))) patch.tabOrder = provs; // vanished providers drop out, new ones sit at the end
+      if (jobSrcs.length && JSON.stringify(seen) !== JSON.stringify(ctx.ui.seen ?? {})) patch.seen = seen;
+      if (ctx.ui.tabOrder && JSON.stringify(jobSrcs) !== JSON.stringify(arr(ctx.ui.tabOrder))) patch.tabOrder = jobSrcs; // vanished job sources drop out, new ones sit at the end
       if (ctx.ui.closedTabs && JSON.stringify(hid) !== JSON.stringify(ctx.ui.closedTabs)) patch.closedTabs = hid;
       if (ctx.ui.added && JSON.stringify(added) !== JSON.stringify(ctx.ui.added)) patch.added = added;
       if (tabbed && sel !== ctx.ui.tab) patch.tab = sel; // the saved tab is gone: keep what is shown
       if (Object.keys(patch).length) ctx.setUi(patch);
       if (tabbed) {
         const pick = (n) => { ctx.setUi({ tab: n, seen: { ...seen, [n]: last(n) } }); ctx.rerender(); };
-        const bar = h('div', 'jt-bar'), tl = h('div', 'jt-tabs'); tl.setAttribute('role', 'tablist'); tl.setAttribute('aria-label', 'Job providers');
+        const bar = h('div', 'jt-bar'), tl = h('div', 'jt-tabs'); tl.setAttribute('role', 'tablist'); tl.setAttribute('aria-label', 'Job sources');
         tl.addEventListener('wheel', (ev) => { if (!ev.deltaY || tl.scrollWidth <= tl.clientWidth) return; ev.preventDefault(); tl.scrollLeft += ev.deltaY; }, { passive: false }); // the strip has no scrollbar: the wheel scrolls it sideways like the workspace tabs
         const closeTab = (n) => {
           if (vis.length < 2) return;
@@ -1982,12 +1982,12 @@ const PANEL_KINDS = {
         };
         const tabMenu = (ev, n) => menu(ev, [vis.length < 2 ? ['Close tab (last one)', null, false, 'The last open tab cannot be closed'] : ['Close tab', () => { closeTab(n); el.querySelector('.jt.on')?.focus(); }]]);
         for (const n of vis) {
-          const mine = rows.filter((r) => r.provider === n), nf = mine.filter((r) => r.state === 'failed').length, nr = mine.filter((r) => r.state === 'running' || r.state === 'queued').length;
+          const mine = rows.filter((r) => r.source === n), nf = mine.filter((r) => r.state === 'failed').length, nr = mine.filter((r) => r.state === 'running' || r.state === 'queued').length;
           const hot = n !== sel && last(n) > (ctx.ui.seen?.[n] ?? Infinity);
-          const b = h('button', `jt${n === sel ? ' on' : ''}${hot ? ' chg' : ''}`, h('span', 'jt-n', provLabel(n)), nf > 0 && h('span', 'jt-f', `✕${nf}`), nr > 0 && h('span', 'jt-r', `▶${nr}`));
-          b.type = 'button'; b.dataset.fk = `t:${n}`; b.dataset.tab = n; b.id = `jt-${provs.indexOf(n)}`; b.setAttribute('aria-controls', 'jt-panel');
+          const b = h('button', `jt${n === sel ? ' on' : ''}${hot ? ' chg' : ''}`, h('span', 'jt-n', jobSrcLabel(n)), nf > 0 && h('span', 'jt-f', `✕${nf}`), nr > 0 && h('span', 'jt-r', `▶${nr}`));
+          b.type = 'button'; b.dataset.fk = `t:${n}`; b.dataset.tab = n; b.id = `jt-${jobSrcs.indexOf(n)}`; b.setAttribute('aria-controls', 'jt-panel');
           b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(n === sel)); b.tabIndex = n === sel ? 0 : -1;
-          b.setAttribute('aria-label', `${provLabel(n)}${nf ? `, ${nf} failed` : ''}${nr ? `, ${nr} running` : ''}${hot ? ', changed' : ''}`);
+          b.setAttribute('aria-label', `${jobSrcLabel(n)}${nf ? `, ${nf} failed` : ''}${nr ? `, ${nr} running` : ''}${hot ? ', changed' : ''}`);
           b.onclick = () => pick(n);
           const move = (ks, from, to) => { const o = ks.filter((k) => k !== from); o.splice(to, 0, from); return o; };
           b.draggable = true; // a drag is no click: the open tab stays as it is
@@ -2000,7 +2000,7 @@ const PANEL_KINDS = {
           b.ondrop = (ev) => {
             ev.preventDefault();
             if (!pdrag?.tab || pdrag.key === n) return;
-            const from = pdrag.key, o = provs.filter((k) => k !== from), after = ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
+            const from = pdrag.key, o = jobSrcs.filter((k) => k !== from), after = ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
             o.splice(o.indexOf(n) + (after ? 1 : 0), 0, from);
             pdrag = null; ctx.setUi({ tabOrder: o }); ctx.rerender();
           };
@@ -2013,7 +2013,7 @@ const PANEL_KINDS = {
               ev.preventDefault();
               const i = vis.indexOf(n), j = i + (ev.key === 'ArrowLeft' ? -1 : 1);
               if (j < 0 || j >= vis.length) return;
-              ctx.setUi({ tabOrder: move(provs, n, provs.indexOf(vis[j])) }); ctx.rerender(); el.querySelector(`[data-tab="${CSS.escape(n)}"]`)?.focus();
+              ctx.setUi({ tabOrder: move(jobSrcs, n, jobSrcs.indexOf(vis[j])) }); ctx.rerender(); el.querySelector(`[data-tab="${CSS.escape(n)}"]`)?.focus();
               return;
             }
             const i = vis.indexOf(n), j = { ArrowRight: (i + 1) % vis.length, ArrowLeft: (i + vis.length - 1) % vis.length, Home: 0, End: vis.length - 1 }[ev.key];
@@ -2022,35 +2022,35 @@ const PANEL_KINDS = {
           };
           tl.append(b);
         }
-        // "+" lists approved providers (and any with rows here) that have no open tab; a dot says a hidden one changed.
-        const allow = wsProviders.get(WS), cands = () => [...new Set([...provList.filter((p) => p.status === 'approved' && (!allow?.length || allow.includes(p.name))).map((p) => p.name), ...provs])].filter((n) => !vis.includes(n)).sort();
+        // "+" lists approved job sources (and any with rows here) that have no open tab; a dot says a hidden one changed.
+        const allow = wsJobSources.get(WS), cands = () => [...new Set([...jobSrcList.filter((p) => p.status === 'approved' && (!allow?.length || allow.includes(p.name))).map((p) => p.name), ...jobSrcs])].filter((n) => !vis.includes(n)).sort();
         const dot = cands().some((n) => hid.includes(n) && last(n) > (ctx.ui.seen?.[n] ?? Infinity)); // same test as `lit` below
         const none = !cands().length, add = h('button', `jt-add${dot ? ' chg' : ''}`, '+'); add.type = 'button'; add.dataset.fk = 'jt-add'; add.setAttribute('aria-haspopup', 'menu');
-        const TIP_NONE = 'No other providers to add. Ask the agent to create one (status provider).';
+        const TIP_NONE = 'No other job sources to add. Ask the agent to create one.';
         if (none) { add.setAttribute('aria-disabled', 'true'); add.dataset.tip = TIP_NONE;
           const tipShow = () => { const t = $('tip'), r = add.getBoundingClientRect(); t.textContent = TIP_NONE; t.hidden = false; t.style.left = `${Math.max(8, Math.min(r.right - 230, innerWidth - 238))}px`; t.style.top = `${r.bottom + 6}px`; }, tipHide = () => { $('tip').hidden = true; };
-          add.onmouseenter = add.onfocus = tipShow; add.onmouseleave = add.onblur = tipHide; add.setAttribute('aria-label', `Add provider tab. ${TIP_NONE}`); } // aria-disabled keeps it focusable, so the tip shows on focus too; the tip is a fixed `#tip` element, a panel body would clip a CSS one
-        else { add.title = 'Add provider tab'; add.setAttribute('aria-label', `Add provider tab${dot ? ', a hidden one changed' : ''}`); }
+          add.onmouseenter = add.onfocus = tipShow; add.onmouseleave = add.onblur = tipHide; add.setAttribute('aria-label', `Add job source tab. ${TIP_NONE}`); } // aria-disabled keeps it focusable, so the tip shows on focus too; the tip is a fixed `#tip` element, a panel body would clip a CSS one
+        else { add.title = 'Add job source tab'; add.setAttribute('aria-label', `Add job source tab${dot ? ', a hidden one changed' : ''}`); }
         const lit = (n) => hid.includes(n) && last(n) > (ctx.ui.seen?.[n] ?? Infinity);
         const addTab = (n) => { ctx.setUi({ closedTabs: hid.filter((x) => x !== n), added: [...new Set([...added, n])], tab: n, seen: { ...seen, [n]: last(n) } }); ctx.rerender(); el.querySelector('.jt.on')?.focus(); };
         add.onclick = async () => {
           if (none) return;
-          const r = add.getBoundingClientRect(); await loadProviders(); // a fresh list: the cached one can be 30 s old
+          const r = add.getBoundingClientRect(); await loadJobSources(); // a fresh list: the cached one can be 30 s old
           const cand = cands();
-          menu({ preventDefault() {}, stopPropagation() {}, clientX: r.right - 200, clientY: r.bottom }, cand.length ? cand.map((n) => [provLabel(n) + (lit(n) ? ' ●' : ''), () => addTab(n)]) : [['No other providers', null, false, 'Approve a provider to add it here']]);
+          menu({ preventDefault() {}, stopPropagation() {}, clientX: r.right - 200, clientY: r.bottom }, cand.length ? cand.map((n) => [jobSrcLabel(n) + (lit(n) ? ' ●' : ''), () => addTab(n)]) : [['No other job sources', null, false, 'Approve a job source to add it here']]);
         };
         bar.append(tl, add);
         el.append(bar); // moved below the notes at the end
-        shown = ordered.filter((r) => r.provider === sel);
-        host = h('div', 'jt-panel'); host.id = 'jt-panel'; host.setAttribute('role', 'tabpanel'); host.setAttribute('aria-labelledby', `jt-${provs.indexOf(sel)}`);
-        if (!shown.length) host.append(h('div', 'pn-note jt-empty', `No jobs from ${provLabel(sel)} yet.`));
+        shown = ordered.filter((r) => r.source === sel);
+        host = h('div', 'jt-panel'); host.id = 'jt-panel'; host.setAttribute('role', 'tabpanel'); host.setAttribute('aria-labelledby', `jt-${jobSrcs.indexOf(sel)}`);
+        if (!shown.length) host.append(h('div', 'pn-note jt-empty', `No jobs from ${jobSrcLabel(sel)} yet.`));
       }
       const ul = h('ul', 'pn-list');
       const clear = () => ul.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
       for (const r of shown) {
         const key = jobKey(r), manual = !!ctx.ui.order?.length, sn = (jobChangeTime(r), rowSeen.get(key));
         if (sn.turned) { sn.turned = false; if (manual && r.state === 'failed' && sn.fresh) hotRows.add(`${key}@${sn.t}`); } // only a live turn to failed, not an old failure seen after a reload
-        const li = jobRow(r, { key, multi: false, act, stale: st.bad.has(r.provider) || st.changed.has(r.provider) || st.marked.has(r.provider) || st.all, hot: manual && r.state === 'failed' && hotRows.has(`${key}@${sn.t}`) });
+        const li = jobRow(r, { key, multi: false, act, stale: st.bad.has(r.source) || st.changed.has(r.source) || st.marked.has(r.source) || st.all, hot: manual && r.state === 'failed' && hotRows.has(`${key}@${sn.t}`) });
         if (!rowSeen.get(key)?.shown) { rowSeen.get(key).shown = true; if (!replaying && rowSeen.get(key).fresh) li.classList.add('new'); }
         li.ondragstart = (ev) => { if (ev.target !== li) return; pdrag = { key, panelId: ctx.panelId }; ev.dataTransfer.setData('text/plain', key); ev.dataTransfer.effectAllowed = 'move'; };
         li.ondragover = (ev) => {
@@ -2101,7 +2101,7 @@ const PANEL_KINDS = {
 };
 const UNKNOWN_KIND = { rank: 90, summary: () => '', render: (el) => el.append(h('div', 'pn-note', 'This Jarvis version cannot show this panel')) };
 const kindOf = (p) => PANEL_KINDS[p.panel.kind] ?? UNKNOWN_KIND;
-const statusSig = (s) => s && [s.ok, s.error, s.at && fmtTs(s.at), s.detail?.map?.((d) => [d.provider, d.ok, d.error, d.errorKind, d.at && fmtTs(d.at)])];
+const statusSig = (s) => s && [s.ok, s.error, s.at && fmtTs(s.at), s.detail?.map?.((d) => [d.source, d.ok, d.error, d.errorKind, d.at && fmtTs(d.at)])];
 
 // Counts in colour as in the mockup: running and open counts, and the whole failed part. The text stays the plain summary.
 function sumParts(sum) {
@@ -2127,8 +2127,8 @@ function gripBody(p) {
   });
   p.grip.addEventListener('dblclick', () => { setPanelUi(id(), { h: undefined }); p.sig = ''; p.body.style.height = ''; });
 }
-// Drag the right edge of a text column (name, provider, id, step; wide layout) to set its width for every row of the panel (40px .. 60% of the panel); double-click resets. Kept per panel with the other panel prefs.
-const COLS = [['name', '.lab', '--col-name'], ['prov', '.prov', '--col-prov'], ['id', '.l2 > .id, .l2 > a', '--col-id'], ['step', '.step', '--col-step']];
+// Drag the right edge of a text column (name, source, id, step; wide layout) to set its width for every row of the panel (40px .. 60% of the panel); double-click resets. Kept per panel with the other panel prefs.
+const COLS = [['name', '.lab', '--col-name'], ['jobSource', '.job-source', '--col-job-source'], ['id', '.l2 > .id, .l2 > a', '--col-id'], ['step', '.step', '--col-step']];
 function colResize(wrap, body, id) {
   const hs = COLS.map(([key, sel, v]) => {
     const cr = h('div', 'pn-cr'); cr.title = 'Drag to resize the column · double-click to reset';
@@ -2155,7 +2155,7 @@ function colResize(wrap, body, id) {
 function updateBlock(p, ui) {
   const { panelId, title, data } = p.panel, kind = kindOf(p), status = panelStatus.get(panelId);
   const collapsed = ui.collapsed ?? kind.collapsed?.(data, status) ?? false;
-  const sig = JSON.stringify([p.panel, statusSig(status), ui, collapsed, replaying, provList.map((x) => [x.name, x.status])]);
+  const sig = JSON.stringify([p.panel, statusSig(status), ui, collapsed, replaying, jobSrcList.map((x) => [x.name, x.status])]);
   if (sig === p.sig) return;
   p.sig = sig;
   if (!p.el) {
@@ -2203,21 +2203,23 @@ function renderPanels() {
 let panelTimer = 0; // replay delivers many events at once: render after the burst
 const schedulePanels = () => { panelTimer ||= setTimeout(() => { panelTimer = 0; renderPanels(); }, 0); };
 Object.assign(handlers, {
-  panel: (e) => { if (!replaying && (jobRows(e.data).some((r) => r.stale) || provList.some((p) => p.status === 'changed'))) provSoon(); const old = panelMap.get(e.panelId); panelMap.set(e.panelId, { panel: { panelId: e.panelId, kind: e.kind, title: e.title, data: e.data, badge: e.badge }, el: old?.el, head: old?.head, body: old?.body, sig: '' }); schedulePanels(); },
+  panel: (e) => { if (!replaying && (jobRows(e.data).some((r) => r.stale) || jobSrcList.some((p) => p.status === 'changed'))) jobSrcSoon(); const old = panelMap.get(e.panelId); panelMap.set(e.panelId, { panel: { panelId: e.panelId, kind: e.kind, title: e.title, data: e.data, badge: e.badge }, el: old?.el, head: old?.head, body: old?.body, sig: '' }); schedulePanels(); },
   panel_removed: (e) => { panelMap.get(e.panelId)?.el?.remove(); panelMap.delete(e.panelId); schedulePanels(); },
-  panel_status: (e) => { if (!replaying && Array.isArray(e.detail) && e.detail.some((d) => d?.ok === false)) provSoon(); panelStatus.set(e.panelId, e); schedulePanels(); },
-  provider_proposed: (e) => { showProposal(e); provSoon(); },
-  provider_decided: (e) => { document.querySelector(`[data-prov="${CSS.escape(e.name)}"]${e.hash ? `[data-hash="${CSS.escape(e.hash)}"]` : ''}`)?.remove(); provSoon(); },
+  panel_status: (e) => { if (!replaying && Array.isArray(e.detail) && e.detail.some((d) => d?.ok === false)) jobSrcSoon(); panelStatus.set(e.panelId, e); schedulePanels(); },
+  job_source_proposed: (e) => { showProposal(e); jobSrcSoon(); },
+  provider_proposed: (e) => handlers.job_source_proposed(e), // event names of older logs
+  provider_decided: (e) => handlers.job_source_decided(e),
+  job_source_decided: (e) => { document.querySelector(`[data-job-source="${CSS.escape(e.name)}"]${e.hash ? `[data-hash="${CSS.escape(e.hash)}"]` : ''}`)?.remove(); jobSrcSoon(); },
 });
 const ready = handlers.ready;
 handlers.ready = (e) => { ready(e); schedulePanels(); };
 
-// ---- job providers: approval card, providers dialog, per-workspace choice ----
-const pendingProps = () => [...document.querySelectorAll('#asks [data-prov]')].map((c) => c.dataset.prov);
-// Fetch a provider's files into a <pre>; resolves true once shown. Approving stays off until then.
-async function loadProvFiles(name, hash, view) {
+// ---- job sources: approval card, job sources dialog, per-workspace choice ----
+const pendingProps = () => [...document.querySelectorAll('#asks [data-job-source]')].map((c) => c.dataset.jobSource);
+// Fetch a job source's files into a <pre>; resolves true once shown. Approving stays off until then.
+async function loadJobSourceFiles(name, hash, view) {
   try {
-    const r = await fetch(`/providers/files?name=${encodeURIComponent(name)}&hash=${encodeURIComponent(hash ?? '')}`);
+    const r = await fetch(`/job-sources/files?name=${encodeURIComponent(name)}&hash=${encodeURIComponent(hash ?? '')}`);
     if (!r.ok) { view.textContent = `files failed: ${(await r.text()) || r.status}`; view.hidden = false; return false; }
     const j = await r.json(), list = Array.isArray(j) ? j : Array.isArray(j.files) ? j.files : Object.entries(j).map(([path, text]) => ({ path, text }));
     view.textContent = list.map((x) => `── ${x.path ?? x.name}${x.truncated ? ' (cut)' : ''}\n${x.binary ? '(binary file, not shown)' : x.text ?? x.content ?? ''}`).join('\n\n');
@@ -2225,20 +2227,20 @@ async function loadProvFiles(name, hash, view) {
   } catch { view.textContent = 'files failed'; view.hidden = false; return false; }
 }
 function showProposal(e) {
-  document.querySelector(`[data-prov="${CSS.escape(e.name)}"]`)?.remove();
-  const m = e.manifest ?? {}, poll = m.pollS ?? m.poll_s ?? m.pollSeconds, card = h('div', 'ask prov');
-  card.dataset.prov = e.name; card.dataset.hash = e.hash ?? '';
+  document.querySelector(`[data-job-source="${CSS.escape(e.name)}"]`)?.remove();
+  const m = e.manifest ?? {}, poll = m.pollS ?? m.poll_s ?? m.pollSeconds, card = h('div', 'ask job-source');
+  card.dataset.jobSource = e.name; card.dataset.hash = e.hash ?? '';
   const files = (Array.isArray(e.files) ? e.files : []).map((f) => (typeof f === 'string' ? { path: f } : f));
   const view = h('pre'); view.textContent = 'Loading files…';
   const reason = Object.assign(document.createElement('input'), { placeholder: 'Reason (optional)' });
-  const decide = (ok) => post(ok ? '/providers/approve' : '/providers/reject', { name: e.name, hash: e.hash, ...(ok ? {} : { reason: reason.value.trim() || undefined }) });
+  const decide = (ok) => post(ok ? '/job-sources/approve' : '/job-sources/reject', { name: e.name, hash: e.hash, ...(ok ? {} : { reason: reason.value.trim() || undefined }) });
   const approve = h('button', '', 'Approve'), reject = h('button', 'deny', 'Reject');
   const click = async (ok) => { approve.disabled = reject.disabled = true; if (!(await decide(ok))) approve.disabled = reject.disabled = false; }; // one decision per card: a second click would race the first
   approve.onclick = () => click(true); reject.onclick = () => click(false);
   approve.disabled = true; // the files must be on screen before Approve works
-  loadProvFiles(e.name, e.hash, view).then((ok) => { approve.disabled = !ok; });
+  loadJobSourceFiles(e.name, e.hash, view).then((ok) => { approve.disabled = !ok; });
   card.append(...[
-    h('div', '', `New job provider: ${e.name}`), h('small', '', [m.kind ?? 'jobs', m.description].filter(Boolean).join(' · ')), e.note && h('small', '', e.note),
+    h('div', '', `New job source: ${e.name}`), h('small', '', [m.kind ?? 'jobs', m.description].filter(Boolean).join(' · ')), e.note && h('small', '', e.note),
     ...(e.warnings ?? []).map((w) => h('div', 'warn', String(w))),
     h('div', 'warn', `Runs${poll ? ` every ${poll} s` : ' on a timer'} with your rights, outside any sandbox.`),
     m.cwd && h('div', 'warn', `Runs in ${m.cwd}`),
@@ -2249,55 +2251,55 @@ function showProposal(e) {
     e.report && h('pre', '', typeof e.report === 'string' ? e.report : JSON.stringify(e.report, null, 2)),
     reason, approve, reject].filter(Boolean));
   $('asks').append(card);
-  if ($('providers').open) renderProviders();
+  if ($('job-sources').open) renderJobSources();
 }
-const provSel = new Map(), provSeen = new Map(); // unsaved checkbox choices and provider hashes whose files were shown; they survive re-renders
-let provFor = null; // workspace summary while choosing its providers, else null (manage list)
-function renderProviders() {
-  const w = provFor, list = provList.filter((p) => p.name);
-  $('provTitle').textContent = w ? `JOB PROVIDERS FOR ${w.name.toUpperCase()}` : 'JOB PROVIDERS';
-  $('provSave').hidden = !w;
+const jobSrcSel = new Map(), jobSrcSeen = new Map(); // unsaved checkbox choices and job source hashes whose files were shown; they survive re-renders
+let jobSrcFor = null; // workspace summary while choosing its job sources, else null (manage list)
+function renderJobSources() {
+  const w = jobSrcFor, list = jobSrcList.filter((p) => p.name);
+  $('jobSourceTitle').textContent = w ? `JOB SOURCES FOR ${w.name.toUpperCase()}` : 'JOB SOURCES';
+  $('jobSourceSave').hidden = !w;
   const boxes = [], pend = pendingProps().filter((n) => !list.some((p) => p.name === n && p.status === 'approved'));
-  $('provList').replaceChildren(...(pend.length ? [h('p', 'warn', `${pend.length} waiting for approval: ${pend.join(', ')} (see the cards above the chat)`)] : []), ...(list.length ? list.map((p) => {
+  $('jobSourceList').replaceChildren(...(pend.length ? [h('p', 'warn', `${pend.length} waiting for approval: ${pend.join(', ')} (see the cards above the chat)`)] : []), ...(list.length ? list.map((p) => {
     const row = h('div'), info = h('span', 'pi', p.name, h('small', '', [p.status, p.description, p.error].filter(Boolean).join(' · ')));
-    if (p.screenshot) { const t = h('img', 'pthumb'); t.alt = `${p.name} screenshot`; t.loading = 'lazy'; t.src = `/providers/screenshot?name=${encodeURIComponent(p.name)}&v=${p.hash ?? ''}`; t.onerror = () => t.remove(); row.append(t); }
+    if (p.screenshot) { const t = h('img', 'pthumb'); t.alt = `${p.name} screenshot`; t.loading = 'lazy'; t.src = `/job-sources/screenshot?name=${encodeURIComponent(p.name)}&v=${p.hash ?? ''}`; t.onerror = () => t.remove(); row.append(t); }
     if (w) {
-      const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: provSel.get(p.name) ?? (!w.providers?.length || w.providers.includes(p.name)), disabled: p.status !== 'approved' });
-      c.dataset.name = p.name; c.onchange = () => provSel.set(p.name, c.checked); boxes.push(c);
+      const c = Object.assign(document.createElement('input'), { type: 'checkbox', checked: jobSrcSel.get(p.name) ?? (!w.jobSources?.length || w.jobSources.includes(p.name)), disabled: p.status !== 'approved' });
+      c.dataset.name = p.name; c.onchange = () => jobSrcSel.set(p.name, c.checked); boxes.push(c);
       row.append(h('label', '', c, info));
     } else {
       row.append(info);
       if (p.status === 'not-approved' || p.status === 'changed') {
         const b = h('button', '', p.status === 'changed' ? 'APPROVE AGAIN' : 'APPROVE'); b.type = 'button';
-        const view = h('pre'); view.hidden = !provSeen.has(p.hash);
+        const view = h('pre'); view.hidden = !jobSrcSeen.has(p.hash);
         const show = h('button', '', 'FILES'); show.type = 'button';
-        const load = async () => { const ok = await loadProvFiles(p.name, p.hash, view); b.disabled = !ok; if (ok) provSeen.set(p.hash, true); };
+        const load = async () => { const ok = await loadJobSourceFiles(p.name, p.hash, view); b.disabled = !ok; if (ok) jobSrcSeen.set(p.hash, true); };
         show.onclick = load; b.disabled = true; b.title = 'Approve is enabled once the files are shown'; load(); // the files load by themselves: a disabled button with no visible reason looked like a dead click
-        b.onclick = async () => { if (await post('/providers/approve', { name: p.name, hash: p.hash })) { await loadProviders(); refreshTabs(); } };
+        b.onclick = async () => { if (await post('/job-sources/approve', { name: p.name, hash: p.hash })) { await loadJobSources(); refreshTabs(); } };
         row.append(show, b, view);
       }
     }
-    const det = h('button', 'pdet', 'DETAILS'); det.type = 'button'; det.title = 'Show the manifest and approval state (read-only)'; det.dataset.name = p.name; det.onclick = () => showProvDetails(p.name);
+    const det = h('button', 'pdet', 'DETAILS'); det.type = 'button'; det.title = 'Show the manifest and approval state (read-only)'; det.dataset.name = p.name; det.onclick = () => showJobSourceDetails(p.name);
     row.append(det);
     return row;
-  }) : [h('p', '', 'No providers yet.')]));
-  $('provSave').onclick = async (ev) => {
+  }) : [h('p', '', 'No job sources yet.')]));
+  $('jobSourceSave').onclick = async (ev) => {
     ev.preventDefault();
     const on = boxes.filter((c) => c.checked && !c.disabled).map((c) => c.dataset.name);
-    if (!on.length) return toast('Pick at least one provider');
-    if (await post('/workspaces/providers', { ws: w.id, providers: on.length === boxes.filter((c) => !c.disabled).length ? [] : on })) { $('providers').close(); refreshTabs(); }
+    if (!on.length) return toast('Pick at least one job source');
+    if (await post('/workspaces/job-sources', { ws: w.id, jobSources: on.length === boxes.filter((c) => !c.disabled).length ? [] : on })) { $('job-sources').close(); refreshTabs(); }
   };
 }
 function shotLink(name, v) {
-  const a = h('a'), img = h('img'); a.href = `/providers/screenshot?name=${encodeURIComponent(name)}&v=${v ?? ''}`; a.target = '_blank'; a.rel = 'noopener';
+  const a = h('a'), img = h('img'); a.href = `/job-sources/screenshot?name=${encodeURIComponent(name)}&v=${v ?? ''}`; a.target = '_blank'; a.rel = 'noopener';
   img.alt = `${name} screenshot`; img.src = a.href; a.append(img); return a;
 }
-// Read-only details of one provider: manifest (env values masked by the server), files, approval state and hashes.
-async function showProvDetails(name) {
-  $('pdTitle').textContent = `PROVIDER ${name}`; $('pdBody').replaceChildren(h('p', '', 'Loading…'));
-  if (!$('provDetails').open) $('provDetails').showModal();
+// Read-only details of one source: manifest (env values masked by the server), files, approval state and hashes.
+async function showJobSourceDetails(name) {
+  $('pdTitle').textContent = `JOB SOURCE ${name}`; $('pdBody').replaceChildren(h('p', '', 'Loading…'));
+  if (!$('jobSourceDetails').open) $('jobSourceDetails').showModal();
   try {
-    const r = await fetch(`/providers/details?name=${encodeURIComponent(name)}`);
+    const r = await fetch(`/job-sources/details?name=${encodeURIComponent(name)}`);
     if (!r.ok) throw new Error(await r.text() || r.statusText);
     const d = await r.json(), ST = { approved: ['Approved', 'good'], 'not-approved': ['Not approved', 'bad'], changed: ['Changed since approval, needs re-approval', 'bad'], invalid: ['Invalid', 'bad'] }[d.status] ?? [d.status, ''];
     // replaceChildren renders undefined/null/0 as text, so drop the empty slots (h() does this for its own children only)
@@ -2311,7 +2313,7 @@ async function showProvDetails(name) {
       d.docs.length && h('small', '', `Docs: ${d.docs.join(', ')}`)].filter(Boolean));
   } catch (e) { $('pdBody').replaceChildren(h('p', 'bad', `Cannot load: ${e.message}`)); }
 }
-function openProviders(w = null) { if (!$('providers').open) provSel.clear(); provFor = w; renderProviders(); if (!$('providers').open) $('providers').showModal(); loadProviders(); }
+function openJobSources(w = null) { if (!$('job-sources').open) jobSrcSel.clear(); jobSrcFor = w; renderJobSources(); if (!$('job-sources').open) $('job-sources').showModal(); loadJobSources(); }
 
 // Vertical wheel scrolls the tab strip sideways.
 $('tabs').addEventListener('wheel', (ev) => { if (!ev.deltaY) return; ev.preventDefault(); $('tabs').scrollLeft += ev.deltaY; }, { passive: false });
