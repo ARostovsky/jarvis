@@ -4,6 +4,7 @@ import { dirname, join } from 'node:path';
 import { chmodSync, linkSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { localEnvFile, loadLocalEnv } from './local-env.ts';
 import { dataDir } from './tmpguard.ts';
+import { LOCK_EXIT } from './telegram-autostart.ts';
 
 export type Cfg = {
   token: string; user: number; chat: number; jarvis: string; api: string; stateFile: string;
@@ -456,7 +457,11 @@ export function describePair(p: Paired): string {
 
 if (import.meta.main) {
   loadLocalEnv(process.env.TELEGRAM_ENV_FILE || join(dirname(localEnvFile()), 'telegram.env'));
-  const fail = (e: unknown) => { console.error(redact((e as Error).message, process.env.TELEGRAM_BOT_TOKEN || '')); process.exit(1); };
+  const fail = (e: unknown) => {
+    const msg = redact((e as Error).message, process.env.TELEGRAM_BOT_TOKEN || '');
+    console.error(msg);
+    process.exit(msg.startsWith('another telegram bridge') ? LOCK_EXIT : 1); // the server started us: it tells this apart from a real failure
+  };
   const pairing = process.argv.includes('--pair');
   try {
     const cfg = configFromEnv(process.env, pairing);

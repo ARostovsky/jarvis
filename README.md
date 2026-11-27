@@ -37,7 +37,7 @@ Also `jarvis stop|restart|status|logs`; foreground: `npm start`. Then click **NE
 - **Jobs panel.** Long jobs (CI, training, deploys) polled by small approved scripts, with no tokens per poll. [Details](docs/USAGE.md#panels-and-jobs), [contract](docs/JOB-SOURCES.md), [skill](templates/job-source/SKILL.md) and [examples](templates/job-source/examples/README.md)
 - **Voice input** (optional, off by default). Push-to-talk with a local Whisper model. [Details](docs/VOICE.md)
 - **Open items panel.** The workspace's `open-items.md` above the chat, read-only. [Details](docs/NOTES.md#open-items)
-- **Telegram** (optional, off by default). Talk to Jarvis from your phone: a topic per workspace in your private group. [Details](docs/TELEGRAM.md)
+- **Telegram** (optional, off by default). Talk to Jarvis from your phone: a topic per workspace in your private group. Set `JARVIS_TELEGRAM=1` to start it with Jarvis. [Details](docs/TELEGRAM.md)
 - **Claude health dot** (bottom left). Whether your Claude access works. [Details](docs/USAGE.md#claude-health-dot)
 - **Local only.** Listens on `127.0.0.1`, every event is on disk. [Details](docs/USAGE.md#safety)
 
@@ -55,6 +55,7 @@ All optional, set as environment variables before `jarvis` or `npm start`. Data 
 | `JARVIS_PERMISSION_MODE` | `auto` | `auto`, `acceptEdits`, `default`, ... |
 | `JARVIS_PLAYWRIGHT` | `1` | Headless browser for each agent; `headed` shows windows; `0` turns it off |
 | `JARVIS_VOICE` | unset (off) | `1` turns voice input on, `cpu` forces CPU |
+| `JARVIS_TELEGRAM` | unset (off) | `1` starts the Telegram bridge with Jarvis. See [docs/TELEGRAM.md](docs/TELEGRAM.md#start-with-jarvis) |
 | `JARVIS_VOICE_AUTOSEND` | `1` | `0` inserts the transcript into the input box instead of sending it |
 | `JARVIS_JOBS` | `1` | `0` turns off the Jobs panel, its tools and prompt text |
 | `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |

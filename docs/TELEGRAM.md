@@ -1,6 +1,6 @@
 # Jarvis: Telegram bridge
 
-This file is the one place for everything about the Telegram bridge that you need as a user (off by default): what it does, how to set it up, every setting, how it behaves, what it protects and where it stops. For the design, invariants and code map see [Telegram bridge](ARCHITECTURE.md#telegram-bridge) in the technical documentation.
+This file is the one place for everything about the Telegram bridge that you need as a user (off by default, turned on with `JARVIS_TELEGRAM`): what it does, how to set it up, every setting, how it behaves, what it protects and where it stops. For the design, invariants and code map see [Telegram bridge](ARCHITECTURE.md#telegram-bridge) in the technical documentation.
 
 ## Contents
 
@@ -14,7 +14,7 @@ This file is the one place for everything about the Telegram bridge that you nee
 
 ## What it does
 
-Talk to Jarvis from your phone. The bridge is a separate process (`npm run telegram`) that connects a private Telegram group to your local Jarvis:
+Talk to Jarvis from your phone. The bridge is a separate process (`npm run telegram`, or started by Jarvis with `JARVIS_TELEGRAM=1`) that connects a private Telegram group to your local Jarvis:
 
 - Every workspace gets its own **topic** in a private forum supergroup (a group with Topics enabled).
 - Jarvis's replies (the text of the arbiter) go to the topic of their workspace.
@@ -42,7 +42,15 @@ You need a Telegram account and a running Jarvis.
    The bridge does not check the file mode; `600` is up to you.
 4. **Find the ids.** Run `npm run telegram -- --pair`. It waits for one message the bot sees: write a message in the group (any topic). If several messages wait, it takes the newest one, a message from a supergroup first. It prints the chat id, the chat type and title, and your sender id with name and username. It forwards nothing and exits. It warns if the chat is not a supergroup or Topics is off in it (turn Topics on, write again and run `--pair` again), if you wrote in a private chat with the bot (write in the group instead) or as an anonymous admin (turn off "remain anonymous" and write again).
 5. **Add the ids** to the same file as `TELEGRAM_CHAT_ID=<chat id>` and `TELEGRAM_ALLOWED_USER=<sender id>`. Without both the bridge does not start.
-6. **Start it** with Jarvis running: `npm run telegram`. Stop it with Ctrl-C.
+6. **Start it.** Either run `npm run telegram` next to a running Jarvis (stop it with Ctrl-C), or let Jarvis start it (see [Start with Jarvis](#start-with-jarvis)).
+
+### Start with Jarvis
+
+Jarvis starts the bridge itself when you ask for it, like voice input:
+
+- Set `JARVIS_TELEGRAM=1` in the environment or as a line in the Jarvis env file (`~/.config/jarvis/env`). Any non-empty value turns it on, like `JARVIS_VOICE`; unset means off. A variable in the environment wins over the file. `JARVIS_TELEGRAM` in the env file applies to every Jarvis instance started with that file, so a second instance on another `PORT` or data dir starts its own bridge; that bridge talks to its own Jarvis via `PORT`.
+- The bridge runs as a child process with the same settings as `npm run telegram` (`telegram.env`) and stops when Jarvis stops. Its log lines appear in the Jarvis log with the prefix `telegram:`.
+- If it cannot start (no token or ids, 401, wrong group), Jarvis logs one line with the reason and keeps running; the bridge is not restarted. If a bridge already runs on the same data dir, Jarvis tries again 3 times, 2 s apart (after `jarvis restart` the old bridge can still hold its lock for a few seconds), and then logs that and starts no second one.
 
 The first start makes a topic for each workspace. Write in a topic and look for the 👀.
 
@@ -56,6 +64,7 @@ All settings are environment variables. The bridge reads `telegram.env` from the
 | `TELEGRAM_ALLOWED_USER` | none, required (not for `--pair`) | Your numeric Telegram user id. Only this user is obeyed. |
 | `TELEGRAM_CHAT_ID` | none, required (not for `--pair`) | Numeric id of the group, usually negative. Only this chat is served. |
 | `TELEGRAM_BACKFILL` | `10` | How many of the last messages of a workspace the bridge sends when it sees that workspace for the first time: a number, `0` for none, or `all` for the whole history. Anything else stops the start. |
+| `JARVIS_TELEGRAM` | unset (off) | Any non-empty value, e.g. `1`, makes Jarvis start the bridge (read by Jarvis, not by the bridge). |
 | `JARVIS_URL` | `http://127.0.0.1:7777` | Where Jarvis listens. Must be `127.0.0.1`, `localhost` or `[::1]`; set it when Jarvis runs on another `PORT`. |
 | `TELEGRAM_ENV_FILE` | `telegram.env` next to the Jarvis env file | Another file to read the settings from. |
 | `JARVIS_ENV_FILE` | `$XDG_CONFIG_HOME/jarvis/env`, else `~/.config/jarvis/env` | The Jarvis env file (also read by the bridge). Its folder decides where `telegram.env` is looked for. |

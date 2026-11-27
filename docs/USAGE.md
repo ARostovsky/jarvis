@@ -156,6 +156,7 @@ All optional. Set as environment variables before `jarvis` or `npm start`:
 | `JARVIS_OPEN_ITEMS` | `1` | `0` turns off the Open items panel and its prompt text |
 | `JARVIS_JOB_SOURCES_DIR` | `$XDG_CONFIG_HOME/jarvis/job-sources` (`~/.config/...`) | Folder with job sources, one subfolder each |
 | `JARVIS_JOBS_MIN_POLL_S` | unset | Tests only: lowers the minimum poll, slow-field interval and `timeoutS` (normally 15 s, 15 min and 5 s) to this many seconds |
+| `JARVIS_TELEGRAM` | unset (off) | Any non-empty value, e.g. `1`, starts the Telegram bridge with Jarvis; off by default. See [TELEGRAM.md](TELEGRAM.md#start-with-jarvis) |
 | `JARVIS_VOICE`, `JARVIS_VOICE_*` | unset (off) | Voice input and its tuning. All variables are in [VOICE.md](VOICE.md#configuration) |
 
 Data lives in `~/.local/share/jarvis/` (or `$XDG_DATA_HOME/jarvis`), never in this repo.
