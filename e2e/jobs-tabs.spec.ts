@@ -87,3 +87,58 @@ test('one provider shows no tab bar', async ({ page }) => {
   await expect(jobRow(page, p.name, 's1')).toBeVisible();
   await expect(jobsBlock(page).getByRole('tablist')).toHaveCount(0);
 });
+
+test('tabs reorder by drag and Alt+Arrow, the order survives a reload, a click still selects, a new provider goes last', async ({ page }) => {
+  const a = await jobsWorkspace(page);
+  const b = fakeProvider();
+  await b.approve(page);
+  a.set('a1', { state: 'running' }); b.set('b1', { state: 'running' });
+  await watchJobs(page, a.ws, a.name, ['a1']);
+  await watchJobs(page, a.ws, b.name, ['b1']);
+  const tabs = jobsBlock(page).getByRole('tab');
+  const order = async () => (await tabs.allTextContents()).map((t) => [a.name, b.name].find((n) => t.startsWith(n)));
+  const first = [a.name, b.name].sort()[0], second = first === a.name ? b.name : a.name;
+  expect(await order()).toEqual([first, second]);
+
+  // a drag moves the tab but keeps the open one open
+  await expect(tab(page, first)).toHaveAttribute('aria-selected', 'true');
+  await tab(page, second).hover();
+  await page.mouse.down();
+  await tab(page, first).hover({ position: { x: 4, y: 5 } });
+  await tab(page, first).hover({ position: { x: 6, y: 5 } }); // dragover needs a second move
+  await expect(tab(page, first)).toHaveClass(/drop-before/);
+  if (process.env.JT_SHOT) await page.screenshot({ path: process.env.JT_SHOT });
+  await page.mouse.up();
+  await expect.poll(order).toEqual([second, first]);
+  await expect(tab(page, first)).toHaveAttribute('aria-selected', 'true');
+  await expect(jobsBlock(page).locator('.drop-before, .drop-after')).toHaveCount(0);
+
+  await page.reload();
+  expect(await order()).toEqual([second, first]);
+
+  // Alt+Arrow moves the focused tab, plain arrows still select; an edge does nothing
+  await tab(page, second).focus();
+  await page.keyboard.press('Alt+ArrowRight');
+  await expect.poll(order).toEqual([first, second]);
+  await expect(tab(page, second)).toBeFocused();
+  await expect(tab(page, first)).toHaveAttribute('aria-selected', 'true');
+  await page.keyboard.press('Alt+ArrowRight');
+  expect(await order()).toEqual([first, second]);
+  await page.keyboard.press('Alt+ArrowLeft');
+  await expect.poll(order).toEqual([second, first]);
+  await page.keyboard.press('ArrowRight');
+  await expect(tab(page, first)).toHaveAttribute('aria-selected', 'true');
+
+  // a click without movement selects
+  await tab(page, second).click();
+  await expect(tab(page, second)).toHaveAttribute('aria-selected', 'true');
+
+  // a new provider goes last
+  const c = fakeProvider();
+  await c.approve(page);
+  c.set('c1', { state: 'running' });
+  await watchJobs(page, a.ws, c.name, ['c1']);
+  await expect(tabs).toHaveCount(3);
+  expect((await tabs.last().textContent())!.startsWith(c.name)).toBe(true);
+  expect((await tabs.first().textContent())!.startsWith(second)).toBe(true);
+});
