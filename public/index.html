@@ -264,6 +264,7 @@
   .jt:focus-visible { outline: 1px solid var(--cyan); outline-offset: -2px; }
   .jt .jt-f { color: var(--red); } .jt .jt-r { color: var(--cyan); } .jt .jt-f, .jt .jt-r { font: 400 11px 'JetBrains Mono', monospace; letter-spacing: 0; }
   .jt.chg { color: var(--amber); border-bottom-color: var(--amber); box-shadow: 0 0 10px rgba(255, 181, 71, .35); } /* a state changed in this provider since its tab was open: lit until opened */
+  .jt.drop-before { box-shadow: inset 3px 0 0 var(--cyan); } .jt.drop-after { box-shadow: inset -3px 0 0 var(--cyan); }
   .jt.chg .jt-n::after { content: ' ●'; font-size: 8px; vertical-align: 2px; }
   .pn-list { list-style: none; margin: 0; padding: 4px 12px 6px; }
   .jr, .ci { --e: var(--gray); position: relative; padding: 3px 4px 3px 23px; margin-bottom: 6px; line-height: 1.35; font: 400 14px/1.35 Rajdhani, sans-serif; }
@@ -434,6 +435,7 @@ const el = (tag, attrs = {}, parent) => {
   return e;
 };
 // localStorage can be blocked or hold junk: reads fall back to {}, failed writes are ignored.
+const arr = (x) => (Array.isArray(x) ? x : []); // a hand-edited or corrupt localStorage value must not break the render
 const loadJson = (key) => { try { return JSON.parse(localStorage.getItem(key)) ?? {}; } catch { return {}; } };
 const saveJson = (key, v) => { try { localStorage.setItem(key, JSON.stringify(v)); } catch {} };
 const short = (s, n) => (s = String(s ?? '').replace(/\s+/g, ' ')).length > n ? s.slice(0, n) + '…' : s;
@@ -1933,13 +1935,14 @@ const PANEL_KINDS = {
       if (!status && !replaying && rows.length) notes.push(h('div', 'pn-note', 'Not checked since restart'));
       const keys = () => ordered.map(jobKey), ordered = jobOrder(rows, st, ctx.ui.order);
       // One sub-tab per provider when there are several. Rows are only filtered: the order, the drop keys and CLEAR DONE stay panel-wide.
-      const provs = [...new Set(rows.map((r) => r.provider))].sort(), tabbed = provs.length > 1, sel = provs.includes(ctx.ui.tab) ? ctx.ui.tab : provs[0];
+      const names = [...new Set(rows.map((r) => r.provider))].sort(), saved = arr(ctx.ui.tabOrder).filter((n) => names.includes(n)), provs = [...saved, ...names.filter((n) => !saved.includes(n))], tabbed = provs.length > 1, sel = provs.includes(ctx.ui.tab) ? ctx.ui.tab : provs[0];
       let shown = ordered, host = el;
       const last = (n) => Math.max(0, ...rows.filter((r) => r.provider === n).map((r) => Date.parse(r.changedAt) || 0)); // newest server-stamped state change of that provider (no local clock: it would beat `seen` on every reload)
       const seen = Object.fromEntries(provs.filter((n) => ctx.ui.seen?.[n] !== undefined).map((n) => [n, ctx.ui.seen[n]])); // providers that are gone drop out
       for (const n of provs) if (seen[n] === undefined || n === sel) seen[n] = last(n); // first sight and the open tab count as seen, also in the single-provider view
       const patch = {};
       if (provs.length && JSON.stringify(seen) !== JSON.stringify(ctx.ui.seen ?? {})) patch.seen = seen;
+      if (ctx.ui.tabOrder && JSON.stringify(provs) !== JSON.stringify(arr(ctx.ui.tabOrder))) patch.tabOrder = provs; // vanished providers drop out, new ones sit at the end
       if (tabbed && sel !== ctx.ui.tab) patch.tab = sel; // the saved tab is gone: keep what is shown
       if (Object.keys(patch).length) ctx.setUi(patch);
       if (tabbed) {
@@ -1953,7 +1956,30 @@ const PANEL_KINDS = {
           b.setAttribute('role', 'tab'); b.setAttribute('aria-selected', String(n === sel)); b.tabIndex = n === sel ? 0 : -1;
           b.setAttribute('aria-label', `${provLabel(n)}${nf ? `, ${nf} failed` : ''}${nr ? `, ${nr} running` : ''}${hot ? ', changed' : ''}`);
           b.onclick = () => pick(n);
+          const move = (ks, from, to) => { const o = ks.filter((k) => k !== from); o.splice(to, 0, from); return o; };
+          b.draggable = true; // a drag is no click: the open tab stays as it is
+          b.ondragstart = (ev) => { pdrag = { key: n, panelId: ctx.panelId, tab: true }; ev.dataTransfer.setData('text/plain', n); ev.dataTransfer.effectAllowed = 'move'; };
+          b.ondragover = (ev) => {
+            if (!pdrag?.tab || pdrag.panelId !== ctx.panelId || pdrag.key === n) return;
+            ev.preventDefault(); bar.querySelectorAll('.drop-before, .drop-after').forEach((x) => x.classList.remove('drop-before', 'drop-after'));
+            b.classList.add(ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2 ? 'drop-after' : 'drop-before');
+          };
+          b.ondrop = (ev) => {
+            ev.preventDefault();
+            if (!pdrag?.tab || pdrag.key === n) return;
+            const from = pdrag.key, o = provs.filter((k) => k !== from), after = ev.clientX > b.getBoundingClientRect().left + b.offsetWidth / 2;
+            o.splice(o.indexOf(n) + (after ? 1 : 0), 0, from);
+            pdrag = null; ctx.setUi({ tabOrder: o }); ctx.rerender();
+          };
+          b.ondragend = () => { pdrag = null; ctx.rerender(); };
           b.onkeydown = (ev) => {
+            if (ev.altKey && (ev.key === 'ArrowLeft' || ev.key === 'ArrowRight')) { // Alt+Arrow moves the tab, focus stays on it
+              ev.preventDefault();
+              const i = provs.indexOf(n), j = i + (ev.key === 'ArrowLeft' ? -1 : 1);
+              if (j < 0 || j >= provs.length) return;
+              ctx.setUi({ tabOrder: move(provs, n, j) }); ctx.rerender(); el.querySelector(`[data-tab="${CSS.escape(n)}"]`)?.focus();
+              return;
+            }
             const i = provs.indexOf(n), j = { ArrowRight: (i + 1) % provs.length, ArrowLeft: (i + provs.length - 1) % provs.length, Home: 0, End: provs.length - 1 }[ev.key];
             if (j === undefined) return;
             ev.preventDefault(); pick(provs[j]); el.querySelector(`[data-tab="${CSS.escape(provs[j])}"]`)?.focus(); // the redraw moved focus off the tab that was pressed: put it on the new one
@@ -1973,13 +1999,13 @@ const PANEL_KINDS = {
         if (!rowSeen.get(key)?.shown) { rowSeen.get(key).shown = true; if (!replaying && rowSeen.get(key).fresh) li.classList.add('new'); }
         li.ondragstart = (ev) => { if (ev.target !== li) return; pdrag = { key, panelId: ctx.panelId }; ev.dataTransfer.setData('text/plain', key); ev.dataTransfer.effectAllowed = 'move'; };
         li.ondragover = (ev) => {
-          if (!pdrag || pdrag.panelId !== ctx.panelId || pdrag.key === key) return;
+          if (!pdrag || pdrag.tab || pdrag.panelId !== ctx.panelId || pdrag.key === key) return;
           ev.preventDefault(); clear();
           li.classList.add(ev.clientY > li.getBoundingClientRect().top + li.offsetHeight / 2 ? 'drop-after' : 'drop-before');
         };
         li.ondrop = (ev) => {
           ev.preventDefault();
-          if (!pdrag || pdrag.key === key) return;
+          if (!pdrag || pdrag.tab || pdrag.key === key) return;
           const from = pdrag.key, ks = keys().filter((k) => k !== from), after = ev.clientY > li.getBoundingClientRect().top + li.offsetHeight / 2;
           ks.splice(ks.indexOf(key) + (after ? 1 : 0), 0, from);
           for (const k of [...hotRows]) if (k.startsWith(`${from}@`)) hotRows.delete(k); // only the dragged row's highlight ends
