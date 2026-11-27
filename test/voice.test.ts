@@ -359,7 +359,8 @@ const deadPid = () => { const r = spawnSync(process.execPath, ['-e', '']); retur
 
 test('mute: a marker of a running Jarvis, or of a sink that is no longer muted, is not acted on', () => {
   const { mk, marker, muted } = mutedRec();
-  writeFileSync(marker, String(process.pid)); // alive
+  const start = readFileSync(`/proc/${process.pid}/stat`, 'utf8'); // alive: this process, with its start time
+  writeFileSync(marker, JSON.stringify({ sink: '@DEFAULT_AUDIO_SINK@', holders: [{ id: 'x', pid: process.pid, start: start.slice(start.lastIndexOf(')') + 2).split(' ')[19] }] }));
   writeFileSync(join(marker, '..', 'sink'), '1');
   mk().recover();
   assert.equal(muted(), true);

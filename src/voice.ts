@@ -3,7 +3,7 @@
 // Sidecar protocol: stdin = frames of 4-byte big-endian length N + N bytes PCM s16le 16 kHz mono; stdout = one JSON line per frame, {"text"} or {"error"}; stderr = logs; EOF on stdin = exit.
 import { spawn, execFile, execFileSync, type ChildProcess } from 'node:child_process';
 import { resolve, delimiter, join } from 'node:path';
-import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, mkdirSync, writeFileSync, renameSync, rmSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 
@@ -102,43 +102,166 @@ const live = new Set<ChildProcess>();
 process.on('exit', () => live.forEach((c) => c.kill('SIGKILL')));
 
 // Mutes the default output (sink) while a recording runs, so speakers do not bleed into the microphone. cmd is `wpctl` (JARVIS_VOICE_MUTE_CMD replaces it in tests).
-// engage()/restore() are counted: the sink is unmuted only when the last active recording has released it, so a recording that starts while the previous child is still closing keeps it muted.
-// A sink that was muted before the first engage() stays muted. A failed unmute stays pending (retried every 2 s up to 5 times, by the next restore, and by the exit and signal hooks), and `marker` (a file) records that Jarvis muted the sink, so the next start can undo it after a crash or SIGKILL.
+// The sink is resolved to its numeric id and node.name once, at the first mute (`wpctl inspect @DEFAULT_AUDIO_SINK@`), and every later call targets that id: a default sink that changes mid-recording (headset reconnect) must not make the unmute hit another sink. If inspect fails, nothing is muted (one log line): muting the symbolic default could not be undone reliably.
+// Ownership lives in `marker` (a JSON file `{sink, name, holders: [{id, pid, start}]}`), shared by every Jarvis process and updated under a lock directory with write-temp + rename. Each muter is one holder, from its first engage() to its last restore() (engage/restore are counted inside a muter). The first holder mutes, the last one unmutes the sink the marker names. A holder whose pid is dead, whose process start time differs (recycled pid) or that has no start time (the old pid-only marker) is dropped.
+// A sink that was already muted when no holder existed is the user's: nothing is written and it is never unmuted. A marker without live holders is a mute Jarvis left behind: engage() and recover() (startup) undo it. If its id is gone or belongs to another node, the sink with the same node.name (a headset that came back with a new id) is unmuted instead; a node that is really gone is dropped with a log line. A failed unmute (wpctl error, timeout, or an inspect that cannot say) keeps the marker and is retried every 2 s up to 5 times, by the next engage/recover and by the exit and signal hooks; the last failure logs `voice: cannot unmute sink <id>`.
+// Blocking: wpctl runs through execFileSync (CALL_MS each, normally ~20 ms), at most six calls inside the lock, so a hanging wpctl can stall the server loop for seconds. The lock itself is waited for without blocking (a timer, 25 ms steps, LOCK_WAIT_MS) except in recover() and the exit hooks, which block for it. Known by design: a mute the user sets during a recording is undone at its end; if the marker file is deleted while two Jarvis record, the first to finish unmutes.
 export const MUTE = ['wpctl'];
 const SINK = '@DEFAULT_AUDIO_SINK@';
-export function createMuter(cmd: string[] = MUTE, marker?: string) {
-  let n = 0, ours = false, warned = false, retry: NodeJS.Timeout | undefined, tries = 0;
-  const run = (...a: string[]) => execFileSync(cmd[0], [...cmd.slice(1), ...a], { encoding: 'utf8', timeout: 2_000, stdio: ['ignore', 'pipe', 'ignore'] });
+const CALL_MS = 1_500, LOCK_WAIT_MS = 15_000, LOCK_STALE_MS = 30_000; // the wait exceeds six calls in a row (9 s); a lock older than LOCK_STALE_MS is broken
+type Holder = { id: string; pid: number; start?: string };
+type MuteState = { sink: string; name?: string; holders: Holder[] };
+const startOf = (pid: number) => { try { const s = readFileSync(`/proc/${pid}/stat`, 'utf8'); return s.slice(s.lastIndexOf(')') + 2).split(' ')[19]; } catch { return undefined; } }; // field 22 (starttime); comm may hold spaces, so cut after the last ')'
+const HAVE_PROC = startOf(process.pid) !== undefined;
+const holderAlive = (h: Holder) => {
+  try { process.kill(h.pid, 0); } catch (e) { if ((e as NodeJS.ErrnoException).code !== 'EPERM') return false; }
+  if (!HAVE_PROC) return true; // no start times here: the pid is all there is
+  const s = startOf(h.pid);
+  return !!h.start && !!s && s === h.start; // no start time (old marker) or another one (recycled pid): not the holder
+};
+const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+type Lock = { dir: string; token: string };
+const gone = (dir: string) => { const g = `${dir}.gone.${randomUUID()}`; try { renameSync(dir, g); rmSync(g, { recursive: true, force: true }); } catch {} }; // rename first: only one process wins it
+// The lock is the directory `<file>.lock` holding `owner` ({token, pid, start}). undefined: held by a live owner. A dead owner, or a lock older than LOCK_STALE_MS, is broken.
+const tryLock = (file: string): Lock | undefined => {
+  const dir = `${file}.lock`;
+  for (let attempt = 0; ; attempt++) {
+    try { mkdirSync(dir); break; } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== 'EEXIST') return { dir: '', token: '' }; // no data folder to lock in: run unlocked
+      let stale = false;
+      try { const o = JSON.parse(readFileSync(join(dir, 'owner'), 'utf8')); stale = !holderAlive({ id: '', pid: o.pid, start: o.start }); } catch {}
+      try { stale ||= Date.now() - statSync(dir).mtimeMs > LOCK_STALE_MS; } catch { if (attempt) return undefined; continue; } // the lock vanished: take it
+      if (!stale || attempt) return undefined;
+      gone(dir); // broken: take it at once
+    }
+  }
+  const token = `${process.pid}:${randomUUID()}`;
+  try { writeFileSync(join(dir, 'owner'), JSON.stringify({ token, pid: process.pid, start: startOf(process.pid) })); } catch {}
+  return { dir, token };
+};
+const unlock = (l: Lock) => { // only the owner releases: a lock that was broken as stale and taken by another stays
+  if (!l.dir) return;
+  try { if (JSON.parse(readFileSync(join(l.dir, 'owner'), 'utf8')).token === l.token) gone(l.dir); } catch {}
+};
+// Blocks until the lock is ours (after LOCK_WAIT_MS it runs unlocked rather than never unmute).
+const withLock = <T>(file: string, f: () => T, waitMs = LOCK_WAIT_MS): T => {
+  const t0 = Date.now(); let l: Lock | undefined;
+  while (!(l = tryLock(file))) { if (Date.now() - t0 > waitMs) return f(); sleepSync(20); }
+  try { return f(); } finally { unlock(l); }
+};
+
+export function createMuter(cmd: string[] = MUTE, marker?: string, lockWaitMs = LOCK_WAIT_MS) { // lockWaitMs: tests only
+  const me: Holder = { id: randomUUID(), pid: process.pid, start: startOf(process.pid) };
+  // n: active recordings; phase: whether the current engage has been carried out; mine/mineName: the sink this muter must still unmute
+  let n = 0, phase: 'idle' | 'on' = 'idle', mine: string | undefined, mineName: string | undefined, warned = false, noSink = false, retry: NodeJS.Timeout | undefined, tries = 0, waiting: NodeJS.Timeout | undefined, since = 0, mem: MuteState | undefined, unmuted = false;
+  const run = (...a: string[]) => execFileSync(cmd[0], [...cmd.slice(1), ...a], { encoding: 'utf8', timeout: CALL_MS, stdio: ['ignore', 'pipe', 'pipe'] });
   const warn = (e: unknown) => { if (!warned) { warned = true; console.error(`voice: cannot change the output mute: ${(e as Error).message.split('\n')[0]}`); } };
-  const unmute = () => {
-    if (!ours) return;
-    clearTimeout(retry);
-    try { run('set-mute', SINK, '0'); ours = false; tries = 0; if (marker) rmSync(marker, { force: true }); }
-    catch (e) { warn(e); if (n === 0 && ++tries <= 5) { retry = setTimeout(unmute, 2_000); retry.unref(); } } // a failed unmute is retried every 2 s, five times, not only at the next recording
+  const load = (): MuteState | undefined => {
+    if (!marker) return mem;
+    let t: string; try { t = readFileSync(marker, 'utf8'); } catch { return undefined; }
+    try { const j = JSON.parse(t); if (j && typeof j.sink === 'string' && Array.isArray(j.holders)) return j; } catch {}
+    const pid = Number(t); // the old format: just the pid of the Jarvis that muted the default sink (no start time: never a live holder)
+    return { sink: SINK, holders: Number.isInteger(pid) && pid > 0 ? [{ id: 'legacy', pid }] : [] };
   };
+  const save = (s?: MuteState) => {
+    if (!marker) { mem = s; return; }
+    if (!s) { rmSync(marker, { force: true }); return; }
+    const tmp = `${marker}.${process.pid}.tmp`;
+    writeFileSync(tmp, JSON.stringify(s)); renameSync(tmp, marker);
+  };
+  const live = (s: MuteState): MuteState => ({ ...s, holders: s.holders.filter((h) => h.id === me.id || holderAlive(h)) });
+  const muted = (sink: string) => /\[MUTED\]/.test(run('get-volume', sink));
+  // The node behind target; 'gone' only when wpctl says so ("not found", real wpctl: stderr and exit 3). A timeout or any other failure throws: it says nothing about the node.
+  const inspect = (target: string): { id: string; name?: string } | 'gone' => {
+    let out: string;
+    try { out = run('inspect', target); } catch (e) { if (/not found/i.test(String((e as { stderr?: unknown }).stderr ?? ''))) return 'gone'; throw e; }
+    const id = /^id (\d+)/.exec(out)?.[1];
+    if (!id) throw new Error('unexpected output of wpctl inspect');
+    return { id, name: /node\.name = "([^"]*)"/.exec(out)?.[1] };
+  };
+  const findByName = (name: string) => { // a sink by node.name: wpctl status lists the sink ids, inspect gives each one's name
+    const sinks = /Sinks:\n([\s\S]*?)(?:\n\s*[├└]─|$)/.exec(run('status'))?.[1] ?? '';
+    for (const m of sinks.matchAll(/^\s*[│ ]*\*?\s*(\d+)\./gm)) { try { const i = inspect(m[1]); if (i !== 'gone' && i.name === name) return i.id; } catch {} }
+    return undefined;
+  };
+  // Unmutes s.sink (nobody holds it) and drops the marker. check: first look whether it is still muted (a marker left behind: the user may have unmuted it since). False when it could not be done; the marker then stays.
+  const undo = (s: MuteState, check: boolean) => {
+    try {
+      let target = s.sink;
+      if (s.sink !== SINK) {
+        const i = inspect(s.sink);
+        if (i === 'gone' || (s.name && i.name && i.name !== s.name)) { // the id is gone or now another node: follow the name
+          const alt = s.name ? findByName(s.name) : undefined;
+          if (!alt) { console.error(`voice: sink ${s.sink} is gone, nothing to unmute`); save(undefined); return true; }
+          target = alt;
+        }
+      }
+      if (!check || muted(target)) { run('set-mute', target, '0'); unmuted = true; }
+      save(undefined); return true;
+    } catch (e) { warn(e); return false; }
+  };
+  const engageNow = () => {
+    phase = 'on';
+    try {
+      let s = load();
+      if (s) {
+        s = live(s);
+        if (!s.holders.length) { if (undo(s, true)) { s = undefined; mine = undefined; } } // a mute a dead Jarvis left: undo it, then record normally
+        else { save({ ...s, holders: [...s.holders.filter((h) => h.id !== me.id), me] }); mine = s.sink; mineName = s.name; return; } // somebody else holds it: join, nothing to mute
+      }
+      if (s) { save({ ...s, holders: [me] }); mine = s.sink; mineName = s.name; run('set-mute', s.sink, '1'); return; } // the leftover could not be undone: adopt it, our release retries
+      let i; try { i = inspect(SINK); } catch (e) { warn(e); }
+      if (!i || i === 'gone') { if (!noSink) { noSink = true; console.error('voice: cannot find the default output sink, it is not muted while recording'); } return; }
+      if (muted(i.id)) return; // the user muted it: hold nothing, leave it alone afterwards
+      mine = i.id; mineName = i.name; // set before the call: a half-done mute must still be restored
+      try { save({ sink: i.id, name: i.name, holders: [me] }); } catch {} // best effort: the mute itself matters more
+      run('set-mute', i.id, '1');
+    } catch (e) { warn(e); }
+  };
+  // Gives up this muter's hold; the last holder unmutes. Safe to repeat: it is also the retry.
+  const dropNow = () => {
+    phase = 'idle'; clearTimeout(retry);
+    if (!mine) return;
+    const sink = mine;
+    const s = load() ?? { sink, name: mineName, holders: [me] };
+    const rest = live({ ...s, holders: s.holders.filter((h) => h.id !== me.id) });
+    let ok = true;
+    if (rest.holders.length) { try { save(rest); } catch {} } // another Jarvis still records: it unmutes
+    else if (!undo(rest, false)) { ok = false; try { save(rest); } catch {} } // keep the marker, without us: the next engage or recover (any Jarvis) sees a mute nobody holds
+    if (ok) { mine = undefined; tries = 0; return; }
+    if (n === 0 && ++tries <= 5) { retry = setTimeout(pump, 2_000); retry.unref(); }
+    else console.error(`voice: cannot unmute sink ${sink}`);
+  };
+  // Brings the sink in line with n (read when it runs, so an engage and its restore that queue behind a busy lock cancel out).
+  const reconcile = () => { if (n > 0 && phase === 'idle') engageNow(); else if (n === 0 && (phase === 'on' || mine)) dropNow(); };
+  const pump = () => { // runs reconcile under the lock at once, or polls for the lock without blocking
+    waiting = undefined;
+    if (!marker) return reconcile();
+    const l = tryLock(marker);
+    if (l) { since = 0; try { reconcile(); } finally { unlock(l); } return; }
+    since ||= Date.now();
+    if (Date.now() - since > lockWaitMs) { since = 0; return reconcile(); } // never leave it muted for a stuck lock
+    waiting = setTimeout(pump, 25); waiting.unref();
+  };
+  const queue = () => { if (!waiting) pump(); };
   const m = {
-    engage() {
-      if (n++ > 0) return;
-      try {
-        if (!ours && /\[MUTED\]/.test(run('get-volume', SINK))) return; // the user muted it: leave it alone afterwards
-        ours = true; // set before the call: a half-done mute must still be restored
-        if (marker) try { writeFileSync(marker, String(process.pid)); } catch {} // best effort: the mute itself matters more
-        run('set-mute', SINK, '1');
-      } catch (e) { warn(e); }
+    engage() { if (n++ === 0) queue(); },
+    restore() { if (n > 0 && --n === 0) queue(); },
+    // Unconditional, for exit and signals: unmute now whatever the count is, one try, blocking for the lock.
+    restoreAll() {
+      n = 0; tries = 5; clearTimeout(waiting); waiting = undefined; clearTimeout(retry);
+      if (marker) withLock(marker, reconcile, lockWaitMs); else reconcile();
     },
-    restore() { if (n > 0 && --n === 0) unmute(); },
-    // Unconditional, for exit and signals: unmute now whatever the count is.
-    restoreAll() { n = 0; unmute(); },
-    // Startup safety net: a marker left by a Jarvis that died while muting means the sink is muted by us, not by the user.
+    // Startup safety net: a marker with no live holder is a mute a dead Jarvis left. Undo only that.
     recover() {
-      if (!marker || !existsSync(marker)) return;
-      const alive = (() => { try { process.kill(Number(readFileSync(marker, 'utf8')), 0); return true; } catch (e) { return (e as NodeJS.ErrnoException).code === 'EPERM'; } })();
-      if (alive) return; // another Jarvis is running and owns the mute
-      let muted = false;
-      try { muted = /\[MUTED\]/.test(run('get-volume', SINK)); } catch (e) { return warn(e); }
-      if (!muted) return void rmSync(marker, { force: true }); // the user unmuted it since: nothing to undo
-      ours = true; unmute();
-      if (!ours) console.error('voice: restored the output mute left by a previous run');
+      if (!marker) return;
+      withLock(marker, () => {
+        const s0 = load(); if (!s0) return;
+        const s = live(s0);
+        if (s.holders.length) return; // another Jarvis is running and owns the mute
+        unmuted = false;
+        if (undo(s, true) && unmuted) console.error('voice: restored the output mute left by a previous run');
+      });
     },
   };
   process.on('exit', m.restoreAll);
@@ -253,10 +376,10 @@ export async function initVoice(): Promise<Voice | undefined> {
   }
   const maxMs = secs('JARVIS_VOICE_MAX_S', 60);
   let muter: ReturnType<typeof createMuter> | undefined;
-  if (process.env.JARVIS_VOICE_MUTE_OUTPUT !== '0') {
-    const mc = process.env.JARVIS_VOICE_MUTE_CMD?.trim().split(/\s+/).filter(Boolean) ?? MUTE;
-    if (found(mc[0])) { muter = createMuter(mc, join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis', 'voice-muted')); muter.recover(); } else console.error(`voice: ${mc[0]} not found, the output is not muted while recording`);
-  }
+  const mc = process.env.JARVIS_VOICE_MUTE_CMD?.trim().split(/\s+/).filter(Boolean) ?? MUTE;
+  const muteOff = process.env.JARVIS_VOICE_MUTE_OUTPUT === '0'; // never mutes, but still undoes a mute an earlier run (with the mute on) left behind
+  if (found(mc[0])) { const mm = createMuter(mc, join(process.env.XDG_DATA_HOME || join(homedir(), '.local', 'share'), 'jarvis', 'voice-muted')); mm.recover(); if (!muteOff) muter = mm; }
+  else if (!muteOff) console.error(`voice: ${mc[0]} not found, the output is not muted while recording`);
   const rec = createRecorder(capture, { maxMs, leaseMs: secs('JARVIS_VOICE_LEASE_S', 4), muter });
   // an empty clip (nothing captured) is no speech, not an error
   return { maxS: maxMs / 1000, start: rec.start, cancel: rec.cancel, level: rec.level, stop: async (id) => { const pcm = await rec.stop(id); return pcm.length ? transcribe(pcm) : ''; } };
