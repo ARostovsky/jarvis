@@ -22,6 +22,8 @@ test('the New workspace dialog prefills the notes folder of the project, never o
 
   await page.fill('#wsProject', withHistory);
   await expect(page.locator('#wsNotes')).toHaveValue(notes);
+  await expect(page.locator('#notesHint')).toBeVisible();
+  await page.locator('#wsName').focus();
   if (process.env.PREFILL_SHOT) await page.locator('#newws').screenshot({ path: process.env.PREFILL_SHOT });
 
   // Switching projects keeps the prefill logic live; a hand-typed value then survives a re-pick.
@@ -31,4 +33,31 @@ test('the New workspace dialog prefills the notes folder of the project, never o
   await page.fill('#wsProject', withHistory + ' ');
   await page.fill('#wsProject', withHistory);
   await expect(page.locator('#wsNotes')).toHaveValue('/typed/by/hand');
+  await expect(page.locator('#notesHint')).toBeHidden();
+});
+
+test('the themed dropdowns work from the keyboard and long paths stay readable', async ({ page }) => {
+  await page.goto('/');
+  await page.locator('#tabs button[title="New workspace"]').click();
+  const model = page.locator('#wsModelBtn');
+  await expect(model).toHaveText('default (sonnet)');
+  await model.focus();
+  await page.keyboard.press('ArrowDown');
+  await expect(page.locator('#wsModelBtn + ul')).toBeVisible();
+  await page.keyboard.press('ArrowDown');
+  await page.keyboard.press('Enter');
+  await expect(model).toHaveText('opus');
+  await expect(page.locator('#wsModel')).toHaveValue('opus');
+  await model.press('ArrowDown');
+  await page.keyboard.press('Escape'); // closes the list only, not the dialog
+  await expect(page.locator('#wsModelBtn + ul')).toBeHidden();
+  await expect(page.locator('#newws')).toBeVisible();
+  if (process.env.OPEN_SHOT) { await page.locator('#wsEffortBtn').click(); await page.screenshot({ path: process.env.OPEN_SHOT, clip: { x: 0, y: 0, width: 1280, height: 720 } }); await page.keyboard.press('Escape'); }
+
+  const long = join(withHistory, 'a-very-long-folder-name-for-the-project', 'and-another-deep-level', 'final-segment');
+  await page.fill('#wsProject', long);
+  await page.locator('#wsName').focus();
+  await expect(page.locator('.cb:has(#wsProject) .short')).toContainText('…/');
+  await expect(page.locator('#wsProject')).toHaveAttribute('title', long);
+  if (process.env.LONG_SHOT) await page.locator('#newws').screenshot({ path: process.env.LONG_SHOT });
 });

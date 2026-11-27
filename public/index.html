@@ -180,10 +180,31 @@
   #tabs .dot.run { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
   #tabs .dot.wait { background: var(--amber); animation: blink .8s steps(2) infinite; }
   #tabs .mail { font-size: 10px; margin-left: 6px; padding: 0 5px; border-radius: 8px; background: var(--amber); color: #000; }
-  #newws label { display: block; margin: 10px 0 4px; font-size: 12px; letter-spacing: .15em; color: var(--cyan-dim); }
-  #newws input, #newws select { width: 100%; border: 1px solid var(--line); padding: 8px 10px; background: transparent; color: var(--text); font: 16px Rajdhani, sans-serif; }
-  #newws option { background: #06141f; }
-  #newws { border-color: var(--cyan); min-width: 420px; }
+  #newws { border-color: var(--cyan); width: min(480px, 92vw); overflow: visible; }
+  #newws label { display: flex; justify-content: space-between; align-items: baseline; margin: 14px 0 6px; font-size: 12px; letter-spacing: .15em; color: #5fa6c2; }
+  #newws .hint { letter-spacing: .04em; font-size: 12px; font-style: italic; color: var(--cyan-dim); text-transform: none; }
+  #newws .row { display: flex; gap: 12px; } #newws .row > div { flex: 1; min-width: 0; }
+  #newws .cb, #newws .dd { position: relative; }
+  #newws input, #newws .ddb { width: 100%; height: 40px; border: 1px solid var(--line); border-radius: 0; padding: 0 12px; background: rgba(79, 216, 255, .03); color: var(--text); font: 16px Rajdhani, sans-serif; text-align: left; margin: 0; transition: border-color .12s, background .12s; }
+  #newws .cb input { padding-right: 38px; }
+  #newws input:hover, #newws .ddb:hover { border-color: var(--cyan-dim); }
+  #newws input:focus, #newws .ddb:focus-visible, #newws .ddb[aria-expanded=true] { outline: none; border-color: var(--cyan); background: rgba(79, 216, 255, .07); box-shadow: 0 0 0 1px var(--cyan), 0 0 12px rgba(79, 216, 255, .25); }
+  #newws input::placeholder { color: #3d6e84; }
+  #newws .short { position: absolute; left: 1px; right: 38px; top: 1px; bottom: 1px; padding: 0 11px; display: none; align-items: center; background: #06141f; white-space: nowrap; pointer-events: none; }
+  #newws .cb.shortened .short { display: flex; }
+  #newws .cb:focus-within .short { display: none; }
+  #newws .ddb::after { content: ''; width: 7px; height: 7px; border: solid var(--cyan); border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-2px, -2px); transition: transform .15s; }
+  #newws .chev { position: absolute; right: 0; top: 0; width: 38px; height: 40px; border: 0; background: none; display: flex; align-items: center; justify-content: center; cursor: pointer; padding: 0; }
+  #newws .chev::before { content: ''; width: 7px; height: 7px; border: solid var(--cyan); border-width: 0 2px 2px 0; transform: rotate(45deg) translate(-2px, -2px); }
+  #newws .ddb { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  #newws .ddb::after { flex: none; }
+  #newws .ddb[aria-expanded=true]::after { transform: rotate(225deg) translate(-2px, -2px); }
+  #newws ul { position: absolute; z-index: 5; left: 0; right: 0; top: calc(100% + 4px); margin: 0; padding: 4px 0; list-style: none; max-height: 220px; overflow-y: auto; background: #06141f; border: 1px solid var(--cyan); box-shadow: 0 10px 28px rgba(0, 0, 0, .6), 0 0 14px rgba(79, 216, 255, .15); }
+  #newws ul[hidden] { display: none; }
+  #newws li { padding: 8px 12px; cursor: pointer; white-space: nowrap; border-left: 2px solid transparent; }
+  #newws li.on { background: rgba(79, 216, 255, .12); border-left-color: var(--cyan); }
+  #newws li[aria-selected=true] { color: var(--cyan); }
+  #newws li[aria-selected=true]::after { content: ' \2713'; font-size: 12px; }
   #archived { border-color: var(--cyan); min-width: 480px; }
   #archivedList div { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--line); }
   #archivedList span { flex: 1; }
@@ -343,11 +364,13 @@
   <h3 style="color:var(--cyan)">NEW WORKSPACE</h3>
   <form method="dialog" id="newwsForm">
     <label for="wsName">NAME</label><input id="wsName" required autocomplete="off">
-    <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label><input id="wsProject" list="recentProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off"><datalist id="recentProject"></datalist>
-    <label for="wsNotes">NOTES FOLDER (OPTIONAL)</label><input id="wsNotes" list="recentNotes" placeholder="/home/you/notes/something" autocomplete="off"><datalist id="recentNotes"></datalist>
-    <div style="display:flex;gap:12px">
-      <div style="flex:1"><label for="wsModel">JARVIS MODEL</label><select id="wsModel"><option value="">default (sonnet)</option><option>opus</option><option>sonnet</option><option>haiku</option></select></div>
-      <div style="flex:1"><label for="wsEffort">JARVIS EFFORT</label><select id="wsEffort"><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select></div>
+    <label for="wsProject">PROJECT FOLDER (OPTIONAL)</label>
+    <div class="cb"><input id="wsProject" placeholder="/home/you/IdeaProjects/something" autocomplete="off"><span class="short" aria-hidden="true"></span><button type="button" class="chev" tabindex="-1" aria-label="Show recent project folders"></button><ul hidden></ul><datalist id="recentProject"></datalist></div>
+    <label for="wsNotes">NOTES FOLDER (OPTIONAL)<span class="hint" id="notesHint" hidden>from previous workspace</span></label>
+    <div class="cb"><input id="wsNotes" placeholder="/home/you/notes/something" autocomplete="off"><span class="short" aria-hidden="true"></span><button type="button" class="chev" tabindex="-1" aria-label="Show recent notes folders"></button><ul hidden></ul><datalist id="recentNotes"></datalist></div>
+    <div class="row">
+      <div><label for="wsModelBtn">JARVIS MODEL</label><div class="dd"><select id="wsModel" hidden><option value="">default (sonnet)</option><option>opus</option><option>sonnet</option><option>haiku</option></select><button type="button" class="ddb" id="wsModelBtn"></button><ul hidden></ul></div></div>
+      <div><label for="wsEffortBtn">JARVIS EFFORT</label><div class="dd"><select id="wsEffort" hidden><option>low</option><option selected>medium</option><option>high</option><option>xhigh</option><option>max</option></select><button type="button" class="ddb" id="wsEffortBtn"></button><ul hidden></ul></div></div>
     </div>
     <p style="margin-top:16px"><button value="ok">CREATE</button><button value="" formnovalidate>CANCEL</button></p>
   </form>
@@ -1222,6 +1245,84 @@ function switchTo(id) {
   refreshTabs();
 }
 
+// New workspace dialog: themed dropdowns. Folder fields are editable comboboxes over the recent lists, model and effort are
+// selects; the real <select> stays hidden as the value holder, so the form code reads .value as before.
+const shortPath = (p, max = 34) => { // keep head and tail, ellipsis in the middle: /home/…/last/segments
+  if (p.length <= max) return p;
+  const segs = p.split('/'), n = p.startsWith('/') ? 2 : 1, head = segs.slice(0, n).join('/');
+  let tail = segs.pop();
+  while (segs.length > n && (head + '/…/' + segs[segs.length - 1] + '/' + tail).length <= max) tail = segs.pop() + '/' + tail;
+  return segs.length > n ? head + '/…/' + tail : head + '/…/' + tail;
+};
+function dropdown(root, { items, pick, current, editable }) { // items(): [{value, label?}]; pick(value); current(): selected value
+  const ul = root.querySelector('ul'), ctl = root.querySelector(editable ? 'input' : '.ddb');
+  let shown = [], act = -1;
+  ctl.setAttribute('role', 'combobox'); ctl.setAttribute('aria-haspopup', 'listbox'); ctl.setAttribute('aria-expanded', 'false'); ul.setAttribute('role', 'listbox');
+  ul.id ||= ctl.id + '-list'; ctl.setAttribute('aria-controls', ul.id);
+  if (editable) ctl.setAttribute('aria-autocomplete', 'list');
+  const close = () => { ul.hidden = true; ctl.setAttribute('aria-expanded', 'false'); ctl.removeAttribute('aria-activedescendant'); };
+  const mark = (i) => {
+    act = i;
+    [...ul.children].forEach((li, j) => li.classList.toggle('on', j === i));
+    const li = ul.children[i];
+    if (li) { ctl.setAttribute('aria-activedescendant', li.id); li.scrollIntoView({ block: 'nearest' }); } else ctl.removeAttribute('aria-activedescendant');
+  };
+  const open = (filter = '') => {
+    const f = filter.toLowerCase(), cur = current();
+    shown = items().filter((it) => !f || it.value.toLowerCase().includes(f));
+    if (editable && shown.length === 1 && shown[0].value === filter) shown = []; // the typed value is already the only match
+    ul.replaceChildren(...shown.map((it, i) => {
+      const li = document.createElement('li');
+      li.id = `${ul.id}-${i}`; li.setAttribute('role', 'option'); li.setAttribute('aria-selected', String(it.value === cur));
+      li.textContent = it.label ?? shortPath(it.value); li.title = it.value;
+      li.onmousedown = (e) => { e.preventDefault(); choose(i); };
+      li.onmousemove = () => act !== i && mark(i);
+      return li;
+    }));
+    if (!shown.length) return close();
+    ul.hidden = false; ctl.setAttribute('aria-expanded', 'true');
+    const sel = shown.findIndex((it) => it.value === cur);
+    mark(editable ? -1 : Math.max(sel, 0));
+  };
+  const choose = (i) => { if (shown[i]) pick(shown[i].value); close(); };
+  const move = (d) => { if (ul.hidden) return open(); mark((act + d + shown.length) % shown.length); };
+  ctl.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); move(e.key === 'ArrowDown' ? 1 : -1); }
+    else if (e.key === 'Escape' && !ul.hidden) { e.preventDefault(); e.stopPropagation(); close(); }
+    else if (e.key === 'Enter' && !ul.hidden && act >= 0) { e.preventDefault(); choose(act); }
+    else if (!editable && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); ul.hidden ? open() : choose(act); }
+    else if (!editable && e.key.length === 1 && !e.ctrlKey && !e.metaKey) { // type-ahead: jump to the next entry starting with the letter
+      if (ul.hidden) open();
+      const k = e.key.toLowerCase(), at = shown.findIndex((it, i) => i > act && (it.label ?? it.value).toLowerCase().startsWith(k));
+      mark(at >= 0 ? at : shown.findIndex((it) => (it.label ?? it.value).toLowerCase().startsWith(k)));
+    } else if (e.key === 'Tab') close();
+  });
+  ctl.addEventListener('blur', close);
+  if (editable) {
+    ctl.addEventListener('input', () => open(ctl.value));
+    root.querySelector('.chev').addEventListener('mousedown', (e) => { e.preventDefault(); ctl.focus(); ul.hidden ? open() : close(); });
+  } else ctl.addEventListener('mousedown', (e) => { e.preventDefault(); ctl.focus(); ul.hidden ? open() : close(); });
+  return { close };
+}
+const syncShort = (input) => { // blurred long path: show head and tail instead of a cut-off start
+  const box = input.closest('.cb'), v = input.value, s = shortPath(v, 40);
+  box.querySelector('.short').textContent = s; box.classList.toggle('shortened', s !== v); input.title = v;
+};
+for (const [id, list] of [['wsProject', 'recentProject'], ['wsNotes', 'recentNotes']]) {
+  const input = $(id);
+  dropdown(input.closest('.cb'), { editable: true, items: () => [...$(list).children].map((o) => ({ value: o.value })), current: () => input.value, pick: (v) => { input.value = v; input.dispatchEvent(new Event('input', { bubbles: true })); } });
+  input.addEventListener('input', () => syncShort(input));
+}
+for (const id of ['wsModel', 'wsEffort']) {
+  const sel = $(id), btn = $(id + 'Btn'), paint = () => { btn.textContent = sel.selectedOptions[0].textContent; };
+  dropdown(btn.closest('.dd'), { items: () => [...sel.options].map((o) => ({ value: o.value, label: o.textContent })), current: () => sel.value, pick: (v) => { sel.value = v; paint(); } });
+  btn.setAttribute('aria-labelledby', `${btn.parentElement.parentElement.querySelector('label').id ||= id + 'Lbl'} ${id}Btn`);
+  paint();
+}
+const hintNotes = () => { $('notesHint').hidden = !prefilled || $('wsNotes').value !== prefilled; };
+const syncNewWs = () => { syncShort($('wsProject')); syncShort($('wsNotes')); hintNotes(); };
+$('wsNotes').addEventListener('input', hintNotes);
+
 // Recent folders, newest first. No prefill of the datalists: the browser filters a datalist by the typed text, so a filled input would hide the rest.
 let projectNotes = {}, prefilled = ''; // notes folder per project; the value we filled in, so a manual edit is never overwritten
 async function openNewWs() {
@@ -1230,12 +1331,14 @@ async function openNewWs() {
     for (const [id, k] of [['recentProject', 'project'], ['recentNotes', 'notes']]) $(id).replaceChildren(...recent[k].map((p) => Object.assign(document.createElement('option'), { value: p })));
     projectNotes = recent.projectNotes ?? {}; prefilled = '';
   } catch {}
+  syncNewWs();
   $('newws').showModal();
 }
 
 $('wsProject').addEventListener('input', () => {
   const n = projectNotes[$('wsProject').value.trim()], cur = $('wsNotes').value;
-  if (n && (!cur || cur === prefilled)) $('wsNotes').value = prefilled = n;
+  if (n && (!cur || cur === prefilled)) { $('wsNotes').value = prefilled = n; syncShort($('wsNotes')); }
+  hintNotes();
 });
 $('emptyNew').onclick = openNewWs;
 $('emptyArchive').onclick = () => $('archived').showModal();
@@ -1243,7 +1346,7 @@ $('newwsForm').onsubmit = async (ev) => {
   if (ev.submitter?.value !== 'ok') return;
   const r = await postJson('/workspaces', { name: $('wsName').value.trim(), project: $('wsProject').value.trim(), notes: $('wsNotes').value.trim(), model: $('wsModel').value, effort: $('wsEffort').value });
   if (!r.ok) return toast(`create failed: ${await r.text()}`);
-  $('wsName').value = $('wsProject').value = $('wsNotes').value = '';
+  $('wsName').value = $('wsProject').value = $('wsNotes').value = ''; prefilled = ''; syncNewWs();
   switchTo((await r.json()).id);
 };
 
