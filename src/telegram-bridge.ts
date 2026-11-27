@@ -59,19 +59,136 @@ export function configFromEnv(env: NodeJS.ProcessEnv, pairing = false): Cfg {
   };
 }
 
-// Text of up to LIMIT characters per piece, cut at the last line break when there is one.
+// Markdown pieces are cut at MD_LIMIT so that escaping and tags still fit under LIMIT; a piece whose HTML is longer anyway goes out as plain text.
+const MD_LIMIT = 3500;
+
+// What opens and closes a fenced code block: split() and mdToHtml() both use these, so they always agree. A line like ```js inside a block is content, only a bare ``` closes it.
+const FENCE_OPEN = /^[ \t]*```([^`\n]*)$/, FENCE_CLOSE = /^[ \t]*```[ \t]*$/;
+// The opening fence line when `text` ends inside a block, else ''.
+function openFence(text: string): string {
+  let open = '';
+  for (const l of text.split('\n')) if (open ? FENCE_CLOSE.test(l) : FENCE_OPEN.test(l)) open = open ? '' : l.trim();
+  return open;
+}
+
+// Text of up to `limit` characters per piece, cut at the last line break when there is one. A cut inside a fenced code block closes the fence in this piece and reopens it in the next. Every piece consumes at least one character of the real text, so the loop always ends.
 export function split(text: string, limit = LIMIT): string[] {
   const out: string[] = [];
-  let rest = text;
+  let rest = text, header = 0; // header: length of the reopened fence line (and its newline) at the start of rest
+  const cutOf = (lim: number) => {
+    const nl = rest.lastIndexOf('\n', lim);
+    let cut = nl > header ? nl : lim;
+    if (cut === lim && cut > header + 1 && /[\ud800-\udbff]/.test(rest[cut - 1])) cut--; // not inside a surrogate pair
+    return Math.max(cut, Math.min(header + 1, rest.length));
+  };
   while (rest.length > limit) {
-    const nl = rest.lastIndexOf('\n', limit);
-    let cut = nl > 0 ? nl : limit;
-    if (cut === limit && /[\ud800-\udbff]/.test(rest[cut - 1])) cut--; // not inside a surrogate pair
-    out.push(rest.slice(0, cut));
-    rest = rest.slice(cut).replace(/^\n/, '');
+    let cut = cutOf(limit), now = openFence(rest.slice(0, cut));
+    if (now && limit - 4 > header) { cut = cutOf(limit - 4); now = openFence(rest.slice(0, cut)); } // room for the closing fence
+    else now = ''; // a limit too small to keep the fence: cut plain
+    out.push(rest.slice(0, cut) + (now ? '\n```' : ''));
+    rest = (now ? now + '\n' : '') + rest.slice(cut).replace(/^\n/, '');
+    header = now ? now.length + 1 : 0;
   }
   out.push(rest);
-  return out.filter((p) => p.trim());
+  return out.filter((p) => p.trim() && !p.split('\n').every((l) => !l.trim() || FENCE_OPEN.test(l))); // nothing but fence lines is nothing to send
+}
+
+const esc = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+// Emphasis on escaped text: `*`, `_` and `~~` runs open only after a start, space or punctuation and before a non-space (not before punctuation, except brackets and quotes), and close only after a non-space (not after punctuation, except .,!?;:)]} and quotes) and before an end, space or punctuation. So `src/*.ts`, `2**10` and snake_case stay literal. A closer ends the nearest matching opener; openers above it become literal, so the tags are always nested.
+function emphasis(x: string): string {
+  const parts: string[] = [], stack: { c: string; n: number; idx: number }[] = [];
+  const space = (ch: string) => ch === '' || /\s/.test(ch);
+  const punct = (ch: string) => /[\p{P}\p{S}]/u.test(ch);
+  const tag = (c: string, n: number, close: boolean) => c === '~' ? (close ? '</s>' : '<s>') : n === 3 ? (close ? '</i></b>' : '<b><i>') : n === 2 ? (close ? '</b>' : '<b>') : (close ? '</i>' : '<i>');
+  for (let i = 0; i < x.length;) {
+    const c = x[i];
+    if (c !== '*' && c !== '_' && c !== '~') { let j = i + 1; while (j < x.length && !'*_~'.includes(x[j])) j++; parts.push(x.slice(i, j)); i = j; continue; }
+    let j = i; while (x[j] === c) j++;
+    const n = j - i, prev = x[i - 1] ?? '', next = x[j] ?? '';
+    i = j;
+    if (n > 3 || (c === '~' && n !== 2)) { parts.push(c.repeat(n)); continue; }
+    const open = !space(next) && (space(prev) || punct(prev) || prev === '\u0000') && (!punct(next) || /[\p{Ps}\p{Pi}"'*_~]/u.test(next));
+    const close = !space(prev) && (space(next) || punct(next) || next === '\u0000') && (!punct(prev) || /[.,!?;:)\]}\p{Pe}\p{Pf}"'*_~]/u.test(prev));
+    let rest = n;
+    while (close && rest > 0) {
+      let k = stack.length - 1;
+      while (k >= 0 && !(stack[k].c === c && stack[k].n <= rest)) k--;
+      if (k < 0) break;
+      const e = stack[k];
+      stack.length = k;
+      parts[e.idx] = tag(c, e.n, false);
+      parts.push(tag(c, e.n, true));
+      rest -= e.n;
+    }
+    if (rest === n && open) { stack.push({ c, n, idx: parts.length }); parts.push(c.repeat(n)); } else if (rest) parts.push(c.repeat(rest));
+  }
+  return parts.join('');
+}
+
+// True when every tag of the HTML is closed in order and no `<` is left over, so Telegram will not refuse it for its structure.
+export function wellFormed(html: string): boolean {
+  const open: string[] = [];
+  let tags = 0;
+  for (const m of html.matchAll(/<(\/?)([a-z]+)(?: [^<>]*)?>/g)) {
+    tags++;
+    if (m[1] ? open.pop() !== m[2] : !open.push(m[2])) return false;
+  }
+  return !open.length && tags === (html.match(/</g) ?? []).length;
+}
+
+// Markdown to the HTML subset of the Bot API. Text is escaped first; code is lifted out before anything else is parsed so nothing inside it is touched. A marker without its partner stays literal.
+export function mdToHtml(md: string): string {
+  const hold: string[] = [];
+  const keep = (html: string) => `\u0000${hold.push(html) - 1}\u0000`;
+  const src = md.replace(/\u0000/g, '').split('\n'), lines: string[] = [];
+  for (let i = 0; i < src.length; i++) { // fenced blocks first; one that never closes stays as typed
+    const m = FENCE_OPEN.exec(src[i]);
+    let j = i + 1;
+    if (m) while (j < src.length && !FENCE_CLOSE.test(src[j])) j++;
+    if (!m || j >= src.length) { lines.push(src[i]); continue; }
+    const code = src.slice(i + 1, j).join('\n'), lang = /^\s*([\w+-]+)/.exec(m[1])?.[1];
+    if (code.trim()) lines.push(keep(`<pre><code${lang ? ` class="language-${lang}"` : ''}>${esc(code)}</code></pre>`));
+    i = j;
+  }
+  const inline = (line: string) => {
+    let x = line.replace(/`([^`\n]+)`/g, (_m, code: string) => keep(`<code>${esc(code)}</code>`));
+    x = esc(x);
+    x = x.replace(/\[([^\]\n]+)\]\(((?:https?|tg):\/\/[^()\s]+)\)/g, (_m, label: string, url: string) => keep(`<a href="${url.replace(/"/g, '&quot;')}">${label}</a>`));
+    x = x.replace(/https?:\/\/[^\s\u0000]+/g, (u) => { // a bare URL keeps its underscores and asterisks, but not the punctuation or markers that follow it
+      let end = u.length;
+      while (end > 0 && (/[.,:!?*_~'"]/.test(u[end - 1]) || (u[end - 1] === ')' && (u.slice(0, end).match(/\(/g) ?? []).length < (u.slice(0, end).match(/\)/g) ?? []).length))) end--;
+      return keep(u.slice(0, end)) + u.slice(end);
+    });
+    return emphasis(x);
+  };
+  const out: string[] = [];
+  const isRow = (l: string) => /^\s*\|.*\|?\s*$/.test(l) && l.includes('|');
+  const isSep = (l: string) => /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/.test(l) && l.includes('|');
+  for (let i = 0; i < lines.length; i++) {
+    const l = lines[i];
+    if (isRow(l) && i + 1 < lines.length && isSep(lines[i + 1])) { // a table: monospace block, the cells stay literal text
+      const rows = [l, lines[i + 1]];
+      for (i += 2; i < lines.length && isRow(lines[i]); i++) rows.push(lines[i]);
+      i--;
+      out.push(keep(`<pre>${esc(rows.join('\n'))}</pre>`));
+      continue;
+    }
+    if (/^\s{0,3}>/.test(l)) { // quote: consecutive lines form one block
+      const q: string[] = [];
+      for (; i < lines.length && /^\s{0,3}>/.test(lines[i]); i++) q.push(inline(lines[i].replace(/^\s{0,3}>\s?/, '')));
+      i--;
+      out.push(keep(`<blockquote>${q.join('\n')}</blockquote>`));
+      continue;
+    }
+    const h = /^\s{0,3}#{1,6}\s+(.+?)(?:\s+#+)?\s*$/.exec(l);
+    if (h) { out.push(`<b>${inline(h[1]).replace(/<\/?b>/g, '')}</b>`); continue; }
+    const li = /^(\s*)[-*]\s+(.*)$/.exec(l);
+    out.push(li ? `${li[1]}• ${inline(li[2])}` : inline(l));
+  }
+  let html = out.join('\n');
+  for (let prev = ''; prev !== html;) { prev = html; html = html.replace(/\u0000(\d+)\u0000/g, (_m, n: string) => hold[+n]); }
+  return html;
 }
 
 // One bridge per state file: a second copy would poll the same bot (Telegram answers 409) and double every message. A lock of a dead pid is stale.
@@ -210,9 +327,15 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
   // 429 waits retry_after; a network error (no HTTP status) and a 5xx wait 1 s, 2 s, 4 s ... with some jitter; all stop after `retryTotalMs`.
   async function sendChunk({ thread, text, ws }: Item) {
     const t0 = Date.now();
+    let plain = false;
     for (let tries = 0; ; tries++) {
       if (stop.signal.aborted) throw new TgError('sendMessage: stopped before it was sent');
-      try { await tg('sendMessage', { chat_id: cfg.chat, text, ...(thread && { message_thread_id: thread }) }); return; } catch (e) {
+      try {
+        const html = plain ? '' : mdToHtml(text);
+        await tg('sendMessage', { chat_id: cfg.chat, ...(html && html.length <= LIMIT && wellFormed(html) ? { text: html, parse_mode: 'HTML' } : { text }), ...(thread && { message_thread_id: thread }) });
+        return;
+      } catch (e) {
+        if (!plain && e instanceof TgError && /can't parse entities/i.test(e.message)) { plain = true; continue; } // Telegram refused the markup: the original Markdown goes out as plain text
         if (e instanceof TgError && ws && /thread not found/i.test(e.message)) { if (state.topics[ws] === thread) forget(ws); return; } // topic deleted: the next sync makes a new one; a late chunk for an older topic must not drop the new one
         const rate = e instanceof TgError && e.code === 429;
         const wait = rate ? (e.retryAfter || 1) * 1000 + 100 : Math.min((cfg.retryMs ?? 1000) * 2 ** tries, 15_000) * (0.8 + Math.random() * 0.4);
@@ -224,7 +347,7 @@ export async function startBridge(cfg: Cfg): Promise<Handle> {
   function send(thread: number | undefined, text: string, ws = '', lane: keyof typeof lanes = 'live') {
     if (lanes.backfill.has(ws)) lane = 'backfill';
     const q = lanes[lane].get(ws) ?? [];
-    for (const p of split(text)) q.push({ thread, text: p, ws });
+    for (const p of split(text, MD_LIMIT)) q.push({ thread, text: p, ws });
     if (q.length) { lanes[lane].set(ws, q); pump(); }
   }
 
