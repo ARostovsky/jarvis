@@ -381,7 +381,7 @@ The server binds to `127.0.0.1` only (`PORT`, default 7777).
 | `POST /connections/update` | `{id, ...same}` an empty or missing `apiKey` keeps the stored key | the connection; a changed base URL restarts the sessions of workspaces using it |
 | `POST /connections/delete` | `{id}` | 204; 400 while a live workspace names it; deleting the default makes Anthropic login the default |
 | `POST /connections/default` | `{id}` (empty = Anthropic login) | 204; restarts the sessions of workspaces that follow the default |
-| `POST /connections/test` | `{id}` | `{ok, status?, model?, error?}`: one 1-token `POST <baseUrl>/v1/messages` with the haiku alias, 15 s timeout, key redacted from the error |
+| `POST /connections/test` | `{id}` | `{ok, results: [{alias, model, ok, status?, answered?, error?}]}`: one 1-token `POST <baseUrl>/v1/messages` per configured alias model (haiku, sonnet, opus; none set = the default haiku name), in parallel, 15 s timeout each, key redacted from the errors; `ok` = all passed |
 | `POST /workspaces/connection` | `{ws, connectionId?}` empty = follow the default | 204; ends all sessions of the workspace (see Connections) |
 | `POST /workspaces/job-sources` | `{ws, jobSources?}` names of the job sources the workspace may use; empty clears the choice (all approved) | 204 |
 | `POST /say` | `{ws, text}` | message to the arbiter |
