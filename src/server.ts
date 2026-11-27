@@ -4,9 +4,10 @@ import { createServer, type IncomingMessage } from 'node:http';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { localFile, openLocal, openAllowed, resolveRelative } from './local-file.ts';
+import { listConnections, createConnection, updateConnection, setDefaultConnection, testConnection } from './connections.ts';
 import { startGuard } from './tmpguard.ts';
 import { health, current as healthNow, maybeProbe } from './health.ts';
-import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, archiveWorkspace, archivePreview, restoreWorkspace, listJobSources, listJobSourceFiles, getJobSourceDetails, getJobSourceScreenshot, approveJobSource, rejectJobSource, setWorkspaceJobSources, normPath, listArchived, recentFolders, projectNotes, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
+import { SETTINGS_MODEL, workspaces, loadWorkspaces, addWorkspace, renameWorkspace, reorderWorkspaces, setWorkspaceNotes, setWorkspaceConnection, removeConnection, changingConnections, archiveWorkspace, archivePreview, restoreWorkspace, listJobSources, listJobSourceFiles, getJobSourceDetails, getJobSourceScreenshot, approveJobSource, rejectJobSource, setWorkspaceJobSources, normPath, listArchived, recentFolders, projectNotes, archivedInfo, deleteArchived, DirtyWorktree, ARBITER_MODEL, type Workspace, type AskReply } from './agents.ts';
 
 const PORT = Number(process.env.PORT ?? 7777);
 const ORIGINS = new Set([`http://127.0.0.1:${PORT}`, `http://localhost:${PORT}`]);
@@ -42,11 +43,17 @@ const replyOf = (b: any): AskReply | undefined =>
 
 // Each returns a JSON-able value or nothing (204).
 const commands: Record<string, (b: any) => unknown | Promise<unknown>> = {
-  '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }, b.notes ? String(b.notes) : undefined).meta,
+  '/workspaces': (b) => addWorkspace(String(b.name || 'Untitled'), b.project ? String(b.project) : undefined, { model: b.model || undefined, effort: b.effort || undefined }, b.notes ? String(b.notes) : undefined, undefined, b.connectionId ? String(b.connectionId) : undefined).meta,
   '/workspaces/rename': (b) => renameWorkspace(String(b.ws), String(b.name ?? '')),
   '/workspaces/reorder': (b) => reorderWorkspaces(Array.isArray(b.ids) ? b.ids.map(String) : []),
   '/workspaces/notes': (b) => setWorkspaceNotes(String(b.ws), b.notes ? String(b.notes) : undefined),
   '/workspaces/job-sources': (b) => setWorkspaceJobSources(String(b.ws), b.jobSources),
+  '/workspaces/connection': (b) => setWorkspaceConnection(String(b.ws), b.connectionId ? String(b.connectionId) : undefined),
+  '/connections/create': (b) => createConnection(b),
+  '/connections/update': (b) => changingConnections(() => updateConnection(String(b.id), b)),
+  '/connections/delete': (b) => removeConnection(String(b.id)),
+  '/connections/default': (b) => changingConnections(() => setDefaultConnection(b.id ? String(b.id) : null)),
+  '/connections/test': (b) => testConnection(String(b.id)),
   '/workspaces/archive': (b) => archiveWorkspace(String(b.ws), b.commit === true),
   '/workspaces/archive/preview': (b) => archivePreview(String(b.ws)),
   '/workspaces/restore': (b) => restoreWorkspace(String(b.id)),
@@ -81,6 +88,9 @@ createServer(async (req, res) => {
   } else if (req.method === 'GET' && url.pathname === '/workspaces') {
     const body = { workspaces: [...workspaces.values()].map((w) => w.summary()), archived: listArchived(), settingsModel: SETTINGS_MODEL, voice: !!voice, voiceAutosend: process.env.JARVIS_VOICE_AUTOSEND !== '0', voiceMaxS: voice?.maxS, arbiterModel: ARBITER_MODEL };
     res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+  } else if (req.method === 'GET' && url.pathname === '/connections') {
+    if (!ownPage(req)) return void res.writeHead(404).end();
+    res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' }).end(JSON.stringify(listConnections()));
   } else if (req.method === 'GET' && url.pathname === '/panels') {
     const w = workspaces.get(url.searchParams.get('ws') ?? '');
     if (!w) return void res.writeHead(404).end();

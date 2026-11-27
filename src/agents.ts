@@ -19,6 +19,7 @@ import { openItemsOn, openItemsPrompt } from './openitems-wiring.ts';
 import { voiceVocab } from './voice-vocab.ts';
 import { jobsMessage, jobsOn, jobsPrompt, jobsToolNames } from './jobs-wiring.ts';
 import { claudeTmpDir, removeAgentTmp } from './tmpguard.ts';
+import { hasConnection, resolveConnection, withConnection, deleteConnection, connectionKey } from './connections.ts';
 import { HASH_RE, jobSourceDetails, jobSourceFiles, jobSourceList, jobSourceScreenshot } from './job-source-admin.ts';
 
 // Tests only: JARVIS_FAKE_SDK names a module whose query() stands in for the SDK's (e2e/fake-sdk.ts), so e2e runs need no API.
@@ -41,11 +42,12 @@ export type Agent = {
   runtimeModel?: string; // the model the SDK session actually reports, e.g. claude-opus-5-5[1m]
   repo?: string; // set when cwd is a git worktree of this repo
   sessionId?: string;
+  connection?: string; // connectionKey the session id belongs to; '' or unset = Anthropic login
   context?: { tokens: number; max: number }; // context window use after the last turn
 };
 
 // One tab in the UI: its own arbiter, agents, board and event log.
-export type WorkspaceMeta = { id: string; name: string; project?: string; notes?: string; jobSources?: string[] }; // jobSources: job sources enabled here, unset = all approved
+export type WorkspaceMeta = { id: string; name: string; project?: string; notes?: string; jobSources?: string[]; connectionId?: string }; // jobSources: job sources enabled here, unset = all approved
 // The user's reply to AskUserQuestion, merged into its input.
 export type AskReply = { answers?: Record<string, string>; annotations?: Record<string, { preview?: string; notes?: string }> };
 
@@ -747,7 +749,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       else if (e.type === 'status') a.status = e.status;
       else if (e.type === 'text') a.lastText = e.text;
       else if (e.type === 'result') a.costUsd = e.costUsd;
-      else if (e.type === 'session') (a.sessionId = e.sessionId, e.sessionId && (resetUnseeded = false));
+      else if (e.type === 'session') (a.sessionId = e.sessionId, a.connection = e.connection, e.sessionId && (resetUnseeded = false));
       else if (e.type === 'config') Object.assign(a, { model: e.model, effort: e.effort, runtimeModel: e.model !== a.model ? undefined : a.runtimeModel });
       else if (e.type === 'runtime') a.runtimeModel = e.model;
       else if (e.type === 'context') a.context = { tokens: e.tokens, max: e.max };
@@ -757,19 +759,27 @@ export function createWorkspace(meta: WorkspaceMeta) {
   }
 
   // Long-lived SDK session fed by an inbox. Started lazily, resuming the saved session id if there is one.
+  // The health dot probes the default connection only: a run through another connection must not light it.
+  const onDefaultConnection = () => connectionKey(resolveConnection(meta.connectionId)) === connectionKey(resolveConnection());
   let resetBorn = false; // the next session is the fresh one of a reset: its first result sets the size floor
   function session(a: Agent) {
     const existing = sessions.get(a.id);
     if (existing) return existing;
     const box = inbox();
     const abort = new AbortController();
+    // Built at every session start: a changed connection or key applies to the next session, never to a running one.
+    const resolved = resolveConnection(meta.connectionId), key = connectionKey(resolved);
+    // A session id is only valid at the endpoint it was made at: after a change of connection (also by hand or at a restart) start a fresh one.
+    if (a.sessionId && (a.connection ?? '') !== key) { a.sessionId = undefined; emit('session', { agentId: a.id, sessionId: undefined, connection: key }); }
+    a.connection = key;
+    const { env, settings } = withConnection(claudeEnv(), SETTINGS, resolved);
+    const conn = { env, settings };
     const q = query({
       prompt: box,
       options: {
         cwd: a.cwd,
-        env: claudeEnv(),
+        ...conn,
         settingSources: ['project', 'local'], // repo CLAUDE.md and settings, but not user plugins/hooks
-        settings: SETTINGS,
         pathToClaudeCodeExecutable: claudeBinary(),
         // Without an explicit override the binary is never older than the SDK's, so it can take MCP config over stdin (keeps env/headers off the command line).
         mcpServersDelivery: process.env.JARVIS_CLAUDE_PATH && process.env.JARVIS_CLAUDE_PATH !== 'bundled' ? 'argv' : 'initialize',
@@ -883,7 +893,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           userAt = Date.now(); // CLI start and MCP connect are not the API's wait
           if (m.session_id !== a.sessionId) {
             a.sessionId = m.session_id;
-            emit('session', { agentId: a.id, sessionId: m.session_id });
+            emit('session', { agentId: a.id, sessionId: m.session_id, connection: a.connection ?? '' });
           }
           if (m.model !== a.runtimeModel) {
             a.runtimeModel = m.model;
@@ -925,7 +935,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
           for (const b of m.message.content) if (b.type === 'tool_result') bash.get(b.tool_use_id)?.(), bash.delete(b.tool_use_id);
         } else if (m.type === 'result') {
           const interrupted = !!s.interrupting; // this result ends a turn that stopAgent interrupted
-          if (!interrupted) recordOutcome(apiError ?? (m.is_error ? (m.subtype === 'success' ? m.result : m.subtype) : undefined), ttft);
+          if (!interrupted && onDefaultConnection()) recordOutcome(apiError ?? (m.is_error ? (m.subtype === 'success' ? m.result : m.subtype) : undefined), ttft);
           apiError = undefined;
           ttft = 0;
           s.interrupting = false;
@@ -986,7 +996,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
       if (current()) setStatus(a, 'stopped');
     } catch (e) {
       if (current()) {
-        recordOutcome(classify(apiError) ? apiError : (e as Error).message, 0); // a recognized typed error seen before the throw wins over the thrown text
+        if (onDefaultConnection()) recordOutcome(classify(apiError) ? apiError : (e as Error).message, 0); // a recognized typed error seen before the throw wins over the thrown text
         setStatus(a, a.status === 'stopped' ? 'stopped' : 'error');
         emit('text', { agentId: a.id, text: `session ended: ${(e as Error).message}` });
       }
@@ -1026,7 +1036,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     } catch (e) {
       resetBorn = false;
       a.sessionId = old;
-      emit('session', { agentId: a.id, sessionId: old });
+      emit('session', { agentId: a.id, sessionId: old, connection: a.connection ?? '' });
       throw e;
     }
   }
@@ -1166,7 +1176,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const reg = registry();
     const l = reg.stage(from, (d) => {
       if (d.manifest.name !== name) throw new Error(`name "${name}" differs from the manifest name "${d.manifest.name}"`);
-      d.warnings.push(...checkLocations(join(reg.dir, name), d.manifest, jobSourceLocations()));
+      d.warnings.push(...checkLocations(reg.folderOf(name), d.manifest, jobSourceLocations()));
     });
     const ev = { name, hash: l.sha256, manifest: l.manifest, files: l.files, report: report.slice(0, 8000), ...(note && { note: note.slice(0, 500) }), warnings: l.warnings, from: meta.id };
     proposals.set(`${name}:${l.sha256}`, { type: 'job_source_proposed', ...ev });
@@ -1332,6 +1342,16 @@ export function createWorkspace(meta: WorkspaceMeta) {
     } else if (s) kill(id, s); // a turn blocked on a prompt cannot end by itself
   }
 
+  // A transcript must not continue under another provider: forget every session id, let working turns end like stopAgent does (their cost is counted, tidy and dropTmp run), then end what is left.
+  async function restartSessions(why: string) {
+    for (const a of agents.values()) if (a.sessionId) { a.sessionId = undefined; emit('session', { agentId: a.id, sessionId: undefined, connection: a.connection ?? '' }); }
+    stopAll();
+    const until = Date.now() + 5200;
+    while (sessions.size && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
+    for (const [id, s] of [...sessions]) kill(id, s);
+    emit('text', { agentId: ARBITER, text: why });
+  }
+
   // Stops everything that is working, waiting or holding a session. Each resumes on its next message.
   const stopAll = () => [...agents.values()].filter((a) => working(a) || sessions.has(a.id)).forEach((a) => stopAgent(a.id));
 
@@ -1374,7 +1394,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     const same = [...workspaces.values()].find((w) => w.meta.name.toLowerCase() === name.toLowerCase());
     if (same) throw new Error(`a workspace named "${same.meta.name}" exists (${same.meta.id}): pick another name`);
     const { model, effort } = agent(ARBITER);
-    const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes, meta.jobSources);
+    const next = addWorkspace(name, project ?? meta.project, { model, effort }, meta.notes, meta.jobSources, meta.connectionId);
     next.sendToAgent(ARBITER, `[task from workspace "${meta.name}" (${meta.id})]\nThis comes from the Jarvis of another workspace, not from the user.${meta.notes ? `\n${creatorNotesLine(workspaceDir(meta as { id: string; notes: string }))}` : ''}\n\n${task}`, `workspace:${meta.id}`);
     created++;
     return next.meta;
@@ -1738,6 +1758,7 @@ export function createWorkspace(meta: WorkspaceMeta) {
     resetArbiterNow,
     deleteAgent,
     stopAll,
+    restartSessions,
     configure,
     postNote,
     receive,
@@ -1833,7 +1854,8 @@ export function projectNotes() {
   return notesByProject([...[...workspaces.values()].map((w) => ({ meta: w.meta, at: at(w.dir) })), ...listArchived().map((m) => ({ meta: m, at: at(join(ARCHIVE, m.id)) }))]);
 }
 
-export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, jobSources?: string[]): Workspace {
+export function addWorkspace(name: string, project?: string, arbiter: { model?: string; effort?: EffortLevel } = {}, notes?: string, jobSources?: string[], connectionId?: string): Workspace {
+  if (connectionId && !hasConnection(connectionId)) throw new Error(`no connection ${connectionId}`);
   if (project && !existsSync(project)) throw new Error(`project folder does not exist: ${project}`);
   if (notes && project && normPath(notes) === normPath(project)) throw new Error('notes folder must not be the project folder');
   if (notes) prepareNotes(resolve(notes));
@@ -1843,7 +1865,7 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   if (notes) try { for (const f of readdirSync(join(resolve(notes), 'journal'))) { const m = /-([a-z0-9]{4})\.md$/.exec(f); if (m) taken.add(m[1]); } } catch {}
   if (notes) try { for (const f of readdirSync(join(resolve(notes), 'workspaces'))) { const m = /-([a-z0-9]{4})$/.exec(f); if (m) taken.add(m[1]); } } catch {}
   const suffix = uniqueSuffix(taken);
-  const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}), ...(jobSources?.length ? { jobSources } : {}) };
+  const meta: WorkspaceMeta = { id: `${slug}-${suffix}`, name, ...(project ? { project: resolve(project) } : {}), ...(notes ? { notes: resolve(notes) } : {}), ...(jobSources?.length ? { jobSources } : {}), ...(connectionId ? { connectionId } : {}) };
   if (meta.notes) { // its own folder from the first prompt; the files are claimed so the first commit takes them
     for (const f of ensureWorkspaceNotes(meta).created) notesWritten(meta.notes, meta.id, f);
   }
@@ -1854,6 +1876,35 @@ export function addWorkspace(name: string, project?: string, arbiter: { model?: 
   saveRegistry();
   touchRecent(meta);
   return w;
+}
+
+const resolvedKey = (w: Workspace) => connectionKey(resolveConnection(w.meta.connectionId));
+const restartNote = (w: Workspace) => { const c = resolveConnection(w.meta.connectionId); return `Connection is now ${c ? c.name : 'Anthropic login'}. All agents were stopped and start new sessions, without their earlier conversation.`; };
+
+// Runs a change of the connections and restarts the sessions of every workspace whose resolved connection (or endpoint) changed by it.
+export async function changingConnections<T>(change: () => T): Promise<T> {
+  const before = new Map([...workspaces.values()].map((w) => [w.meta.id, resolvedKey(w)]));
+  const r = change();
+  await Promise.all([...workspaces.values()].filter((w) => before.get(w.meta.id) !== resolvedKey(w)).map((w) => w.restartSessions(restartNote(w))));
+  return r;
+}
+
+// undefined = the global default. Sessions restart without their earlier conversation (see restartSessions) when the resolved connection changes.
+export async function setWorkspaceConnection(id: string, connectionId?: string) {
+  const w = workspaces.get(id);
+  if (!w) throw new Error(`no workspace ${id}`);
+  if (connectionId && !hasConnection(connectionId)) throw new Error(`no connection ${connectionId}`);
+  if ((connectionId || undefined) === w.meta.connectionId) return;
+  const before = resolvedKey(w);
+  if (connectionId) w.meta.connectionId = connectionId; else delete w.meta.connectionId;
+  saveRegistry();
+  if (resolvedKey(w) !== before) await w.restartSessions(restartNote(w));
+}
+
+// The delete is refused while a live workspace names this connection itself (an archived one falls back to the default when it is restored).
+export function removeConnection(id: string) {
+  const used = [...workspaces.values()].filter((w) => w.meta.connectionId === id).length;
+  return changingConnections(() => deleteConnection(id, used));
 }
 
 export function renameWorkspace(id: string, name: string) {
@@ -2063,7 +2114,7 @@ export function loadWorkspaces() {
 setProbe(async (abortController) => {
   const t = Date.now();
   let err: string | undefined;
-  const q = query({ prompt: 'Reply with: ok', options: { model: 'haiku', maxTurns: 1, tools: [], persistSession: false, settingSources: [], settings: SETTINGS, pathToClaudeCodeExecutable: claudeBinary(), cwd: tmpdir(), abortController } });
+  const q = query({ prompt: 'Reply with: ok', options: { model: 'haiku', maxTurns: 1, tools: [], persistSession: false, settingSources: [], ...withConnection(process.env, SETTINGS, resolveConnection()), pathToClaudeCodeExecutable: claudeBinary(), cwd: tmpdir(), abortController } });
   try {
     for await (const m of q) if (m.type === 'assistant' && m.error) err = m.error === 'unknown' ? m.message.content.map((b) => (b.type === 'text' ? b.text : '')).join(' ') : m.error;
   } catch (e) {
